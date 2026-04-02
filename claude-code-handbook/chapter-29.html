@@ -1,0 +1,2162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 29: CLI-to-CLI Protocol — Agent-to-Agent Communication — Claude Code Handbook</title>
+<meta name="author" content="Tri Doan">
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-hover: #30363d;
+    --border: #30363d;
+    --border-muted: #21262d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #656d76;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-cyan: #39d2c0;
+    --code-bg: #161b22;
+    --sidebar-width: 300px;
+    --header-height: 60px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    color: var(--text-primary); background: var(--bg-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .scroll-indicator {
+    position: fixed; top: var(--header-height); left: 0; right: 0;
+    height: 3px; background: transparent; z-index: 101;
+  }
+  .scroll-indicator .bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    width: 0%; transition: width 0.1s;
+  }
+
+  .site-header {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--header-height);
+    display: flex; align-items: center; padding: 0 1.5rem;
+    z-index: 100; border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: rgba(22, 27, 34, 0.88);
+  }
+  .hamburger {
+    display: none; background: none; border: none;
+    color: var(--text-primary); font-size: 1.4rem;
+    cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem;
+    border-radius: 6px; transition: background 0.15s;
+  }
+  .hamburger:hover { background: var(--bg-tertiary); }
+  .site-header .logo {
+    font-size: 1rem; font-weight: 700; color: var(--text-primary);
+    display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
+  }
+  .site-header .logo .icon { font-size: 1.25rem; }
+  .site-header .badge {
+    background: var(--accent-green); color: #000;
+    font-size: 0.65rem; font-weight: 600; padding: 2px 8px;
+    border-radius: 12px; margin-left: 0.5rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .header-nav {
+    margin-left: auto; display: flex; gap: 6px; align-items: center;
+  }
+  .header-nav button {
+    background: none; border: 1px solid var(--border);
+    color: var(--text-secondary); cursor: pointer;
+    padding: 4px 12px; border-radius: 6px;
+    font-size: 0.78rem; font-family: inherit; transition: all 0.15s;
+  }
+  .header-nav button:hover {
+    color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--text-muted);
+  }
+  .header-nav button:disabled { opacity: 0.3; cursor: default; background: none; }
+  .header-nav .chapter-label {
+    color: var(--text-muted); font-size: 0.75rem;
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; padding: 0 6px;
+  }
+
+  .sidebar {
+    position: fixed; top: var(--header-height); left: 0; bottom: 0;
+    width: var(--sidebar-width); background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 1.25rem 0 3rem;
+    z-index: 50; transition: transform 0.3s ease;
+  }
+  .sidebar-title {
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--text-muted);
+    padding: 0 1.25rem; margin-bottom: 0.75rem;
+  }
+  .sidebar a {
+    display: block; color: var(--text-secondary); text-decoration: none;
+    font-size: 0.8125rem; line-height: 1.4;
+    border-left: 2px solid transparent; transition: all 0.15s ease;
+  }
+  .sidebar a:hover {
+    color: var(--text-primary); background: var(--bg-tertiary);
+    border-left-color: var(--accent-blue); text-decoration: none;
+  }
+  .sidebar a.active {
+    color: var(--accent-blue); border-left-color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.05);
+  }
+  .sidebar-part {
+    font-weight: 700; color: var(--accent-green) !important;
+    font-size: 0.78rem !important; padding: 0.6rem 1.25rem 0.35rem;
+    margin-top: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .sidebar-part:first-child { margin-top: 0; }
+  .sidebar-chapter {
+    font-weight: 600; color: var(--text-primary) !important;
+    padding: 0.3rem 1.25rem 0.3rem 1.75rem;
+  }
+  .sidebar-section {
+    padding: 0.2rem 1.25rem 0.2rem 2.5rem;
+    font-size: 0.78rem !important; color: var(--text-muted) !important;
+  }
+  .sidebar-section:hover { color: var(--text-secondary) !important; }
+  .sidebar-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: 40;
+  }
+
+  .hero {
+    text-align: center; padding: 80px 2rem 50px;
+    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 30% 20%, rgba(88,166,255,0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 80%, rgba(63,185,80,0.04) 0%, transparent 50%);
+    pointer-events: none;
+  }
+  .hero .shield { font-size: 4rem; display: block; margin-bottom: 1rem; filter: drop-shadow(0 0 20px rgba(88,166,255,0.3)); }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.25rem) !important; font-weight: 800 !important;
+    letter-spacing: 3px; color: var(--text-primary) !important;
+    margin: 0 0 0.4rem !important; border: none !important; padding: 0 !important;
+    text-align: center;
+  }
+  .hero .subtitle {
+    font-size: clamp(0.95rem, 2vw, 1.15rem); color: var(--text-secondary);
+    max-width: 600px; margin: 0 auto 1.25rem; line-height: 1.5;
+  }
+  .hero .author { font-size: 1rem; color: var(--accent-blue); font-weight: 500; }
+  .hero .meta {
+    margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted);
+    display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap;
+  }
+  .hero .meta span { display: flex; align-items: center; gap: 0.3rem; }
+
+  .main {
+    margin-left: var(--sidebar-width); margin-top: var(--header-height);
+    padding: 2.5rem 3rem 6rem; max-width: calc(var(--sidebar-width) + 860px);
+  }
+
+  h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border); color: var(--text-primary); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 3rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border-muted); color: var(--text-primary); }
+  h3 { font-size: 1.2rem; font-weight: 600; margin: 2rem 0 0.6rem; color: var(--text-primary); }
+  h4 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; color: var(--text-secondary); }
+  h5, h6 { font-size: 0.9rem; font-weight: 600; margin: 1.25rem 0 0.4rem; color: var(--text-secondary); }
+
+  .part-heading {
+    font-size: 1.75rem !important; text-align: center;
+    color: var(--accent-green) !important;
+    padding: 2rem 0 1rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .part-heading::after {
+    content: ''; display: block; width: 80px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
+    margin: 0.75rem auto 0; border-radius: 1px;
+  }
+  .chapter-heading {
+    font-size: 1.6rem !important; color: var(--accent-blue) !important;
+    padding-bottom: 0.5rem !important; margin-top: 3.5rem !important;
+    border-bottom: 1px solid rgba(88,166,255,0.2) !important;
+  }
+  .appendices-heading {
+    font-size: 1.5rem !important; text-align: center;
+    color: var(--accent-orange) !important;
+    padding: 1.5rem 0 0.75rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .appendices-heading::after {
+    content: ''; display: block; width: 60px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-orange), var(--accent-purple));
+    margin: 0.6rem auto 0; border-radius: 1px;
+  }
+
+  .headerlink {
+    color: var(--accent-blue); opacity: 0; margin-left: 0.3rem;
+    font-size: 0.8em; transition: opacity 0.15s; text-decoration: none;
+  }
+  h1:hover .headerlink, h2:hover .headerlink,
+  h3:hover .headerlink, h4:hover .headerlink { opacity: 0.5; }
+  .headerlink:hover { opacity: 1 !important; text-decoration: none; }
+
+  .reading-time {
+    font-size: 0.7rem; font-weight: 400; color: var(--text-muted);
+    background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px;
+    margin-left: 0.5rem; vertical-align: middle; letter-spacing: 0; text-transform: none;
+  }
+
+  p { margin: 0.75rem 0; }
+  strong { color: var(--text-primary); }
+  em { color: var(--text-secondary); }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border-muted); margin: 2.5rem 0; }
+
+  ul, ol { padding-left: 1.5rem; margin: 0.6rem 0; }
+  li { margin: 0.3rem 0; line-height: 1.6; }
+  li::marker { color: var(--text-muted); }
+
+  blockquote {
+    margin: 1.25rem 0; padding: 0.75rem 1rem;
+    border-left: 3px solid var(--accent-blue);
+    background: rgba(88,166,255,0.05);
+    border-radius: 0 6px 6px 0; color: var(--text-secondary);
+  }
+  blockquote p { margin: 0.3rem 0; }
+  blockquote strong { color: var(--text-primary); }
+
+  code {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.875em; background: var(--bg-tertiary);
+    padding: 0.15em 0.4em; border-radius: 4px; color: var(--accent-cyan);
+  }
+  .code-block {
+    position: relative; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
+  }
+  .code-block pre {
+    background: var(--code-bg); padding: 1rem 1.25rem;
+    overflow-x: auto; margin: 0; line-height: 1.5; border-radius: 8px;
+  }
+  .code-block pre code {
+    background: none; padding: 0; color: var(--text-primary);
+    font-size: 0.8125rem; display: block; white-space: pre;
+  }
+  .code-lang {
+    position: absolute; top: 0; right: 72px;
+    padding: 2px 10px; font-size: 0.65rem; color: var(--text-muted);
+    background: rgba(0,0,0,0.3); border-radius: 0 0 4px 4px;
+    text-transform: uppercase; letter-spacing: 0.5px; font-family: "SF Mono", monospace;
+  }
+  .copy-btn {
+    position: absolute; top: 6px; right: 8px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    color: var(--text-muted); padding: 3px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 0.7rem; font-family: inherit;
+    transition: all 0.15s; z-index: 2;
+  }
+  .copy-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  .table-wrap {
+    overflow-x: auto; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  thead th {
+    background: var(--bg-tertiary); color: var(--text-primary);
+    font-weight: 600; text-align: left; padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border); font-size: 0.8125rem;
+  }
+  tbody td {
+    padding: 0.5rem 0.75rem; border: 1px solid var(--border-muted);
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+  tbody tr:hover { background: var(--bg-tertiary); }
+
+  .chapter-nav-bottom {
+    display: flex; justify-content: space-between; align-items: stretch;
+    gap: 1rem; margin: 3rem 0 1rem; padding: 1.25rem 0 0;
+    border-top: 1px solid var(--border-muted);
+  }
+  .chapter-nav-bottom a {
+    display: flex; flex-direction: column; gap: 0.2rem;
+    padding: 0.75rem 1rem; border: 1px solid var(--border);
+    border-radius: 8px; text-decoration: none; transition: all 0.15s;
+    min-width: 0; max-width: 48%;
+  }
+  .chapter-nav-bottom a:hover {
+    background: var(--bg-tertiary); border-color: var(--accent-blue); text-decoration: none;
+  }
+  .chapter-nav-bottom .nav-label {
+    font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .chapter-nav-bottom .nav-title {
+    font-size: 0.85rem; color: var(--accent-blue); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chapter-nav-bottom .nav-next { margin-left: auto; text-align: right; }
+
+  #back-to-top {
+    position: fixed; bottom: 2rem; right: 2rem;
+    width: 40px; height: 40px; background: var(--bg-secondary);
+    border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-secondary); font-size: 1.1rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: all 0.2s; z-index: 90;
+  }
+  #back-to-top.visible { opacity: 1; pointer-events: auto; }
+  #back-to-top:hover { background: var(--bg-tertiary); color: var(--accent-blue); border-color: var(--accent-blue); }
+
+  .doc-footer {
+    margin-top: 4rem; padding: 1.5rem 0;
+    border-top: 1px solid var(--border-muted);
+    text-align: center; color: var(--text-muted); font-size: 0.8125rem;
+  }
+
+  @media (max-width: 1024px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay.open { display: block; }
+    .hamburger { display: block; }
+    .main { margin-left: 0; padding: 2rem 1.5rem 4rem; max-width: 100%; }
+    .hero { padding: 60px 1.5rem 40px; }
+  }
+  @media (max-width: 640px) {
+    .main { padding: 1.5rem 1rem 3rem; }
+    h1 { font-size: 1.5rem; } h2 { font-size: 1.25rem; }
+    .part-heading { font-size: 1.3rem !important; }
+    .chapter-heading { font-size: 1.2rem !important; }
+    pre { font-size: 0.75rem; padding: 0.75rem; }
+    table { font-size: 0.8rem; }
+    thead th, tbody td { padding: 0.4rem 0.5rem; }
+    .chapter-nav-bottom { flex-direction: column; }
+    .chapter-nav-bottom a { max-width: 100%; }
+    .header-nav .chapter-label { display: none; }
+    .hero .shield { font-size: 3rem; }
+    .hero .meta { flex-direction: column; gap: 0.5rem; }
+  }
+  @media print {
+    body { background: #fff; color: #1a1a1a; }
+    .site-header, .sidebar, .sidebar-overlay, #back-to-top,
+    .scroll-indicator, .copy-btn, .code-lang, .hamburger,
+    .header-nav { display: none !important; }
+    .main { margin-left: 0; max-width: 100%; padding: 1rem; }
+    .hero { background: #fff; border-bottom: 2px solid #000; padding: 2rem 1rem; }
+    .hero h1 { color: #000 !important; }
+    h1, h2, h3, h4 { color: #000; }
+    a { color: #0066cc; }
+    code { background: #f3f3f3; color: #333; }
+    .code-block pre { background: #f5f5f5; border-color: #ccc; }
+    .code-block pre code { color: #1a1a1a; }
+    blockquote { border-left-color: #666; background: #f9f9f9; color: #333; }
+    thead th { background: #eee; color: #000; border-color: #999; }
+    tbody td { border-color: #ddd; }
+    .part-heading { color: #000 !important; }
+    .chapter-heading { color: #000 !important; }
+    .chapter-nav-bottom, .headerlink, .reading-time { display: none; }
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  .toc { display: none; }
+  ::selection { background: rgba(88,166,255,0.3); }
+</style>
+
+<style>
+  /* Override for split pages - reduce memory usage */
+  img { max-width: 100%; height: auto; }
+  .main { min-height: 80vh; }
+</style>
+
+</head>
+<body>
+<div class="scroll-indicator"><div class="bar" id="scrollBar"></div></div>
+<header class="site-header">
+  <button class="hamburger" onclick="toggleSidebar()" aria-label="Toggle navigation">☰</button>
+  <div class="logo">
+    <span class="icon">⚡</span>Application Development Using Claude Code<span class="badge">Book</span>
+  </div>
+  <nav class="header-nav">
+    <button id="prev-btn" onclick="location.href='chapter-28.html'" disabled>← Prev</button>
+    <span class="chapter-label" id="chapter-label"></span>
+    <button id="next-btn" onclick="location.href='chapter-30.html'">Next →</button>
+  </nav>
+</header>
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-title">Table of Contents</div>
+    <a href="chapter-01.html" class="sidebar-part">PART I: FOUNDATIONS</a>
+    <a href="chapter-01.html" class="sidebar-chapter">Ch 1: Chapter 1: The Claude Code Revolution</a>
+    <a href="chapter-01.html#what-claude-code-actually-is" class="sidebar-section">What Claude Code Actually Is¶</a>
+    <a href="chapter-01.html#a-day-in-the-life-before-and-after" class="sidebar-section">A Day in the Life: Before and After¶</a>
+    <a href="chapter-01.html#the-paradigm-shift-from-write-code-to-engineer-with-ai" class="sidebar-section">The Paradigm Shift: From &amp;ldquo;Write Code&amp;rdqu...</a>
+    <a href="chapter-01.html#what-separates-beginners-from-professionals" class="sidebar-section">What Separates Beginners from Professionals¶</a>
+    <a href="chapter-01.html#baby-usage-vs-professional-usage-a-concrete-comparison" class="sidebar-section">Baby Usage vs. Professional Usage: A Concrete C...</a>
+    <a href="chapter-01.html#the-economics-why-this-matters" class="sidebar-section">The Economics: Why This Matters¶</a>
+    <a href="chapter-01.html#claude-code-vs-the-competition" class="sidebar-section">Claude Code vs. the Competition¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-01.html#what-you-will-build-by-the-end-of-this-book" class="sidebar-section">What You Will Build by the End of This Book¶</a>
+    <a href="chapter-01.html#prerequisites" class="sidebar-section">Prerequisites¶</a>
+    <a href="chapter-01.html#the-road-ahead" class="sidebar-section">The Road Ahead¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-02.html" class="sidebar-chapter">Ch 2: Chapter 2: Setup and Configuration Mastery</a>
+    <a href="chapter-02.html#installation-methods" class="sidebar-section">Installation Methods¶</a>
+    <a href="chapter-02.html#first-launch-what-happens" class="sidebar-section">First Launch: What Happens¶</a>
+    <a href="chapter-25.html#environment-setup" class="sidebar-section">Environment Setup¶</a>
+    <a href="chapter-02.html#shell-integration" class="sidebar-section">Shell Integration¶</a>
+    <a href="chapter-02.html#directory-structure-what-gets-created-where" class="sidebar-section">Directory Structure: What Gets Created Where¶</a>
+    <a href="chapter-02.html#ide-integration" class="sidebar-section">IDE Integration¶</a>
+    <a href="chapter-02.html#multi-model-setup" class="sidebar-section">Multi-Model Setup¶</a>
+    <a href="chapter-02.html#essential-built-in-commands" class="sidebar-section">Essential Built-In Commands¶</a>
+    <a href="chapter-02.html#effort-level-configuration" class="sidebar-section">Effort Level Configuration¶</a>
+    <a href="chapter-02.html#first-professional-session-walkthrough" class="sidebar-section">First Professional Session Walkthrough¶</a>
+    <a href="chapter-02.html#what-most-people-get-wrong-in-setup" class="sidebar-section">What Most People Get Wrong in Setup¶</a>
+    <a href="chapter-02.html#verifying-installation-the-doctor" class="sidebar-section">Verifying Installation: The Doctor¶</a>
+    <a href="chapter-02.html#troubleshooting-common-setup-issues" class="sidebar-section">Troubleshooting Common Setup Issues¶</a>
+    <a href="chapter-02.html#whats-next" class="sidebar-section">What&amp;rsquo;s Next¶</a>
+    <a href="chapter-02.html#what-most-people-get-wrong-the-setup-checklist" class="sidebar-section">What Most People Get Wrong: The Setup Checklist¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-03.html" class="sidebar-chapter">Ch 3: Chapter 3: Architecture Deep Dive -- How Claude Code...</a>
+    <a href="chapter-28.html#the-agentic-loop" class="sidebar-section">The Agentic Loop¶</a>
+    <a href="chapter-03.html#the-context-window" class="sidebar-section">The Context Window¶</a>
+    <a href="chapter-03.html#the-permission-system-in-depth" class="sidebar-section">The Permission System in Depth¶</a>
+    <a href="chapter-03.html#session-lifecycle" class="sidebar-section">Session Lifecycle¶</a>
+    <a href="chapter-03.html#subagent-architecture" class="sidebar-section">Subagent Architecture¶</a>
+    <a href="chapter-03.html#streaming-architecture" class="sidebar-section">Streaming Architecture¶</a>
+    <a href="chapter-03.html#all-hook-lifecycle-events" class="sidebar-section">All Hook Lifecycle Events¶</a>
+    <a href="chapter-03.html#performance-characteristics" class="sidebar-section">Performance Characteristics¶</a>
+    <a href="chapter-03.html#putting-it-together-a-complete-request-trace" class="sidebar-section">Putting It Together: A Complete Request Trace¶</a>
+    <a href="chapter-03.html#the-architecture-diagram" class="sidebar-section">The Architecture Diagram¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-04.html" class="sidebar-part">PART II: THE PROFESSIONAL CONFIGURATION STACK</a>
+    <a href="chapter-04.html" class="sidebar-chapter">Ch 4: Chapter 4: CLAUDE.md — Engineering Your Project Brain</a>
+    <a href="chapter-04.html#the-single-most-important-file" class="sidebar-section">The Single Most Important File¶</a>
+    <a href="chapter-04.html#the-claudemd-hierarchy" class="sidebar-section">The CLAUDE.md Hierarchy¶</a>
+    <a href="chapter-04.html#structure-best-practices" class="sidebar-section">Structure Best Practices¶</a>
+    <a href="chapter-04.html#the-import-system" class="sidebar-section">The @import System¶</a>
+    <a href="chapter-04.html#what-to-include" class="sidebar-section">What to Include¶</a>
+    <a href="chapter-04.html#what-not-to-include" class="sidebar-section">What NOT to Include¶</a>
+    <a href="chapter-04.html#real-world-examples" class="sidebar-section">Real-World Examples¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-04.html#testing-your-claudemd" class="sidebar-section">Testing Your CLAUDE.md¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-05.html" class="sidebar-chapter">Ch 5: Chapter 5: Settings, Permissions, and Security</a>
+    <a href="chapter-05.html#two-files-two-purposes" class="sidebar-section">Two Files, Two Purposes¶</a>
+    <a href="chapter-05.html#the-permission-system-deep-dive" class="sidebar-section">The Permission System Deep Dive¶</a>
+    <a href="chapter-05.html#security-deny-lists" class="sidebar-section">Security Deny Lists¶</a>
+    <a href="chapter-05.html#the-complete-settingsjson-schema" class="sidebar-section">The Complete settings.json Schema¶</a>
+    <a href="chapter-05.html#settings-for-different-environments" class="sidebar-section">Settings for Different Environments¶</a>
+    <a href="chapter-05.html#real-world-security-hardening" class="sidebar-section">Real-World Security Hardening¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-06.html" class="sidebar-chapter">Ch 6: Chapter 6: Rules -- Path-Scoped Coding Standards</a>
+    <a href="chapter-06.html#what-rules-are" class="sidebar-section">What Rules Are¶</a>
+    <a href="chapter-06.html#rule-file-anatomy" class="sidebar-section">Rule File Anatomy¶</a>
+    <a href="chapter-06.html#path-scoping-mechanics" class="sidebar-section">Path Scoping Mechanics¶</a>
+    <a href="chapter-06.html#built-in-rule-examples" class="sidebar-section">Built-In Rule Examples¶</a>
+    <a href="chapter-06.html#writing-effective-rules" class="sidebar-section">Writing Effective Rules¶</a>
+    <a href="chapter-06.html#complete-example-full-stack-typescript-python-project" class="sidebar-section">Complete Example: Full-Stack TypeScript + Pytho...</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-07.html" class="sidebar-chapter">Ch 7: Chapter 7: Skills -- Building Reusable AI Workflows</a>
+    <a href="chapter-07.html#what-skills-are" class="sidebar-section">What Skills Are¶</a>
+    <a href="chapter-07.html#the-skillmd-anatomy" class="sidebar-section">The SKILL.md Anatomy¶</a>
+    <a href="chapter-26.html#dynamic-context-injection" class="sidebar-section">Dynamic Context Injection¶</a>
+    <a href="chapter-07.html#building-custom-skills-three-complete-examples" class="sidebar-section">Building Custom Skills: Three Complete Examples¶</a>
+    <a href="chapter-07.html#auto-activating-skills" class="sidebar-section">Auto-Activating Skills¶</a>
+    <a href="chapter-07.html#error-handling" class="sidebar-section">Error Handling¶</a>
+    <a href="chapter-07.html#security" class="sidebar-section">Security¶</a>
+    <a href="chapter-07.html#skill-libraries-organizing-skills-for-a-team" class="sidebar-section">Skill Libraries: Organizing Skills for a Team¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-07.html#building-a-skill-development-workflow" class="sidebar-section">Building a Skill Development Workflow¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-08.html" class="sidebar-chapter">Ch 8: Chapter 8: Hooks -- Automation Guardrails</a>
+    <a href="chapter-08.html#the-hook-lifecycle" class="sidebar-section">The Hook Lifecycle¶</a>
+    <a href="chapter-08.html#hook-wiring-in-settingsjson" class="sidebar-section">Hook Wiring in settings.json¶</a>
+    <a href="chapter-08.html#the-json-stdin-protocol" class="sidebar-section">The JSON Stdin Protocol¶</a>
+    <a href="chapter-08.html#the-four-hook-types" class="sidebar-section">The Four Hook Types¶</a>
+    <a href="chapter-08.html#five-production-ready-hook-examples" class="sidebar-section">Five Production-Ready Hook Examples¶</a>
+    <a href="chapter-08.html#building-a-custom-hook-step-by-step" class="sidebar-section">Building a Custom Hook &amp;ndash; Step by Step¶</a>
+    <a href="chapter-08.html#advanced-hook-patterns" class="sidebar-section">Advanced Hook Patterns¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-09.html" class="sidebar-part">PART III: TOOL SYSTEM MASTERY</a>
+    <a href="chapter-09.html" class="sidebar-chapter">Ch 9: Chapter 9: The Complete Tool System</a>
+    <a href="chapter-09.html#how-tools-work" class="sidebar-section">How Tools Work¶</a>
+    <a href="chapter-09.html#the-complete-tool-inventory" class="sidebar-section">The Complete Tool Inventory¶</a>
+    <a href="chapter-09.html#tool-selection-strategy" class="sidebar-section">Tool Selection Strategy¶</a>
+    <a href="chapter-09.html#the-tool-execution-pipeline" class="sidebar-section">The Tool Execution Pipeline¶</a>
+    <a href="chapter-09.html#toolresult-format" class="sidebar-section">ToolResult Format¶</a>
+    <a href="chapter-09.html#parallel-tool-execution" class="sidebar-section">Parallel Tool Execution¶</a>
+    <a href="chapter-09.html#tool-timeouts" class="sidebar-section">Tool Timeouts¶</a>
+    <a href="chapter-09.html#tool-specific-configuration" class="sidebar-section">Tool-Specific Configuration¶</a>
+    <a href="chapter-09.html#common-tool-patterns" class="sidebar-section">Common Tool Patterns¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-10.html" class="sidebar-chapter">Ch 10: Chapter 10: Bash Tool and Shell Operations</a>
+    <a href="chapter-10.html#what-the-bash-tool-can-do" class="sidebar-section">What the Bash Tool Can Do¶</a>
+    <a href="chapter-10.html#the-execution-model" class="sidebar-section">The Execution Model¶</a>
+    <a href="chapter-10.html#security-implications" class="sidebar-section">Security Implications¶</a>
+    <a href="chapter-10.html#permission-patterns" class="sidebar-section">Permission Patterns¶</a>
+    <a href="chapter-10.html#git-operations-via-bash" class="sidebar-section">Git Operations via Bash¶</a>
+    <a href="chapter-10.html#package-management" class="sidebar-section">Package Management¶</a>
+    <a href="chapter-10.html#process-management" class="sidebar-section">Process Management¶</a>
+    <a href="chapter-10.html#testing-via-bash" class="sidebar-section">Testing via Bash¶</a>
+    <a href="chapter-10.html#build-systems" class="sidebar-section">Build Systems¶</a>
+    <a href="chapter-10.html#output-handling" class="sidebar-section">Output Handling¶</a>
+    <a href="chapter-10.html#sandboxing-and-safety-modes" class="sidebar-section">Sandboxing and Safety Modes¶</a>
+    <a href="chapter-10.html#linting-and-code-quality-via-bash" class="sidebar-section">Linting and Code Quality via Bash¶</a>
+    <a href="chapter-10.html#advanced-patterns" class="sidebar-section">Advanced Patterns¶</a>
+    <a href="chapter-10.html#what-not-to-do-with-bash" class="sidebar-section">What NOT to Do with Bash¶</a>
+    <a href="chapter-10.html#10-practical-bash-patterns" class="sidebar-section">10 Practical Bash Patterns¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-11.html" class="sidebar-chapter">Ch 11: Chapter 11: File Operations at Scale</a>
+    <a href="chapter-11.html#the-file-operation-toolkit" class="sidebar-section">The File Operation Toolkit¶</a>
+    <a href="chapter-11.html#read-loading-files-into-context" class="sidebar-section">Read: Loading Files Into Context¶</a>
+    <a href="chapter-11.html#edit-precision-modifications" class="sidebar-section">Edit: Precision Modifications¶</a>
+    <a href="chapter-11.html#write-creating-and-rewriting-files" class="sidebar-section">Write: Creating and Rewriting Files¶</a>
+    <a href="chapter-11.html#glob-finding-files-by-pattern" class="sidebar-section">Glob: Finding Files by Pattern¶</a>
+    <a href="chapter-11.html#grep-searching-file-contents" class="sidebar-section">Grep: Searching File Contents¶</a>
+    <a href="chapter-11.html#notebookedit-modifying-jupyter-notebooks" class="sidebar-section">NotebookEdit: Modifying Jupyter Notebooks¶</a>
+    <a href="chapter-11.html#performance-considerations" class="sidebar-section">Performance Considerations¶</a>
+    <a href="chapter-11.html#the-tool-interaction-matrix" class="sidebar-section">The Tool Interaction Matrix¶</a>
+    <a href="chapter-11.html#large-codebase-patterns" class="sidebar-section">Large Codebase Patterns¶</a>
+    <a href="chapter-11.html#multi-file-editing-patterns" class="sidebar-section">Multi-File Editing Patterns¶</a>
+    <a href="chapter-11.html#10-file-operation-recipes" class="sidebar-section">10 File Operation Recipes¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-12.html" class="sidebar-chapter">Ch 12: Chapter 12: Agent Tool and Multi-Agent Patterns</a>
+    <a href="chapter-12.html#what-the-agent-tool-does" class="sidebar-section">What the Agent Tool Does¶</a>
+    <a href="chapter-12.html#agent-types" class="sidebar-section">Agent Types¶</a>
+    <a href="chapter-12.html#when-to-use-agent" class="sidebar-section">When to Use Agent¶</a>
+    <a href="chapter-12.html#agent-parameters" class="sidebar-section">Agent Parameters¶</a>
+    <a href="chapter-12.html#writing-effective-agent-prompts" class="sidebar-section">Writing Effective Agent Prompts¶</a>
+    <a href="chapter-12.html#parallel-agent-patterns" class="sidebar-section">Parallel Agent Patterns¶</a>
+    <a href="chapter-12.html#communicating-with-running-agents" class="sidebar-section">Communicating with Running Agents¶</a>
+    <a href="chapter-12.html#custom-agents-from-claudeagents" class="sidebar-section">Custom Agents from .claude/agents/¶</a>
+    <a href="chapter-12.html#worktree-workflows-in-depth" class="sidebar-section">Worktree Workflows in Depth¶</a>
+    <a href="chapter-12.html#mcp-extending-claude-code-with-external-tools" class="sidebar-section">MCP: Extending Claude Code with External Tools¶</a>
+    <a href="chapter-12.html#cost-implications" class="sidebar-section">Cost Implications¶</a>
+    <a href="chapter-12.html#real-world-workflow-end-to-end-bug-investigation" class="sidebar-section">Real-World Workflow: End-to-End Bug Investigation¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-13.html" class="sidebar-part">PART IV: CONTEXT ENGINEERING</a>
+    <a href="chapter-13.html" class="sidebar-chapter">Ch 13: Chapter 13: Token Economics and Context Windows</a>
+    <a href="chapter-13.html#what-the-context-window-actually-is" class="sidebar-section">What the Context Window Actually Is¶</a>
+    <a href="chapter-13.html#what-a-token-is" class="sidebar-section">What a Token Is¶</a>
+    <a href="chapter-13.html#token-budgeting-where-the-200k-actually-goes" class="sidebar-section">Token Budgeting: Where the 200K Actually Goes¶</a>
+    <a href="chapter-13.html#how-tokens-work-in-code-vs-prose" class="sidebar-section">How Tokens Work in Code vs. Prose¶</a>
+    <a href="chapter-13.html#token-pricing" class="sidebar-section">Token Pricing¶</a>
+    <a href="chapter-13.html#prompt-caching" class="sidebar-section">Prompt Caching¶</a>
+    <a href="chapter-13.html#extended-thinking-tokens" class="sidebar-section">Extended Thinking Tokens¶</a>
+    <a href="chapter-13.html#context-window-management-strategies" class="sidebar-section">Context Window Management Strategies¶</a>
+    <a href="chapter-13.html#what-happens-when-you-hit-the-limit" class="sidebar-section">What Happens When You Hit the Limit¶</a>
+    <a href="chapter-13.html#monitoring-your-context-usage" class="sidebar-section">Monitoring Your Context Usage¶</a>
+    <a href="chapter-13.html#cost-optimization-patterns" class="sidebar-section">Cost Optimization Patterns¶</a>
+    <a href="chapter-13.html#real-world-cost-scenarios" class="sidebar-section">Real-World Cost Scenarios¶</a>
+    <a href="chapter-13.html#the-context-engineering-mindset" class="sidebar-section">The Context Engineering Mindset¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-14.html" class="sidebar-chapter">Ch 14: Chapter 14: Memory, Sessions, and Persistence</a>
+    <a href="chapter-14.html#the-three-persistence-mechanisms" class="sidebar-section">The Three Persistence Mechanisms¶</a>
+    <a href="chapter-14.html#auto-memory-claudes-long-term-knowledge" class="sidebar-section">Auto-Memory: Claude&amp;rsquo;s Long-Term Knowledge¶</a>
+    <a href="chapter-14.html#session-management" class="sidebar-section">Session Management¶</a>
+    <a href="chapter-14.html#context-compaction" class="sidebar-section">Context Compaction¶</a>
+    <a href="chapter-14.html#plan-mode" class="sidebar-section">Plan Mode¶</a>
+    <a href="chapter-14.html#the-clear-discipline" class="sidebar-section">The /clear Discipline¶</a>
+    <a href="chapter-14.html#the-btw-command" class="sidebar-section">The /btw Command¶</a>
+    <a href="chapter-14.html#the-rewind-command" class="sidebar-section">The /rewind Command¶</a>
+    <a href="chapter-14.html#practical-persistence-workflow" class="sidebar-section">Practical Persistence Workflow¶</a>
+    <a href="chapter-14.html#the-interplay-between-persistence-mechanisms" class="sidebar-section">The Interplay Between Persistence Mechanisms¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-15.html" class="sidebar-chapter">Ch 15: Chapter 15: Prompt Engineering for Code Generation</a>
+    <a href="chapter-15.html#prompting-vs-prompt-engineering" class="sidebar-section">Prompting vs. Prompt Engineering¶</a>
+    <a href="chapter-15.html#the-prompt-engineering-stack" class="sidebar-section">The Prompt Engineering Stack¶</a>
+    <a href="chapter-15.html#the-20-prompt-patterns" class="sidebar-section">The 20 Prompt Patterns¶</a>
+    <a href="chapter-15.html#the-meta-skill-when-to-prompt-vs-when-to-configure" class="sidebar-section">The Meta-Skill: When to Prompt vs. When to Conf...</a>
+    <a href="chapter-15.html#measuring-prompt-quality" class="sidebar-section">Measuring Prompt Quality¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-16.html" class="sidebar-part">PART V: BUILDING REAL APPLICATIONS</a>
+    <a href="chapter-16.html" class="sidebar-chapter">Ch 16: Chapter 16: Project Architecture Patterns</a>
+    <a href="chapter-16.html#the-claudemd-first-approach" class="sidebar-section">The CLAUDE.md-First Approach¶</a>
+    <a href="chapter-16.html#directory-conventions-that-help-claude-navigate" class="sidebar-section">Directory Conventions That Help Claude Navigate¶</a>
+    <a href="chapter-16.html#project-types-and-their-ideal-claude-code-setups" class="sidebar-section">Project Types and Their Ideal Claude Code Setups¶</a>
+    <a href="chapter-16.html#architecture-documentation-for-claude" class="sidebar-section">Architecture Documentation for Claude¶</a>
+    <a href="chapter-16.html#component-responsibilities" class="sidebar-section">Component Responsibilities¶</a>
+    <a href="chapter-16.html#data-flow" class="sidebar-section">Data Flow¶</a>
+    <a href="chapter-16.html#api-contracts" class="sidebar-section">API Contracts¶</a>
+    <a href="chapter-16.html#the-claude-ready-project-checklist" class="sidebar-section">The &amp;ldquo;Claude-Ready&amp;rdquo; Project Checklist¶</a>
+    <a href="chapter-16.html#scaffolding-a-new-project-with-claude-code" class="sidebar-section">Scaffolding a New Project with Claude Code¶</a>
+    <a href="chapter-16.html#evolving-architecture-with-claude-code" class="sidebar-section">Evolving Architecture with Claude Code¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-17.html" class="sidebar-chapter">Ch 17: Chapter 17: Building a Full-Stack Web Application</a>
+    <a href="chapter-17.html#the-application-taskflow" class="sidebar-section">The Application: TaskFlow¶</a>
+    <a href="chapter-17.html#phase-1-project-setup" class="sidebar-section">Phase 1: Project Setup¶</a>
+    <a href="chapter-17.html#phase-2-database-and-api" class="sidebar-section">Phase 2: Database and API¶</a>
+    <a href="chapter-17.html#phase-3-frontend" class="sidebar-section">Phase 3: Frontend¶</a>
+    <a href="chapter-17.html#phase-4-real-time-features" class="sidebar-section">Phase 4: Real-Time Features¶</a>
+    <a href="chapter-17.html#phase-5-testing" class="sidebar-section">Phase 5: Testing¶</a>
+    <a href="chapter-17.html#phase-6-deployment" class="sidebar-section">Phase 6: Deployment¶</a>
+    <a href="chapter-25.html#lessons-learned" class="sidebar-section">Lessons Learned¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-18.html" class="sidebar-chapter">Ch 18: Chapter 18: Building CLI Tools and APIs</a>
+    <a href="chapter-18.html#part-1-building-a-python-cli-tool" class="sidebar-section">Part 1: Building a Python CLI Tool¶</a>
+    <a href="chapter-18.html#part-2-building-a-rest-api" class="sidebar-section">Part 2: Building a REST API¶</a>
+    <a href="chapter-18.html#part-3-building-a-graphql-api" class="sidebar-section">Part 3: Building a GraphQL API¶</a>
+    <a href="chapter-18.html#patterns-that-work-well-for-cliapi-development" class="sidebar-section">Patterns That Work Well for CLI/API Development¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-19.html" class="sidebar-chapter">Ch 19: Chapter 19: Test-Driven Development with Claude Code</a>
+    <a href="chapter-19.html#why-tdd-is-more-powerful-with-claude-code" class="sidebar-section">Why TDD Is More Powerful with Claude Code¶</a>
+    <a href="chapter-19.html#the-claude-code-tdd-workflow" class="sidebar-section">The Claude Code TDD Workflow¶</a>
+    <a href="chapter-19.html#test-frameworks-claude-knows-well" class="sidebar-section">Test Frameworks Claude Knows Well¶</a>
+    <a href="chapter-19.html#writing-testable-code-with-claude" class="sidebar-section">Writing Testable Code with Claude¶</a>
+    <a href="chapter-19.html#test-patterns-claude-excels-at" class="sidebar-section">Test Patterns Claude Excels At¶</a>
+    <a href="chapter-19.html#test-coverage-strategies" class="sidebar-section">Test Coverage Strategies¶</a>
+    <a href="chapter-19.html#setting-up-test-automation" class="sidebar-section">Setting Up Test Automation¶</a>
+    <a href="chapter-19.html#debugging-failing-tests" class="sidebar-section">Debugging Failing Tests¶</a>
+    <a href="chapter-19.html#real-example-tdd-a-rate-limiter" class="sidebar-section">Real Example: TDD a Rate Limiter¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-20.html" class="sidebar-chapter">Ch 20: Chapter 20: CI/CD Integration</a>
+    <a href="chapter-20.html#headless-mode-running-claude-code-without-a-terminal" class="sidebar-section">Headless Mode: Running Claude Code Without a Te...</a>
+    <a href="chapter-20.html#github-actions-integration" class="sidebar-section">GitHub Actions Integration¶</a>
+    <a href="chapter-20.html#pre-commit-hooks" class="sidebar-section">Pre-Commit Hooks¶</a>
+    <a href="chapter-20.html#automated-pr-reviews" class="sidebar-section">Automated PR Reviews¶</a>
+    <a href="chapter-20.html#automated-fixes" class="sidebar-section">Automated Fixes¶</a>
+    <a href="chapter-20.html#deployment-pipelines" class="sidebar-section">Deployment Pipelines¶</a>
+    <a href="chapter-20.html#azure-devops-integration" class="sidebar-section">Azure DevOps Integration¶</a>
+    <a href="chapter-20.html#cost-management-in-ci" class="sidebar-section">Cost Management in CI¶</a>
+    <a href="chapter-20.html#the-complete-production-pipeline" class="sidebar-section">The Complete Production Pipeline¶</a>
+    <a href="chapter-20.html#environment-setup-for-ci" class="sidebar-section">Environment Setup for CI¶</a>
+    <a href="chapter-20.html#monitoring-and-observability" class="sidebar-section">Monitoring and Observability¶</a>
+    <a href="chapter-20.html#troubleshooting-ci-integration" class="sidebar-section">Troubleshooting CI Integration¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-21.html" class="sidebar-part">PART VI: ADVANCED MASTERY</a>
+    <a href="chapter-21.html" class="sidebar-chapter">Ch 21: Chapter 21: Custom Agents and Intent Routing</a>
+    <a href="chapter-21.html#what-agents-are" class="sidebar-section">What Agents Are¶</a>
+    <a href="chapter-21.html#the-agent-definition-format" class="sidebar-section">The Agent Definition Format¶</a>
+    <a href="chapter-21.html#frontmatter-fields-complete-reference" class="sidebar-section">Frontmatter Fields — Complete Reference¶</a>
+    <a href="chapter-21.html#five-complete-agent-definitions" class="sidebar-section">Five Complete Agent Definitions¶</a>
+    <a href="chapter-21.html#how-agents-get-delegated-to" class="sidebar-section">How Agents Get Delegated To¶</a>
+    <a href="chapter-21.html#agent-vs-skill-decision-matrix" class="sidebar-section">Agent vs. Skill — Decision Matrix¶</a>
+    <a href="chapter-21.html#intent-routing-auto-detecting-what-you-want" class="sidebar-section">Intent Routing — Auto-Detecting What You Want¶</a>
+    <a href="chapter-21.html#building-domain-specific-agents" class="sidebar-section">Building Domain-Specific Agents¶</a>
+    <a href="chapter-21.html#multi-agent-orchestration" class="sidebar-section">Multi-Agent Orchestration¶</a>
+    <a href="chapter-21.html#agent-communication-patterns" class="sidebar-section">Agent Communication Patterns¶</a>
+    <a href="chapter-21.html#cost-management-for-agents" class="sidebar-section">Cost Management for Agents¶</a>
+    <a href="chapter-21.html#practical-tips-for-effective-agents" class="sidebar-section">Practical Tips for Effective Agents¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-22.html" class="sidebar-chapter">Ch 22: Chapter 22: Prompt Patterns That 10x Your Output</a>
+    <a href="chapter-22.html#pattern-1-the-constraint-pattern" class="sidebar-section">Pattern 1: The Constraint Pattern¶</a>
+    <a href="chapter-22.html#pattern-2-the-architecture-first-pattern" class="sidebar-section">Pattern 2: The Architecture-First Pattern¶</a>
+    <a href="chapter-22.html#pattern-3-the-test-first-pattern" class="sidebar-section">Pattern 3: The Test-First Pattern¶</a>
+    <a href="chapter-22.html#pattern-4-the-chain-of-files-pattern" class="sidebar-section">Pattern 4: The Chain-of-Files Pattern¶</a>
+    <a href="chapter-22.html#pattern-5-the-progressive-refinement-pattern" class="sidebar-section">Pattern 5: The Progressive Refinement Pattern¶</a>
+    <a href="chapter-22.html#pattern-6-the-example-driven-pattern" class="sidebar-section">Pattern 6: The Example-Driven Pattern¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-23.html" class="sidebar-chapter">Ch 23: Chapter 23: Multi-File Refactoring at Scale</a>
+    <a href="chapter-23.html#why-multi-file-refactoring-is-hard" class="sidebar-section">Why Multi-File Refactoring Is Hard¶</a>
+    <a href="chapter-23.html#strategy-1-plan-mode-for-complex-refactors" class="sidebar-section">Strategy 1: Plan Mode for Complex Refactors¶</a>
+    <a href="chapter-23.html#strategy-2-the-worktree-approach" class="sidebar-section">Strategy 2: The Worktree Approach¶</a>
+    <a href="chapter-23.html#strategy-3-the-batch-command" class="sidebar-section">Strategy 3: The /batch Command¶</a>
+    <a href="chapter-23.html#strategy-4-progressive-refactoring" class="sidebar-section">Strategy 4: Progressive Refactoring¶</a>
+    <a href="chapter-23.html#specific-refactoring-patterns" class="sidebar-section">Specific Refactoring Patterns¶</a>
+    <a href="chapter-23.html#maintaining-consistency" class="sidebar-section">Maintaining Consistency¶</a>
+    <a href="chapter-23.html#rollback-strategies" class="sidebar-section">Rollback Strategies¶</a>
+    <a href="chapter-23.html#large-codebase-techniques" class="sidebar-section">Large Codebase Techniques¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-23.html#complete-walkthrough-monolith-to-services" class="sidebar-section">Complete Walkthrough: Monolith to Services¶</a>
+    <a href="chapter-23.html#when-not-to-refactor-with-claude-code" class="sidebar-section">When Not to Refactor with Claude Code¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-24.html" class="sidebar-chapter">Ch 24: Chapter 24: MCP Servers — Extending Claude Code&#x27;s Reach</a>
+    <a href="chapter-24.html#what-mcp-is" class="sidebar-section">What MCP Is¶</a>
+    <a href="chapter-24.html#why-mcp-matters" class="sidebar-section">Why MCP Matters¶</a>
+    <a href="chapter-24.html#mcp-transport-stdio" class="sidebar-section">MCP Transport: stdio¶</a>
+    <a href="chapter-24.html#registering-mcp-servers" class="sidebar-section">Registering MCP Servers¶</a>
+    <a href="chapter-24.html#how-mcp-tools-appear-in-claude-code" class="sidebar-section">How MCP Tools Appear in Claude Code¶</a>
+    <a href="chapter-24.html#building-an-mcp-server-from-scratch-python" class="sidebar-section">Building an MCP Server from Scratch (Python)¶</a>
+    <a href="chapter-24.html#building-an-mcp-server-typescriptnodejs" class="sidebar-section">Building an MCP Server (TypeScript/Node.js)¶</a>
+    <a href="chapter-24.html#the-mcp-ecosystem" class="sidebar-section">The MCP Ecosystem¶</a>
+    <a href="chapter-24.html#mcp-resources-vs-tools" class="sidebar-section">MCP Resources vs. Tools¶</a>
+    <a href="chapter-24.html#advanced-mcp-patterns" class="sidebar-section">Advanced MCP Patterns¶</a>
+    <a href="chapter-24.html#security-considerations" class="sidebar-section">Security Considerations¶</a>
+    <a href="chapter-24.html#debugging-mcp-servers" class="sidebar-section">Debugging MCP Servers¶</a>
+    <a href="chapter-24.html#real-world-use-case-internal-tools-integration" class="sidebar-section">Real-World Use Case: Internal Tools Integration¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-25.html" class="sidebar-part">PART VII: CASE STUDIES AND REFERENCE</a>
+    <a href="chapter-25.html" class="sidebar-chapter">Ch 25: Chapter 25: Case Study — SaaS Application from Zero ...</a>
+    <a href="chapter-25.html#the-application-invoiceflow" class="sidebar-section">The Application: InvoiceFlow¶</a>
+    <a href="chapter-25.html#day-1-project-setup-and-architecture" class="sidebar-section">Day 1: Project Setup and Architecture¶</a>
+    <a href="chapter-25.html#day-2-authentication-and-users" class="sidebar-section">Day 2: Authentication and Users¶</a>
+    <a href="chapter-25.html#day-3-core-features-clients-and-invoices" class="sidebar-section">Day 3: Core Features — Clients and Invoices¶</a>
+    <a href="chapter-25.html#day-4-payments-and-email" class="sidebar-section">Day 4: Payments and Email¶</a>
+    <a href="chapter-25.html#day-5-dashboard-and-polish" class="sidebar-section">Day 5: Dashboard and Polish¶</a>
+    <a href="chapter-25.html#day-6-testing-and-security" class="sidebar-section">Day 6: Testing and Security¶</a>
+    <a href="chapter-25.html#day-7-deployment" class="sidebar-section">Day 7: Deployment¶</a>
+    <a href="chapter-25.html#key-metrics" class="sidebar-section">Key Metrics¶</a>
+    <a href="chapter-25.html#lessons-learned" class="sidebar-section">Lessons Learned¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-26.html" class="sidebar-chapter">Ch 26: Chapter 26: Complete Command and Tool Reference</a>
+    <a href="chapter-26.html#part-1-built-in-commands" class="sidebar-section">Part 1: Built-in Commands¶</a>
+    <a href="chapter-26.html#part-2-all-tools-reference" class="sidebar-section">Part 2: All Tools Reference¶</a>
+    <a href="chapter-26.html#part-3-configuration-reference" class="sidebar-section">Part 3: Configuration Reference¶</a>
+    <a href="chapter-26.html#part-4-environment-variables" class="sidebar-section">Part 4: Environment Variables¶</a>
+    <a href="chapter-26.html#quick-lookup-index" class="sidebar-section">Quick Lookup Index¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-27.html" class="sidebar-chapter">Ch 27: Chapter 27: Troubleshooting, FAQ, and Expert Tips</a>
+    <a href="chapter-27.html#part-1-troubleshooting" class="sidebar-section">Part 1: Troubleshooting¶</a>
+    <a href="chapter-27.html#part-2-frequently-asked-questions" class="sidebar-section">Part 2: Frequently Asked Questions¶</a>
+    <a href="chapter-27.html#part-3-expert-tips" class="sidebar-section">Part 3: Expert Tips¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-28.html" class="sidebar-part">PART VIII: SPECIALIZED CLI SYSTEMS</a>
+    <a href="chapter-28.html" class="sidebar-chapter">Ch 28: Chapter 28: Specializing Claude Code at the Source C...</a>
+    <a href="chapter-28.html#the-five-customization-layers" class="sidebar-section">The Five Customization Layers¶</a>
+    <a href="chapter-28.html#claude-codes-source-architecture" class="sidebar-section">Claude Code&amp;rsquo;s Source Architecture¶</a>
+    <a href="chapter-28.html#adding-custom-tools-to-the-registry" class="sidebar-section">Adding Custom Tools to the Registry¶</a>
+    <a href="chapter-28.html#modifying-the-agentic-loop" class="sidebar-section">Modifying the Agentic Loop¶</a>
+    <a href="chapter-28.html#custom-permission-modes" class="sidebar-section">Custom Permission Modes¶</a>
+    <a href="chapter-28.html#building-specialized-cli-products" class="sidebar-section">Building Specialized CLI Products¶</a>
+    <a href="chapter-28.html#deployment-building-and-distributing-your-fork" class="sidebar-section">Deployment: Building and Distributing Your Fork¶</a>
+    <a href="chapter-28.html#when-to-stay-at-layer-4" class="sidebar-section">When to Stay at Layer 4¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-29.html" class="active" class="sidebar-chapter">Ch 29: Chapter 29: CLI-to-CLI Protocol — Agent-to-Agent Com...</a>
+    <a href="chapter-29.html#the-vision-cli-agents-that-talk-to-each-other" class="sidebar-section">The Vision: CLI Agents That Talk to Each Other¶</a>
+    <a href="chapter-29.html#designing-the-cli-to-cli-protocol-c2c" class="sidebar-section">Designing the CLI-to-CLI Protocol (C2C)¶</a>
+    <a href="chapter-29.html#implementing-c2c-in-practice" class="sidebar-section">Implementing C2C in Practice¶</a>
+    <a href="chapter-29.html#protocol-patterns" class="sidebar-section">Protocol Patterns¶</a>
+    <a href="chapter-29.html#security-and-governance" class="sidebar-section">Security and Governance¶</a>
+    <a href="chapter-29.html#where-c2c-meets-claude-code-today" class="sidebar-section">Where C2C Meets Claude Code Today¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-30.html" class="sidebar-chapter">Ch 30: Chapter 30: Building Multi-Specialized-CLI Systems</a>
+    <a href="chapter-30.html#why-multi-cli-architecture" class="sidebar-section">Why Multi-CLI Architecture¶</a>
+    <a href="chapter-30.html#architecture-patterns" class="sidebar-section">Architecture Patterns¶</a>
+    <a href="chapter-30.html#state-management-across-agents" class="sidebar-section">State Management Across Agents¶</a>
+    <a href="chapter-30.html#building-the-orchestrator" class="sidebar-section">Building the Orchestrator¶</a>
+    <a href="chapter-30.html#dynamic-task-decomposition" class="sidebar-section">Dynamic Task Decomposition¶</a>
+    <a href="chapter-30.html#complete-end-to-end-example" class="sidebar-section">Complete End-to-End Example¶</a>
+    <a href="chapter-30.html#failure-handling-and-resilience" class="sidebar-section">Failure Handling and Resilience¶</a>
+    <a href="chapter-30.html#production-deployment" class="sidebar-section">Production Deployment¶</a>
+    <a href="chapter-30.html#message-tracing" class="sidebar-section">Message Tracing¶</a>
+    <a href="chapter-30.html#the-future-of-multi-cli-systems" class="sidebar-section">The Future of Multi-CLI Systems¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-30.html#appendices" class="sidebar-part">APPENDICES</a>
+</nav>
+<main class="main">
+<h1 id="chapter-29-cli-to-cli-protocol-agent-to-agent-communication">Chapter 29: CLI-to-CLI Protocol — Agent-to-Agent Communication<a class="headerlink" href="#chapter-29-cli-to-cli-protocol-agent-to-agent-communication">¶</a> <span class="reading-time">~24 min read</span></h1>
+<p>Every revolution in computing follows the same arc. First, we build powerful standalone systems. Then we connect them. Mainframes became networks. Monoliths became microservices. Databases became distributed systems. In every case, the protocol that connected the pieces mattered more than the pieces themselves. HTTP mattered more than any single web server. gRPC mattered more than any single microservice.</p>
+<p>We are at that inflection point with AI agents.</p>
+<p>Today, Claude Code is a formidable standalone agent — it reads code, writes code, searches the web, executes commands, and reasons about complex systems. But it works alone. When a security audit agent finds a critical vulnerability, it cannot hand that finding to a deployment agent that blocks the release. When a research agent discovers that a dependency has a known CVE, it cannot tell the code-review agent to flag every import of that package. When a debugging agent isolates a root cause across three services, it cannot dispatch fix agents to each service in parallel.</p>
+<p>This chapter introduces the <strong>CLI-to-CLI Protocol (C2C)</strong> — a communication standard that lets AI CLI agents discover each other, negotiate capabilities, delegate tasks, and coordinate work. It is not a theoretical exercise. By the end of this chapter, you will have a working reference implementation and concrete patterns for building multi-agent systems that talk to each other over the same pipes and sockets that Unix processes have used for fifty years.</p>
+<h2 id="the-vision-cli-agents-that-talk-to-each-other">The Vision: CLI Agents That Talk to Each Other<a class="headerlink" href="#the-vision-cli-agents-that-talk-to-each-other">¶</a></h2>
+<h3 id="the-isolation-problem">The Isolation Problem<a class="headerlink" href="#the-isolation-problem">¶</a></h3>
+<p>Consider a realistic development scenario. You are preparing a release. The work involves:</p>
+<ol>
+<li>A security audit of all changed files</li>
+<li>A dependency vulnerability scan</li>
+<li>Performance regression testing on three critical endpoints</li>
+<li>Documentation updates for new API endpoints</li>
+<li>A changelog generated from commit history</li>
+<li>A pre-deployment readiness check</li>
+</ol>
+<p>Today, you run these as sequential Claude Code sessions. Each session starts from scratch, builds its own context, does its work, and produces output that you — the human — must manually feed into the next step. You are the message bus. You are the integration layer. You are the bottleneck.</p>
+<p>This is exactly where server-side computing was in 2005. Individual services were powerful, but they communicated through humans copying data between systems. Then came service-oriented architecture, then microservices, then event-driven systems. The services got smaller and more specialized, but the protocols between them got richer and more standardized.</p>
+<p>AI agents need the same evolution.</p>
+<h3 id="why-existing-protocols-fall-short">Why Existing Protocols Fall Short<a class="headerlink" href="#why-existing-protocols-fall-short">¶</a></h3>
+<p>You might ask: don&rsquo;t we already have protocols for this? MCP connects Claude Code to external systems. Google&rsquo;s Agent-to-Agent (A2A) protocol addresses multi-agent communication. Why build something new?</p>
+<p>The answer lies in what each protocol optimizes for.</p>
+<p><strong>MCP (Model Context Protocol)</strong> connects a single AI model to external tools and data sources. It is a client-server protocol where the AI is always the client and external systems are always the servers. MCP has no concept of peer-to-peer communication. An MCP server cannot initiate a conversation with the AI — it can only respond to requests. This makes MCP excellent for tool use but inadequate for agent coordination, where either party might need to initiate, delegate, or interrupt.</p>
+<p><strong>Google A2A</strong> addresses agent-to-agent communication but targets cloud-native, HTTP-based agents with Agent Cards, JSON-RPC over HTTP, and server-sent events. It assumes agents are long-running web services with discoverable URLs. CLI agents are different — they are ephemeral processes, they communicate over stdio, they live on developer machines, and they need to work without network access. A2A&rsquo;s web-service assumptions create unnecessary overhead for local agent coordination.</p>
+<p><strong>What C2C optimizes for:</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Property</th>
+<th>MCP</th>
+<th>A2A</th>
+<th>C2C</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Communication model</td>
+<td>Client-server</td>
+<td>Peer-to-peer (HTTP)</td>
+<td>Peer-to-peer (stdio/socket)</td>
+</tr>
+<tr>
+<td>Agent lifecycle</td>
+<td>Server always running</td>
+<td>Long-running service</td>
+<td>Ephemeral or persistent</td>
+</tr>
+<tr>
+<td>Transport</td>
+<td>stdio (one direction)</td>
+<td>HTTP/SSE</td>
+<td>stdio, Unix socket, filesystem</td>
+</tr>
+<tr>
+<td>Network required</td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Initiation</td>
+<td>Client only</td>
+<td>Either party</td>
+<td>Either party</td>
+</tr>
+<tr>
+<td>CLI-native</td>
+<td>Partially</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Works offline</td>
+<td>Yes</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Discovery</td>
+<td>Config-based</td>
+<td>Agent Cards (HTTP)</td>
+<td>Local registry + capability query</td>
+</tr>
+</tbody>
+</table></div>
+<p>C2C takes the Unix philosophy — small programs that do one thing well, communicating through text streams — and applies it to AI agents. It is designed for the world where you have a security agent, a code-review agent, a debugging agent, and a deployment agent, all running as CLI processes on your machine, coordinating through pipes and sockets.</p>
+<h3 id="the-microservices-analogy">The Microservices Analogy<a class="headerlink" href="#the-microservices-analogy">¶</a></h3>
+<p>If you understand microservices architecture, you already understand the C2C vision. Map the concepts:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Microservices Concept</th>
+<th>C2C Equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Service</td>
+<td>CLI agent (Claude Code session with specific role)</td>
+</tr>
+<tr>
+<td>API gateway</td>
+<td>Orchestrator agent or human developer</td>
+</tr>
+<tr>
+<td>Service mesh</td>
+<td>C2C transport layer (sockets, pipes)</td>
+</tr>
+<tr>
+<td>Service registry</td>
+<td>Local agent registry (<code>~/.c2c/agents.json</code>)</td>
+</tr>
+<tr>
+<td>Health check</td>
+<td><code>capability_query</code> message</td>
+</tr>
+<tr>
+<td>Circuit breaker</td>
+<td>Timeout + fallback in task_request</td>
+</tr>
+<tr>
+<td>Saga pattern</td>
+<td>Multi-step handoff chain with compensation</td>
+</tr>
+<tr>
+<td>Event bus</td>
+<td>Shared filesystem or pub/sub socket</td>
+</tr>
+</tbody>
+</table></div>
+<p>The key insight: just as microservices decompose a monolith into specialized services that communicate through well-defined APIs, C2C decomposes a monolithic AI session into specialized agents that communicate through well-defined messages.</p>
+<h2 id="designing-the-cli-to-cli-protocol-c2c">Designing the CLI-to-CLI Protocol (C2C)<a class="headerlink" href="#designing-the-cli-to-cli-protocol-c2c">¶</a></h2>
+<h3 id="design-principles">Design Principles<a class="headerlink" href="#design-principles">¶</a></h3>
+<p>C2C follows five principles, each drawn from decades of protocol design experience:</p>
+<p><strong>1. Unix Philosophy.</strong> Agents are processes. They communicate through text streams. They can be composed with pipes. <code>security-agent | deploy-agent</code> should be a valid expression, just as <code>grep | sort | uniq</code> is valid today.</p>
+<p><strong>2. Text-First (JSON over stdio).</strong> Every message is a single line of JSON written to stdout or a socket. No binary encoding, no protocol buffers, no XML. JSON is human-readable, debuggable with <code>cat</code> and <code>jq</code>, and supported by every programming language. When something goes wrong, you can read the messages.</p>
+<p><strong>3. Stateful Conversations.</strong> Unlike REST APIs, C2C conversations maintain state. A <code>task_request</code> creates a conversation context. Subsequent <code>status_update</code> messages refer back to it via <code>correlation_id</code>. This enables long-running tasks with progress reporting, unlike fire-and-forget protocols.</p>
+<p><strong>4. Authenticated and Auditable.</strong> Every message carries a signature. Every message is logged. In a world where AI agents can modify code, deploy services, and access production data, you need to know exactly which agent said what, when, and why. The audit trail is not optional.</p>
+<p><strong>5. Observable.</strong> Every message carries a <code>trace_id</code> that follows the entire operation across all agents involved. You can reconstruct the full decision chain: &ldquo;The security agent found CVE-2026-1234, which triggered the dependency agent to check for patches, which triggered the deploy agent to block the release.&rdquo; Distributed tracing for AI agents.</p>
+<h3 id="the-c2c-message-format">The C2C Message Format<a class="headerlink" href="#the-c2c-message-format">¶</a></h3>
+<p>Every C2C message follows this schema:</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;protocol&quot;: &quot;c2c/1.0&quot;,
+  &quot;id&quot;: &quot;msg_a1b2c3d4&quot;,
+  &quot;from&quot;: {
+    &quot;agent&quot;: &quot;security-auditor&quot;,
+    &quot;session&quot;: &quot;sess_abc123&quot;,
+    &quot;capabilities&quot;: [&quot;code-analysis&quot;, &quot;cve-lookup&quot;, &quot;owasp-audit&quot;]
+  },
+  &quot;to&quot;: {
+    &quot;agent&quot;: &quot;devops-deployer&quot;,
+    &quot;session&quot;: &quot;sess_def456&quot;
+  },
+  &quot;type&quot;: &quot;task_request&quot;,
+  &quot;payload&quot;: {
+    &quot;task&quot;: &quot;block_deployment&quot;,
+    &quot;context&quot;: {
+      &quot;reason&quot;: &quot;Critical vulnerability CVE-2026-1234 in auth module&quot;,
+      &quot;severity&quot;: &quot;critical&quot;,
+      &quot;files_affected&quot;: [&quot;src/auth/login.py&quot;, &quot;src/auth/oauth.py&quot;],
+      &quot;evidence&quot;: {
+        &quot;cwe&quot;: &quot;CWE-287&quot;,
+        &quot;description&quot;: &quot;Improper authentication allows bypass via crafted JWT&quot;
+      }
+    },
+    &quot;priority&quot;: &quot;critical&quot;,
+    &quot;timeout_ms&quot;: 30000
+  },
+  &quot;metadata&quot;: {
+    &quot;correlation_id&quot;: &quot;corr_xyz789&quot;,
+    &quot;trace_id&quot;: &quot;trace_release_v2.1.0&quot;,
+    &quot;timestamp&quot;: &quot;2026-04-01T14:30:00Z&quot;,
+    &quot;signature&quot;: &quot;sha256:e3b0c44298fc1c149afbf4c8996fb924...&quot;,
+    &quot;reply_to&quot;: null,
+    &quot;ttl_ms&quot;: 60000
+  }
+}
+</code></pre></div>
+<p>Let us walk through every field.</p>
+<p><strong><code>protocol</code></strong> — Version string. Agents check this first and reject messages with incompatible versions. Semantic versioning: <code>c2c/1.0</code> is compatible with <code>c2c/1.x</code> but not <code>c2c/2.0</code>.</p>
+<p><strong><code>id</code></strong> — Unique message identifier. Used for deduplication and reply targeting. Format: <code>msg_</code> prefix followed by a random alphanumeric string.</p>
+<p><strong><code>from</code></strong> — The sending agent&rsquo;s identity. Includes the agent&rsquo;s role name, session identifier (unique per process), and declared capabilities. Capabilities are how agents discover what each other can do without requiring a central registry.</p>
+<p><strong><code>to</code></strong> — The target agent. Can be a specific session (unicast) or just an agent role (anycast — any agent with that role can handle it). When <code>session</code> is null, the transport layer routes to the first available agent with the matching role.</p>
+<p><strong><code>type</code></strong> — One of six message types (detailed below).</p>
+<p><strong><code>payload</code></strong> — Type-specific content. For <code>task_request</code>, this contains the task name, context, priority, and timeout. For <code>task_result</code>, it contains the outcome and any artifacts.</p>
+<p><strong><code>metadata</code></strong> — Cross-cutting concerns. <code>correlation_id</code> links related messages into a conversation. <code>trace_id</code> links related conversations into an operation. <code>signature</code> is an HMAC-SHA256 of the message body for authentication. <code>reply_to</code> references the <code>id</code> of the message being replied to. <code>ttl_ms</code> sets an expiration — messages older than their TTL are dropped.</p>
+<h3 id="the-six-message-types">The Six Message Types<a class="headerlink" href="#the-six-message-types">¶</a></h3>
+<p>C2C defines six message types. This number is deliberate — enough to model real coordination patterns, few enough to implement in an afternoon.</p>
+<p><strong>1. <code>capability_query</code></strong> — &ldquo;What can you do?&rdquo;</p>
+<p>An agent asks another agent (or broadcasts to all agents) what capabilities they support. This is service discovery.</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;type&quot;: &quot;capability_query&quot;,
+  &quot;payload&quot;: {
+    &quot;query&quot;: &quot;Can you perform dependency vulnerability scanning?&quot;,
+    &quot;required_capabilities&quot;: [&quot;cve-lookup&quot;, &quot;dependency-tree&quot;]
+  }
+}
+</code></pre></div>
+<p>The response is a <code>capability_query</code> with <code>reply_to</code> set:</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;type&quot;: &quot;capability_query&quot;,
+  &quot;payload&quot;: {
+    &quot;capabilities&quot;: [&quot;cve-lookup&quot;, &quot;dependency-tree&quot;, &quot;license-audit&quot;, &quot;sbom-generation&quot;],
+    &quot;status&quot;: &quot;available&quot;,
+    &quot;load&quot;: 0.3
+  },
+  &quot;metadata&quot;: {
+    &quot;reply_to&quot;: &quot;msg_original_query_id&quot;
+  }
+}
+</code></pre></div>
+<p><strong>2. <code>task_request</code></strong> — &ldquo;Do this work.&rdquo;</p>
+<p>One agent delegates a task to another. This is the core coordination primitive.</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;type&quot;: &quot;task_request&quot;,
+  &quot;payload&quot;: {
+    &quot;task&quot;: &quot;audit_dependencies&quot;,
+    &quot;context&quot;: {
+      &quot;project_path&quot;: &quot;/Users/dev/myapp&quot;,
+      &quot;focus&quot;: &quot;production dependencies only&quot;,
+      &quot;ignore&quot;: [&quot;dev-dependencies&quot;, &quot;test-fixtures&quot;]
+    },
+    &quot;priority&quot;: &quot;high&quot;,
+    &quot;timeout_ms&quot;: 120000,
+    &quot;callback&quot;: &quot;task_result&quot;
+  }
+}
+</code></pre></div>
+<p>The <code>priority</code> field accepts four levels: <code>critical</code> (blocks other work), <code>high</code> (should be next), <code>normal</code> (queued), <code>low</code> (background). Agents use priority to order their task queues.</p>
+<p><strong>3. <code>task_result</code></strong> — &ldquo;Here&rsquo;s what I found.&rdquo;</p>
+<p>The response to a <code>task_request</code>. Contains the outcome, any artifacts produced, and status.</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;type&quot;: &quot;task_result&quot;,
+  &quot;payload&quot;: {
+    &quot;status&quot;: &quot;completed&quot;,
+    &quot;result&quot;: {
+      &quot;vulnerabilities_found&quot;: 3,
+      &quot;critical&quot;: 1,
+      &quot;high&quot;: 2,
+      &quot;details&quot;: [
+        {
+          &quot;package&quot;: &quot;jsonwebtoken@8.5.1&quot;,
+          &quot;cve&quot;: &quot;CVE-2026-1234&quot;,
+          &quot;severity&quot;: &quot;critical&quot;,
+          &quot;fix&quot;: &quot;upgrade to jsonwebtoken@9.0.0&quot;
+        }
+      ]
+    },
+    &quot;artifacts&quot;: [
+      {&quot;type&quot;: &quot;file&quot;, &quot;path&quot;: &quot;/tmp/c2c/audit-report.json&quot;},
+      {&quot;type&quot;: &quot;inline&quot;, &quot;format&quot;: &quot;markdown&quot;, &quot;content&quot;: &quot;## Audit Summary\n...&quot;}
+    ],
+    &quot;duration_ms&quot;: 45000
+  },
+  &quot;metadata&quot;: {
+    &quot;reply_to&quot;: &quot;msg_original_task_request_id&quot;
+  }
+}
+</code></pre></div>
+<p>The <code>status</code> field accepts: <code>completed</code>, <code>failed</code>, <code>partial</code> (some results available, others errored), <code>rejected</code> (agent cannot or will not perform this task), and <code>timeout</code> (agent exceeded its own deadline).</p>
+<p><strong>4. <code>status_update</code></strong> — &ldquo;Here&rsquo;s where I am.&rdquo;</p>
+<p>Progress reporting for long-running tasks. Enables the requesting agent (or a human observer) to monitor work without polling.</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;type&quot;: &quot;status_update&quot;,
+  &quot;payload&quot;: {
+    &quot;progress&quot;: 0.65,
+    &quot;phase&quot;: &quot;scanning_transitive_dependencies&quot;,
+    &quot;message&quot;: &quot;Analyzed 847 of 1,302 packages&quot;,
+    &quot;estimated_remaining_ms&quot;: 25000
+  }
+}
+</code></pre></div>
+<p><strong>5. <code>handoff</code></strong> — &ldquo;You take over from here.&rdquo;</p>
+<p>One agent transfers ownership of a task to another. This is different from <code>task_request</code> — in a handoff, the original agent is done with its part and passes accumulated context to the next agent in a chain.</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;type&quot;: &quot;handoff&quot;,
+  &quot;payload&quot;: {
+    &quot;task&quot;: &quot;deploy_with_fixes&quot;,
+    &quot;accumulated_context&quot;: {
+      &quot;original_task&quot;: &quot;release_v2.1.0&quot;,
+      &quot;security_audit&quot;: &quot;passed_with_fixes&quot;,
+      &quot;fixes_applied&quot;: [
+        {&quot;file&quot;: &quot;src/auth/login.py&quot;, &quot;commit&quot;: &quot;abc123&quot;},
+        {&quot;file&quot;: &quot;package.json&quot;, &quot;commit&quot;: &quot;def456&quot;}
+      ],
+      &quot;tests&quot;: &quot;all_passing&quot;,
+      &quot;changelog&quot;: &quot;generated at /tmp/c2c/changelog.md&quot;
+    },
+    &quot;chain_position&quot;: 4,
+    &quot;chain_total&quot;: 5,
+    &quot;compensation&quot;: {
+      &quot;on_failure&quot;: &quot;revert_commits&quot;,
+      &quot;commits_to_revert&quot;: [&quot;abc123&quot;, &quot;def456&quot;]
+    }
+  }
+}
+</code></pre></div>
+<p>The <code>compensation</code> field is critical. It tells the receiving agent what to undo if the task fails — the saga pattern applied to agent coordination.</p>
+<p><strong>6. <code>negotiate</code></strong> — &ldquo;Let&rsquo;s agree on terms.&rdquo;</p>
+<p>Before committing to a task, agents can negotiate parameters: resource limits, output format, priority, deadlines, and which capabilities will be used.</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;type&quot;: &quot;negotiate&quot;,
+  &quot;payload&quot;: {
+    &quot;proposal&quot;: {
+      &quot;max_files_to_analyze&quot;: 50,
+      &quot;output_format&quot;: &quot;sarif&quot;,
+      &quot;model_to_use&quot;: &quot;sonnet&quot;,
+      &quot;max_cost_usd&quot;: 0.50
+    },
+    &quot;constraints&quot;: {
+      &quot;must_complete_before&quot;: &quot;2026-04-01T15:00:00Z&quot;,
+      &quot;must_not_modify_files&quot;: true
+    }
+  }
+}
+</code></pre></div>
+<p>Negotiation is optional but valuable for resource-constrained environments. If you have a limited API budget, you want agents to agree on cost limits before starting expensive analysis.</p>
+<h3 id="transport-mechanisms">Transport Mechanisms<a class="headerlink" href="#transport-mechanisms">¶</a></h3>
+<p>C2C is transport-agnostic. The message format stays the same; only the delivery mechanism changes. Four transports are defined, ordered from simplest to most capable:</p>
+<p><strong>1. stdio pipes</strong> — The simplest transport. One agent&rsquo;s stdout connects to another&rsquo;s stdin.</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash">security-agent --c2c | deploy-agent --c2c
+</code></pre></div>
+<p>Limitation: unidirectional. The deploy agent cannot send messages back to the security agent. Use for simple pipelines where data flows one way.</p>
+<p><strong>2. Unix domain sockets</strong> — Bidirectional, local, fast. Each agent listens on a socket file.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>/tmp/c2c/security-auditor.sock
+/tmp/c2c/devops-deployer.sock
+/tmp/c2c/code-reviewer.sock
+</code></pre></div>
+<p>Agents connect to each other&rsquo;s sockets to send messages. This is the recommended transport for local multi-agent systems. No network overhead, no firewall issues, no port conflicts.</p>
+<p><strong>3. Shared filesystem</strong> — The most resilient transport. Agents write messages as JSON files to a shared directory.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>/tmp/c2c/mailbox/
+├── security-auditor/
+│   ├── inbox/
+│   │   └── msg_001.json
+│   └── outbox/
+│       └── msg_002.json
+├── devops-deployer/
+│   ├── inbox/
+│   └── outbox/
+└── .registry.json
+</code></pre></div>
+<p>Each agent watches its inbox directory for new files (using <code>fswatch</code>, <code>inotifywait</code>, or polling). This transport survives agent crashes — messages persist on disk. It also works across machines via network filesystems, though latency is higher.</p>
+<p><strong>4. HTTP/WebSocket</strong> — For distributed agents across machines or in CI/CD pipelines. Follows the same message format, wrapped in HTTP POST or WebSocket frames. This is where C2C bridges to A2A — if you need to coordinate with cloud-hosted agents, upgrade from sockets to HTTP.</p>
+<h3 id="transport-selection-guide">Transport Selection Guide<a class="headerlink" href="#transport-selection-guide">¶</a></h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Transport</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Two agents, simple pipeline</td>
+<td>stdio pipes</td>
+<td>Zero setup, Unix-native</td>
+</tr>
+<tr>
+<td>3+ agents, local machine</td>
+<td>Unix sockets</td>
+<td>Bidirectional, fast, no config</td>
+</tr>
+<tr>
+<td>Agents that crash/restart</td>
+<td>Shared filesystem</td>
+<td>Messages survive restarts</td>
+</tr>
+<tr>
+<td>Cross-machine coordination</td>
+<td>HTTP/WebSocket</td>
+<td>Network-capable</td>
+</tr>
+<tr>
+<td>CI/CD pipeline agents</td>
+<td>HTTP or filesystem</td>
+<td>Persistent, auditable</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="implementing-c2c-in-practice">Implementing C2C in Practice<a class="headerlink" href="#implementing-c2c-in-practice">¶</a></h2>
+<h3 id="reference-implementation-python">Reference Implementation: Python<a class="headerlink" href="#reference-implementation-python">¶</a></h3>
+<p>The following is a complete, runnable C2C agent framework in Python. It handles message serialization, transport over Unix sockets, capability registration, and task dispatch.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python">&quot;&quot;&quot;C2C Protocol — Reference implementation in Python.&quot;&quot;&quot;
+from __future__ import annotations
+
+import asyncio
+import json
+import hashlib
+import hmac
+import os
+import time
+import uuid
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Awaitable
+
+
+class MessageType(str, Enum):
+    CAPABILITY_QUERY = &quot;capability_query&quot;
+    TASK_REQUEST = &quot;task_request&quot;
+    TASK_RESULT = &quot;task_result&quot;
+    STATUS_UPDATE = &quot;status_update&quot;
+    HANDOFF = &quot;handoff&quot;
+    NEGOTIATE = &quot;negotiate&quot;
+
+
+class Priority(str, Enum):
+    CRITICAL = &quot;critical&quot;
+    HIGH = &quot;high&quot;
+    NORMAL = &quot;normal&quot;
+    LOW = &quot;low&quot;
+
+
+@dataclass
+class AgentIdentity:
+    agent: str
+    session: str = field(default_factory=lambda: f&quot;sess_{uuid.uuid4().hex[:12]}&quot;)
+    capabilities: list[str] = field(default_factory=list)
+
+
+@dataclass
+class C2CMessage:
+    protocol: str = &quot;c2c/1.0&quot;
+    id: str = field(default_factory=lambda: f&quot;msg_{uuid.uuid4().hex[:12]}&quot;)
+    from_agent: AgentIdentity | None = None
+    to_agent: AgentIdentity | None = None
+    type: MessageType = MessageType.TASK_REQUEST
+    payload: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -&gt; None:
+        if &quot;timestamp&quot; not in self.metadata:
+            self.metadata[&quot;timestamp&quot;] = time.strftime(&quot;%Y-%m-%dT%H:%M:%SZ&quot;, time.gmtime())
+        if &quot;correlation_id&quot; not in self.metadata:
+            self.metadata[&quot;correlation_id&quot;] = f&quot;corr_{uuid.uuid4().hex[:12]}&quot;
+
+    def to_json(self) -&gt; str:
+        data = {
+            &quot;protocol&quot;: self.protocol,
+            &quot;id&quot;: self.id,
+            &quot;from&quot;: asdict(self.from_agent) if self.from_agent else None,
+            &quot;to&quot;: asdict(self.to_agent) if self.to_agent else None,
+            &quot;type&quot;: self.type.value,
+            &quot;payload&quot;: self.payload,
+            &quot;metadata&quot;: self.metadata,
+        }
+        return json.dumps(data, separators=(&quot;,&quot;, &quot;:&quot;))
+
+    @classmethod
+    def from_json(cls, raw: str) -&gt; C2CMessage:
+        data = json.loads(raw)
+        msg = cls(
+            protocol=data[&quot;protocol&quot;],
+            id=data[&quot;id&quot;],
+            from_agent=AgentIdentity(**data[&quot;from&quot;]) if data.get(&quot;from&quot;) else None,
+            to_agent=AgentIdentity(**data[&quot;to&quot;]) if data.get(&quot;to&quot;) else None,
+            type=MessageType(data[&quot;type&quot;]),
+            payload=data.get(&quot;payload&quot;, {}),
+            metadata=data.get(&quot;metadata&quot;, {}),
+        )
+        return msg
+
+    def sign(self, secret: str) -&gt; None:
+        body = json.dumps(self.payload, sort_keys=True, separators=(&quot;,&quot;, &quot;:&quot;))
+        sig = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+        self.metadata[&quot;signature&quot;] = f&quot;sha256:{sig}&quot;
+
+    def verify(self, secret: str) -&gt; bool:
+        expected_sig = self.metadata.get(&quot;signature&quot;, &quot;&quot;)
+        body = json.dumps(self.payload, sort_keys=True, separators=(&quot;,&quot;, &quot;:&quot;))
+        computed = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected_sig, f&quot;sha256:{computed}&quot;)
+
+
+TaskHandler = Callable[[C2CMessage], Awaitable[C2CMessage]]
+
+
+class C2CAgent:
+    &quot;&quot;&quot;A CLI agent that speaks the C2C protocol over Unix domain sockets.&quot;&quot;&quot;
+
+    def __init__(
+        self,
+        name: str,
+        capabilities: list[str],
+        secret: str = &quot;&quot;,
+        socket_dir: str = &quot;/tmp/c2c&quot;,
+    ) -&gt; None:
+        self.identity = AgentIdentity(agent=name, capabilities=capabilities)
+        self.secret = secret or os.environ.get(&quot;C2C_SECRET&quot;, &quot;dev-secret&quot;)
+        self.socket_dir = Path(socket_dir)
+        self.socket_path = self.socket_dir / f&quot;{name}.sock&quot;
+        self.handlers: dict[str, TaskHandler] = {}
+        self.message_log: list[C2CMessage] = []
+        self._server: asyncio.Server | None = None
+
+    def on_task(self, task_name: str) -&gt; Callable[[TaskHandler], TaskHandler]:
+        &quot;&quot;&quot;Decorator to register a handler for a specific task type.&quot;&quot;&quot;
+        def decorator(fn: TaskHandler) -&gt; TaskHandler:
+            self.handlers[task_name] = fn
+            return fn
+        return decorator
+
+    async def start(self) -&gt; None:
+        &quot;&quot;&quot;Start listening for incoming C2C messages on a Unix socket.&quot;&quot;&quot;
+        self.socket_dir.mkdir(parents=True, exist_ok=True)
+        if self.socket_path.exists():
+            self.socket_path.unlink()
+
+        self._server = await asyncio.start_unix_server(
+            self._handle_connection, path=str(self.socket_path)
+        )
+        self._register()
+        print(f&quot;[C2C] {self.identity.agent} listening on {self.socket_path}&quot;)
+
+    async def stop(self) -&gt; None:
+        &quot;&quot;&quot;Gracefully shut down the agent.&quot;&quot;&quot;
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+        if self.socket_path.exists():
+            self.socket_path.unlink()
+        self._deregister()
+
+    def _register(self) -&gt; None:
+        &quot;&quot;&quot;Register this agent in the local C2C registry.&quot;&quot;&quot;
+        registry_path = self.socket_dir / &quot;registry.json&quot;
+        registry: dict[str, Any] = {}
+        if registry_path.exists():
+            registry = json.loads(registry_path.read_text())
+        registry[self.identity.agent] = {
+            &quot;session&quot;: self.identity.session,
+            &quot;capabilities&quot;: self.identity.capabilities,
+            &quot;socket&quot;: str(self.socket_path),
+            &quot;pid&quot;: os.getpid(),
+            &quot;started_at&quot;: time.strftime(&quot;%Y-%m-%dT%H:%M:%SZ&quot;, time.gmtime()),
+        }
+        registry_path.write_text(json.dumps(registry, indent=2))
+
+    def _deregister(self) -&gt; None:
+        &quot;&quot;&quot;Remove this agent from the local registry.&quot;&quot;&quot;
+        registry_path = self.socket_dir / &quot;registry.json&quot;
+        if registry_path.exists():
+            registry = json.loads(registry_path.read_text())
+            registry.pop(self.identity.agent, None)
+            registry_path.write_text(json.dumps(registry, indent=2))
+
+    async def _handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -&gt; None:
+        &quot;&quot;&quot;Handle an incoming connection from another agent.&quot;&quot;&quot;
+        try:
+            data = await asyncio.wait_for(reader.readline(), timeout=30.0)
+            if not data:
+                return
+
+            msg = C2CMessage.from_json(data.decode().strip())
+            self.message_log.append(msg)
+
+            if self.secret and not msg.verify(self.secret):
+                response = self._error_response(msg, &quot;signature_invalid&quot;)
+            elif msg.type == MessageType.CAPABILITY_QUERY:
+                response = self._handle_capability_query(msg)
+            elif msg.type == MessageType.TASK_REQUEST:
+                response = await self._handle_task_request(msg)
+            elif msg.type == MessageType.HANDOFF:
+                response = await self._handle_task_request(msg)
+            else:
+                response = self._error_response(msg, &quot;unsupported_type&quot;)
+
+            response.sign(self.secret)
+            self.message_log.append(response)
+            writer.write((response.to_json() + &quot;\n&quot;).encode())
+            await writer.drain()
+        except asyncio.TimeoutError:
+            pass
+        except Exception as exc:
+            error_msg = self._make_message(
+                MessageType.TASK_RESULT,
+                payload={&quot;status&quot;: &quot;failed&quot;, &quot;error&quot;: str(exc)},
+            )
+            writer.write((error_msg.to_json() + &quot;\n&quot;).encode())
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    def _handle_capability_query(self, msg: C2CMessage) -&gt; C2CMessage:
+        required = msg.payload.get(&quot;required_capabilities&quot;, [])
+        supported = [c for c in required if c in self.identity.capabilities]
+        return self._make_message(
+            MessageType.CAPABILITY_QUERY,
+            payload={
+                &quot;capabilities&quot;: self.identity.capabilities,
+                &quot;matched&quot;: supported,
+                &quot;status&quot;: &quot;available&quot; if len(supported) == len(required) else &quot;partial&quot;,
+            },
+            reply_to=msg.id,
+            correlation_id=msg.metadata.get(&quot;correlation_id&quot;),
+        )
+
+    async def _handle_task_request(self, msg: C2CMessage) -&gt; C2CMessage:
+        task_name = msg.payload.get(&quot;task&quot;, &quot;&quot;)
+        handler = self.handlers.get(task_name)
+        if not handler:
+            return self._error_response(msg, f&quot;no_handler_for_{task_name}&quot;)
+
+        try:
+            return await handler(msg)
+        except Exception as exc:
+            return self._make_message(
+                MessageType.TASK_RESULT,
+                payload={&quot;status&quot;: &quot;failed&quot;, &quot;error&quot;: str(exc), &quot;task&quot;: task_name},
+                reply_to=msg.id,
+                correlation_id=msg.metadata.get(&quot;correlation_id&quot;),
+            )
+
+    def _make_message(
+        self,
+        msg_type: MessageType,
+        payload: dict[str, Any],
+        reply_to: str | None = None,
+        correlation_id: str | None = None,
+        to_agent: AgentIdentity | None = None,
+    ) -&gt; C2CMessage:
+        metadata: dict[str, Any] = {}
+        if reply_to:
+            metadata[&quot;reply_to&quot;] = reply_to
+        if correlation_id:
+            metadata[&quot;correlation_id&quot;] = correlation_id
+        return C2CMessage(
+            from_agent=self.identity,
+            to_agent=to_agent,
+            type=msg_type,
+            payload=payload,
+            metadata=metadata,
+        )
+
+    def _error_response(self, original: C2CMessage, error: str) -&gt; C2CMessage:
+        return self._make_message(
+            MessageType.TASK_RESULT,
+            payload={&quot;status&quot;: &quot;rejected&quot;, &quot;error&quot;: error},
+            reply_to=original.id,
+            correlation_id=original.metadata.get(&quot;correlation_id&quot;),
+        )
+
+    async def send(self, target_agent: str, message: C2CMessage) -&gt; C2CMessage | None:
+        &quot;&quot;&quot;Send a message to another agent and wait for the response.&quot;&quot;&quot;
+        registry_path = self.socket_dir / &quot;registry.json&quot;
+        if not registry_path.exists():
+            raise ConnectionError(&quot;No C2C registry found&quot;)
+
+        registry = json.loads(registry_path.read_text())
+        if target_agent not in registry:
+            raise ConnectionError(f&quot;Agent '{target_agent}' not registered&quot;)
+
+        target_socket = registry[target_agent][&quot;socket&quot;]
+        message.from_agent = self.identity
+        message.to_agent = AgentIdentity(
+            agent=target_agent,
+            session=registry[target_agent][&quot;session&quot;],
+        )
+        message.sign(self.secret)
+
+        reader, writer = await asyncio.open_unix_connection(target_socket)
+        try:
+            writer.write((message.to_json() + &quot;\n&quot;).encode())
+            await writer.drain()
+
+            timeout_ms = message.payload.get(&quot;timeout_ms&quot;, 30000)
+            data = await asyncio.wait_for(
+                reader.readline(), timeout=timeout_ms / 1000
+            )
+            if data:
+                response = C2CMessage.from_json(data.decode().strip())
+                self.message_log.append(response)
+                return response
+            return None
+        finally:
+            writer.close()
+            await writer.wait_closed()
+</code></pre></div>
+<p>This is approximately 200 lines of production-quality Python. Let us look at what it provides:</p>
+<ul>
+<li><strong><code>C2CMessage</code></strong> — Full message serialization, deserialization, HMAC signing, and verification.</li>
+<li><strong><code>C2CAgent</code></strong> — A complete agent that listens on a Unix socket, registers itself in a local registry, dispatches tasks to handlers, and sends messages to other agents.</li>
+<li><strong><code>@agent.on_task("task_name")</code></strong> — Decorator-based handler registration, similar to Flask route decorators.</li>
+<li><strong>Registry</strong> — A shared JSON file at <code>/tmp/c2c/registry.json</code> that all agents use for discovery.</li>
+</ul>
+<p>Here is how you build a security auditor agent using this framework:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python">&quot;&quot;&quot;Security auditor agent — scans code for vulnerabilities.&quot;&quot;&quot;
+import asyncio
+from c2c import C2CAgent, C2CMessage, MessageType
+
+agent = C2CAgent(
+    name=&quot;security-auditor&quot;,
+    capabilities=[&quot;code-analysis&quot;, &quot;cve-lookup&quot;, &quot;owasp-audit&quot;],
+)
+
+@agent.on_task(&quot;scan_for_vulnerabilities&quot;)
+async def scan(msg: C2CMessage) -&gt; C2CMessage:
+    project_path = msg.payload[&quot;context&quot;][&quot;project_path&quot;]
+    # ... perform actual scanning logic here ...
+    return agent._make_message(
+        MessageType.TASK_RESULT,
+        payload={
+            &quot;status&quot;: &quot;completed&quot;,
+            &quot;result&quot;: {
+                &quot;vulnerabilities_found&quot;: 2,
+                &quot;critical&quot;: 1,
+                &quot;details&quot;: [{&quot;file&quot;: &quot;auth.py&quot;, &quot;line&quot;: 42, &quot;cwe&quot;: &quot;CWE-287&quot;}],
+            },
+        },
+        reply_to=msg.id,
+        correlation_id=msg.metadata.get(&quot;correlation_id&quot;),
+    )
+
+async def main() -&gt; None:
+    await agent.start()
+    try:
+        await asyncio.Event().wait()  # Run until interrupted
+    finally:
+        await agent.stop()
+
+if __name__ == &quot;__main__&quot;:
+    asyncio.run(main())
+</code></pre></div>
+<h3 id="reference-implementation-typescript">Reference Implementation: TypeScript<a class="headerlink" href="#reference-implementation-typescript">¶</a></h3>
+<p>The same framework in TypeScript, for teams that prefer Node.js:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">import { createServer, createConnection } from &quot;net&quot;;
+import { randomUUID } from &quot;crypto&quot;;
+import { createHmac, timingSafeEqual } from &quot;crypto&quot;;
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from &quot;fs&quot;;
+import { join } from &quot;path&quot;;
+
+// --- Types ---
+
+type MessageType =
+  | &quot;capability_query&quot;
+  | &quot;task_request&quot;
+  | &quot;task_result&quot;
+  | &quot;status_update&quot;
+  | &quot;handoff&quot;
+  | &quot;negotiate&quot;;
+
+interface AgentIdentity {
+  agent: string;
+  session: string;
+  capabilities: string[];
+}
+
+interface C2CMessage {
+  protocol: &quot;c2c/1.0&quot;;
+  id: string;
+  from: AgentIdentity | null;
+  to: AgentIdentity | null;
+  type: MessageType;
+  payload: Record&lt;string, unknown&gt;;
+  metadata: Record&lt;string, unknown&gt;;
+}
+
+type TaskHandler = (msg: C2CMessage) =&gt; Promise&lt;C2CMessage&gt;;
+
+// --- Message Helpers ---
+
+function createMessage(
+  fromAgent: AgentIdentity,
+  type: MessageType,
+  payload: Record&lt;string, unknown&gt;,
+  opts: { replyTo?: string; correlationId?: string; toAgent?: AgentIdentity } = {}
+): C2CMessage {
+  return {
+    protocol: &quot;c2c/1.0&quot;,
+    id: `msg_${randomUUID().replace(/-/g, &quot;&quot;).slice(0, 12)}`,
+    from: fromAgent,
+    to: opts.toAgent ?? null,
+    type,
+    payload,
+    metadata: {
+      timestamp: new Date().toISOString(),
+      correlation_id: opts.correlationId ?? `corr_${randomUUID().replace(/-/g, &quot;&quot;).slice(0, 12)}`,
+      ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
+    },
+  };
+}
+
+function signMessage(msg: C2CMessage, secret: string): void {
+  const body = JSON.stringify(msg.payload, Object.keys(msg.payload).sort());
+  const sig = createHmac(&quot;sha256&quot;, secret).update(body).digest(&quot;hex&quot;);
+  msg.metadata.signature = `sha256:${sig}`;
+}
+
+function verifyMessage(msg: C2CMessage, secret: string): boolean {
+  const expected = msg.metadata.signature as string;
+  if (!expected) return false;
+  const body = JSON.stringify(msg.payload, Object.keys(msg.payload).sort());
+  const computed = `sha256:${createHmac(&quot;sha256&quot;, secret).update(body).digest(&quot;hex&quot;)}`;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(computed));
+}
+
+// --- Agent ---
+
+class C2CAgent {
+  readonly identity: AgentIdentity;
+  private readonly secret: string;
+  private readonly socketDir: string;
+  private readonly socketPath: string;
+  private readonly handlers = new Map&lt;string, TaskHandler&gt;();
+  private server: ReturnType&lt;typeof createServer&gt; | null = null;
+
+  constructor(name: string, capabilities: string[], secret?: string, socketDir?: string) {
+    this.identity = {
+      agent: name,
+      session: `sess_${randomUUID().replace(/-/g, &quot;&quot;).slice(0, 12)}`,
+      capabilities,
+    };
+    this.secret = secret ?? process.env.C2C_SECRET ?? &quot;dev-secret&quot;;
+    this.socketDir = socketDir ?? &quot;/tmp/c2c&quot;;
+    this.socketPath = join(this.socketDir, `${name}.sock`);
+  }
+
+  onTask(taskName: string, handler: TaskHandler): void {
+    this.handlers.set(taskName, handler);
+  }
+
+  async start(): Promise&lt;void&gt; {
+    mkdirSync(this.socketDir, { recursive: true });
+    if (existsSync(this.socketPath)) unlinkSync(this.socketPath);
+
+    return new Promise((resolve) =&gt; {
+      this.server = createServer((socket) =&gt; {
+        let buffer = &quot;&quot;;
+        socket.on(&quot;data&quot;, async (chunk) =&gt; {
+          buffer += chunk.toString();
+          const newlineIdx = buffer.indexOf(&quot;\n&quot;);
+          if (newlineIdx === -1) return;
+
+          const raw = buffer.slice(0, newlineIdx);
+          buffer = buffer.slice(newlineIdx + 1);
+
+          try {
+            const msg: C2CMessage = JSON.parse(raw);
+            const response = await this.dispatch(msg);
+            signMessage(response, this.secret);
+            socket.write(JSON.stringify(response) + &quot;\n&quot;);
+          } catch (err) {
+            const errMsg = createMessage(this.identity, &quot;task_result&quot;, {
+              status: &quot;failed&quot;,
+              error: String(err),
+            });
+            socket.write(JSON.stringify(errMsg) + &quot;\n&quot;);
+          }
+          socket.end();
+        });
+      });
+
+      this.server.listen(this.socketPath, () =&gt; {
+        this.register();
+        console.log(`[C2C] ${this.identity.agent} listening on ${this.socketPath}`);
+        resolve();
+      });
+    });
+  }
+
+  async stop(): Promise&lt;void&gt; {
+    this.server?.close();
+    if (existsSync(this.socketPath)) unlinkSync(this.socketPath);
+    this.deregister();
+  }
+
+  async send(targetAgent: string, msg: C2CMessage): Promise&lt;C2CMessage&gt; {
+    const registryPath = join(this.socketDir, &quot;registry.json&quot;);
+    const registry = JSON.parse(readFileSync(registryPath, &quot;utf-8&quot;));
+    const target = registry[targetAgent];
+    if (!target) throw new Error(`Agent '${targetAgent}' not registered`);
+
+    msg.from = this.identity;
+    msg.to = { agent: targetAgent, session: target.session, capabilities: [] };
+    signMessage(msg, this.secret);
+
+    return new Promise((resolve, reject) =&gt; {
+      const socket = createConnection(target.socket, () =&gt; {
+        socket.write(JSON.stringify(msg) + &quot;\n&quot;);
+      });
+      let buffer = &quot;&quot;;
+      socket.on(&quot;data&quot;, (chunk) =&gt; {
+        buffer += chunk.toString();
+        const idx = buffer.indexOf(&quot;\n&quot;);
+        if (idx !== -1) {
+          resolve(JSON.parse(buffer.slice(0, idx)));
+          socket.end();
+        }
+      });
+      socket.on(&quot;error&quot;, reject);
+      setTimeout(() =&gt; reject(new Error(&quot;C2C send timeout&quot;)), 30_000);
+    });
+  }
+
+  private async dispatch(msg: C2CMessage): Promise&lt;C2CMessage&gt; {
+    if (this.secret &amp;&amp; !verifyMessage(msg, this.secret)) {
+      return createMessage(this.identity, &quot;task_result&quot;, {
+        status: &quot;rejected&quot;,
+        error: &quot;signature_invalid&quot;,
+      }, { replyTo: msg.id });
+    }
+
+    if (msg.type === &quot;capability_query&quot;) {
+      const required = (msg.payload.required_capabilities as string[]) ?? [];
+      const matched = required.filter((c) =&gt; this.identity.capabilities.includes(c));
+      return createMessage(this.identity, &quot;capability_query&quot;, {
+        capabilities: this.identity.capabilities,
+        matched,
+        status: matched.length === required.length ? &quot;available&quot; : &quot;partial&quot;,
+      }, { replyTo: msg.id, correlationId: msg.metadata.correlation_id as string });
+    }
+
+    if (msg.type === &quot;task_request&quot; || msg.type === &quot;handoff&quot;) {
+      const taskName = msg.payload.task as string;
+      const handler = this.handlers.get(taskName);
+      if (!handler) {
+        return createMessage(this.identity, &quot;task_result&quot;, {
+          status: &quot;rejected&quot;,
+          error: `no_handler_for_${taskName}`,
+        }, { replyTo: msg.id });
+      }
+      return handler(msg);
+    }
+
+    return createMessage(this.identity, &quot;task_result&quot;, {
+      status: &quot;rejected&quot;,
+      error: &quot;unsupported_type&quot;,
+    }, { replyTo: msg.id });
+  }
+
+  private register(): void {
+    const registryPath = join(this.socketDir, &quot;registry.json&quot;);
+    const registry = existsSync(registryPath)
+      ? JSON.parse(readFileSync(registryPath, &quot;utf-8&quot;))
+      : {};
+    registry[this.identity.agent] = {
+      session: this.identity.session,
+      capabilities: this.identity.capabilities,
+      socket: this.socketPath,
+      pid: process.pid,
+      started_at: new Date().toISOString(),
+    };
+    writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+  }
+
+  private deregister(): void {
+    const registryPath = join(this.socketDir, &quot;registry.json&quot;);
+    if (!existsSync(registryPath)) return;
+    const registry = JSON.parse(readFileSync(registryPath, &quot;utf-8&quot;));
+    delete registry[this.identity.agent];
+    writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+  }
+}
+
+export { C2CAgent, C2CMessage, createMessage, signMessage, verifyMessage };
+</code></pre></div>
+<h3 id="integrating-c2c-with-claude-code-via-mcp-bridge">Integrating C2C with Claude Code via MCP Bridge<a class="headerlink" href="#integrating-c2c-with-claude-code-via-mcp-bridge">¶</a></h3>
+<p>The most practical path to C2C today is building an MCP server that acts as a bridge. Claude Code already speaks MCP. If your MCP server speaks C2C on the other side, Claude Code gains agent-to-agent communication without any modifications to Claude Code itself.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python">&quot;&quot;&quot;MCP-to-C2C bridge — lets Claude Code send C2C messages as MCP tool calls.&quot;&quot;&quot;
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+from mcp.server.lowlevel import Server
+from mcp.types import Tool, TextContent
+
+from c2c import C2CAgent, C2CMessage, MessageType
+
+app = Server(&quot;c2c-bridge&quot;)
+bridge_agent = C2CAgent(name=&quot;claude-code-bridge&quot;, capabilities=[&quot;mcp-bridge&quot;])
+
+@app.list_tools()
+async def list_tools() -&gt; list[Tool]:
+    return [
+        Tool(
+            name=&quot;c2c_discover&quot;,
+            description=&quot;Discover available C2C agents and their capabilities&quot;,
+            inputSchema={
+                &quot;type&quot;: &quot;object&quot;,
+                &quot;properties&quot;: {},
+                &quot;required&quot;: [],
+            },
+        ),
+        Tool(
+            name=&quot;c2c_send_task&quot;,
+            description=&quot;Send a task request to another C2C agent&quot;,
+            inputSchema={
+                &quot;type&quot;: &quot;object&quot;,
+                &quot;properties&quot;: {
+                    &quot;target_agent&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;description&quot;: &quot;Name of the target agent&quot;},
+                    &quot;task&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;description&quot;: &quot;Task name to execute&quot;},
+                    &quot;context&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;description&quot;: &quot;Task context and parameters&quot;},
+                    &quot;priority&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;critical&quot;, &quot;high&quot;, &quot;normal&quot;, &quot;low&quot;]},
+                },
+                &quot;required&quot;: [&quot;target_agent&quot;, &quot;task&quot;],
+            },
+        ),
+    ]
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -&gt; list[TextContent]:
+    if name == &quot;c2c_discover&quot;:
+        registry_path = Path(&quot;/tmp/c2c/registry.json&quot;)
+        if not registry_path.exists():
+            return [TextContent(type=&quot;text&quot;, text=&quot;No C2C agents registered.&quot;)]
+        registry = json.loads(registry_path.read_text())
+        return [TextContent(type=&quot;text&quot;, text=json.dumps(registry, indent=2))]
+
+    if name == &quot;c2c_send_task&quot;:
+        msg = C2CMessage(
+            type=MessageType.TASK_REQUEST,
+            payload={
+                &quot;task&quot;: arguments[&quot;task&quot;],
+                &quot;context&quot;: arguments.get(&quot;context&quot;, {}),
+                &quot;priority&quot;: arguments.get(&quot;priority&quot;, &quot;normal&quot;),
+                &quot;timeout_ms&quot;: 60000,
+            },
+        )
+        response = await bridge_agent.send(arguments[&quot;target_agent&quot;], msg)
+        if response:
+            return [TextContent(type=&quot;text&quot;, text=json.dumps(response.payload, indent=2))]
+        return [TextContent(type=&quot;text&quot;, text=&quot;No response from agent.&quot;)]
+
+    return [TextContent(type=&quot;text&quot;, text=f&quot;Unknown tool: {name}&quot;)]
+</code></pre></div>
+<p>Register this bridge in your Claude Code settings:</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;c2c-bridge&quot;: {
+      &quot;command&quot;: &quot;python&quot;,
+      &quot;args&quot;: [&quot;-m&quot;, &quot;c2c_bridge&quot;],
+      &quot;env&quot;: {
+        &quot;C2C_SECRET&quot;: &quot;your-shared-secret&quot;
+      }
+    }
+  }
+}
+</code></pre></div>
+<p>Now Claude Code can discover and communicate with any C2C agent on your machine through natural tool calls. It asks &ldquo;what agents are available?&rdquo;, picks the right one, sends a task, and processes the result — all within a normal Claude Code session.</p>
+<h2 id="protocol-patterns">Protocol Patterns<a class="headerlink" href="#protocol-patterns">¶</a></h2>
+<p>Six coordination patterns emerge from the C2C primitives. Each solves a different class of multi-agent problem.</p>
+<h3 id="1-request-response">1. Request-Response<a class="headerlink" href="#1-request-response">¶</a></h3>
+<p>The simplest pattern. One agent asks another to perform a task and waits for the result.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>┌─────────────┐  task_request   ┌──────────────┐
+│ Code Review  │ ──────────────►│ Security Scan │
+│    Agent     │◄────────────── │    Agent      │
+└─────────────┘  task_result    └──────────────┘
+</code></pre></div>
+<p>Use when: one agent needs a specific capability it does not have. The code review agent cannot scan for CVEs, so it asks the security agent.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python"># Code review agent delegates CVE scanning
+msg = C2CMessage(
+    type=MessageType.TASK_REQUEST,
+    payload={
+        &quot;task&quot;: &quot;scan_for_cves&quot;,
+        &quot;context&quot;: {&quot;files&quot;: [&quot;requirements.txt&quot;, &quot;package-lock.json&quot;]},
+        &quot;priority&quot;: &quot;high&quot;,
+    },
+)
+result = await review_agent.send(&quot;security-auditor&quot;, msg)
+cves = result.payload[&quot;result&quot;][&quot;vulnerabilities&quot;]
+</code></pre></div>
+<h3 id="2-pipeline">2. Pipeline<a class="headerlink" href="#2-pipeline">¶</a></h3>
+<p>Tasks flow through a chain of agents, each adding value. The output of one becomes the input of the next, using <code>handoff</code> messages.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>┌──────────┐  handoff   ┌──────────┐  handoff   ┌──────────┐  handoff   ┌──────────┐
+│ Security │ ──────────►│ Code     │ ──────────►│ Test     │ ──────────►│ Deploy   │
+│  Audit   │            │  Fix     │            │  Runner  │            │  Agent   │
+└──────────┘            └──────────┘            └──────────┘            └──────────┘
+</code></pre></div>
+<p>Use when: a workflow has sequential stages where each agent specializes in one phase. The release pipeline is the canonical example.</p>
+<h3 id="3-fan-out-fan-in">3. Fan-Out / Fan-In<a class="headerlink" href="#3-fan-out-fan-in">¶</a></h3>
+<p>One orchestrator agent dispatches tasks to multiple agents in parallel, then aggregates the results.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>                          ┌──────────────┐
+                     ┌───►│ Security     │───┐
+                     │    │ Auditor      │   │
+┌─────────────┐      │    └──────────────┘   │    ┌─────────────┐
+│ Orchestrator │──────┤                       ├───►│ Orchestrator│
+│              │      │    ┌──────────────┐   │    │ (aggregate) │
+└─────────────┘      ├───►│ Dep Auditor  │───┤    └─────────────┘
+                     │    └──────────────┘   │
+                     │    ┌──────────────┐   │
+                     └───►│ Perf Tester  │───┘
+                          └──────────────┘
+</code></pre></div>
+<p>Use when: multiple independent analyses can run simultaneously. This is the most common pattern for pre-release validation.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python"># Fan-out: dispatch three tasks in parallel
+tasks = [
+    (&quot;security-auditor&quot;, &quot;scan_for_vulnerabilities&quot;),
+    (&quot;dep-auditor&quot;, &quot;audit_dependencies&quot;),
+    (&quot;perf-tester&quot;, &quot;run_benchmarks&quot;),
+]
+coros = []
+for target, task in tasks:
+    msg = C2CMessage(
+        type=MessageType.TASK_REQUEST,
+        payload={&quot;task&quot;: task, &quot;context&quot;: {&quot;project&quot;: &quot;/app&quot;}, &quot;priority&quot;: &quot;high&quot;},
+        metadata={&quot;trace_id&quot;: &quot;trace_release_v3&quot;},
+    )
+    coros.append(orchestrator.send(target, msg))
+
+# Fan-in: wait for all results
+results = await asyncio.gather(*coros, return_exceptions=True)
+all_passed = all(
+    r.payload.get(&quot;status&quot;) == &quot;completed&quot;
+    for r in results
+    if isinstance(r, C2CMessage)
+)
+</code></pre></div>
+<h3 id="4-saga-compensating-transactions">4. Saga (Compensating Transactions)<a class="headerlink" href="#4-saga-compensating-transactions">¶</a></h3>
+<p>A multi-step workflow where each step can be undone if a later step fails. The <code>handoff</code> message&rsquo;s <code>compensation</code> field carries rollback instructions.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Step 1: Apply security fix    → compensation: revert commit abc123
+Step 2: Update dependencies   → compensation: revert commit def456
+Step 3: Run integration tests → (fails!)
+Step 4: Execute compensations → revert def456, revert abc123
+</code></pre></div>
+<p>Use when: a multi-agent workflow modifies shared state (code, deployments, databases) and needs to be atomic — either everything succeeds or everything rolls back.</p>
+<h3 id="5-event-driven">5. Event-Driven<a class="headerlink" href="#5-event-driven">¶</a></h3>
+<p>Agents publish events to a shared channel. Other agents subscribe to events they care about and react asynchronously. Implemented via the shared filesystem transport with a pub/sub directory structure.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>/tmp/c2c/events/
+├── vulnerability_found/
+│   ├── subscriber_deploy_agent.json
+│   └── subscriber_notification_agent.json
+├── tests_passed/
+│   └── subscriber_deploy_agent.json
+└── deploy_complete/
+    └── subscriber_monitoring_agent.json
+</code></pre></div>
+<p>Use when: agents need loose coupling. The security agent publishes &ldquo;vulnerability found&rdquo; without knowing or caring which agents react to it.</p>
+<h3 id="6-consensus">6. Consensus<a class="headerlink" href="#6-consensus">¶</a></h3>
+<p>Multiple agents analyze the same task independently, then compare results. An arbiter agent resolves disagreements. This pattern increases reliability for critical decisions.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>┌──────────┐
+│ Agent A   │──── analysis ────┐
+└──────────┘                   │    ┌───────────┐
+┌──────────┐                   ├───►│  Arbiter  │──► Final Decision
+│ Agent B   │──── analysis ────┤    └───────────┘
+└──────────┘                   │
+┌──────────┐                   │
+│ Agent C   │──── analysis ────┘
+└──────────┘
+</code></pre></div>
+<p>Use when: the decision is high-stakes (production deployment, security assessment) and a single agent&rsquo;s opinion is not sufficient. Three security agents independently auditing the same code, with a consensus threshold of 2/3 to approve.</p>
+<h2 id="security-and-governance">Security and Governance<a class="headerlink" href="#security-and-governance">¶</a></h2>
+<p>AI agents that coordinate autonomously introduce a new class of security challenges. A compromised agent in a C2C network could instruct other agents to deploy malicious code, exfiltrate data, or disable security controls. The security model must be rigorous.</p>
+<h3 id="zero-trust-between-agents">Zero-Trust Between Agents<a class="headerlink" href="#zero-trust-between-agents">¶</a></h3>
+<p>Every C2C agent treats every other agent as potentially compromised. This means:</p>
+<p><strong>1. Message Authentication.</strong> Every message is HMAC-SHA256 signed. The shared secret is distributed out-of-band (environment variable, secret manager, key file). Unsigned or incorrectly signed messages are rejected at the transport layer before reaching any handler.</p>
+<p><strong>2. Capability-Based Authorization.</strong> Agents declare what they can do. Agents verify that a requesting agent has the right to request a specific task. A code-review agent should not be able to request deployment. Authorization rules are declared in a policy file:</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-json">{
+  &quot;policies&quot;: [
+    {
+      &quot;from&quot;: &quot;security-auditor&quot;,
+      &quot;allowed_tasks&quot;: [&quot;block_deployment&quot;, &quot;request_review&quot;],
+      &quot;denied_tasks&quot;: [&quot;deploy&quot;, &quot;delete_branch&quot;]
+    },
+    {
+      &quot;from&quot;: &quot;deploy-agent&quot;,
+      &quot;allowed_tasks&quot;: [&quot;deploy&quot;, &quot;rollback&quot;],
+      &quot;requires_approval_from&quot;: [&quot;security-auditor&quot;]
+    }
+  ]
+}
+</code></pre></div>
+<p><strong>3. Input Validation.</strong> Every handler validates its input before processing. A task request with a <code>project_path</code> that traverses directories (<code>../../../etc/passwd</code>) is rejected. A context field containing shell metacharacters is sanitized or rejected.</p>
+<h3 id="message-signing-deep-dive">Message Signing Deep Dive<a class="headerlink" href="#message-signing-deep-dive">¶</a></h3>
+<p>The signing mechanism is straightforward but must be implemented correctly:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python">import hmac
+import hashlib
+import json
+
+def sign_payload(payload: dict, secret: str) -&gt; str:
+    &quot;&quot;&quot;Produce a deterministic HMAC-SHA256 signature of the payload.&quot;&quot;&quot;
+    # Canonical JSON: sorted keys, no whitespace
+    canonical = json.dumps(payload, sort_keys=True, separators=(&quot;,&quot;, &quot;:&quot;))
+    return hmac.new(
+        secret.encode(&quot;utf-8&quot;),
+        canonical.encode(&quot;utf-8&quot;),
+        hashlib.sha256,
+    ).hexdigest()
+
+def verify_payload(payload: dict, signature: str, secret: str) -&gt; bool:
+    &quot;&quot;&quot;Verify a signature using constant-time comparison.&quot;&quot;&quot;
+    expected = sign_payload(payload, secret)
+    return hmac.compare_digest(signature, expected)
+</code></pre></div>
+<p>Critical implementation details:</p>
+<ul>
+<li><strong>Canonical JSON.</strong> Keys must be sorted and whitespace must be consistent. Otherwise the same payload produces different signatures on different machines.</li>
+<li><strong>Constant-time comparison.</strong> Use <code>hmac.compare_digest</code>, never <code>==</code>. String equality comparison leaks timing information that can be used to forge signatures byte by byte.</li>
+<li><strong>Secret rotation.</strong> Support multiple active secrets during rotation periods. Accept messages signed with either the current or previous secret.</li>
+</ul>
+<h3 id="rate-limiting">Rate Limiting<a class="headerlink" href="#rate-limiting">¶</a></h3>
+<p>Without rate limiting, a compromised or malfunctioning agent can flood other agents with requests, creating a denial-of-service condition. Each agent enforces:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python">from collections import defaultdict
+import time
+
+class RateLimiter:
+    def __init__(self, max_requests: int = 100, window_seconds: int = 60) -&gt; None:
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self.requests: dict[str, list[float]] = defaultdict(list)
+
+    def allow(self, agent_name: str) -&gt; bool:
+        now = time.monotonic()
+        # Prune old entries
+        self.requests[agent_name] = [
+            t for t in self.requests[agent_name]
+            if now - t &lt; self.window
+        ]
+        if len(self.requests[agent_name]) &gt;= self.max_requests:
+            return False
+        self.requests[agent_name].append(now)
+        return True
+</code></pre></div>
+<h3 id="audit-logging">Audit Logging<a class="headerlink" href="#audit-logging">¶</a></h3>
+<p>Every C2C message — sent and received — is logged to an append-only audit file. This log is critical for incident response (&ldquo;which agent told the deploy agent to push to production at 3 AM?&rdquo;) and for debugging coordination failures.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python">import json
+from pathlib import Path
+from datetime import datetime, timezone
+
+class AuditLog:
+    def __init__(self, log_dir: str = &quot;/tmp/c2c/audit&quot;) -&gt; None:
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        today = datetime.now(timezone.utc).strftime(&quot;%Y-%m-%d&quot;)
+        self.log_file = self.log_dir / f&quot;c2c-audit-{today}.jsonl&quot;
+
+    def record(self, direction: str, msg: dict) -&gt; None:
+        entry = {
+            &quot;timestamp&quot;: datetime.now(timezone.utc).isoformat(),
+            &quot;direction&quot;: direction,  # &quot;sent&quot; or &quot;received&quot;
+            &quot;message_id&quot;: msg.get(&quot;id&quot;),
+            &quot;from&quot;: msg.get(&quot;from&quot;, {}).get(&quot;agent&quot;),
+            &quot;to&quot;: msg.get(&quot;to&quot;, {}).get(&quot;agent&quot;),
+            &quot;type&quot;: msg.get(&quot;type&quot;),
+            &quot;correlation_id&quot;: msg.get(&quot;metadata&quot;, {}).get(&quot;correlation_id&quot;),
+            &quot;trace_id&quot;: msg.get(&quot;metadata&quot;, {}).get(&quot;trace_id&quot;),
+            &quot;status&quot;: msg.get(&quot;payload&quot;, {}).get(&quot;status&quot;),
+        }
+        with open(self.log_file, &quot;a&quot;) as f:
+            f.write(json.dumps(entry) + &quot;\n&quot;)
+</code></pre></div>
+<p>The audit log format is JSONL (one JSON object per line), which is trivially parseable with <code>jq</code>:</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash"># All messages in the release trace
+jq 'select(.trace_id == &quot;trace_release_v3&quot;)' /tmp/c2c/audit/c2c-audit-2026-04-01.jsonl
+
+# All rejected messages (potential attacks)
+jq 'select(.status == &quot;rejected&quot;)' /tmp/c2c/audit/c2c-audit-2026-04-01.jsonl
+
+# Message flow for a specific correlation
+jq 'select(.correlation_id == &quot;corr_abc123&quot;)' /tmp/c2c/audit/c2c-audit-2026-04-01.jsonl
+</code></pre></div>
+<h3 id="sandboxing">Sandboxing<a class="headerlink" href="#sandboxing">¶</a></h3>
+<p>Each C2C agent should run in a sandboxed environment that limits its blast radius:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Implementation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Filesystem</td>
+<td>Agent can only read/write within its designated project directory</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Agent can only connect to its own socket and the registry</td>
+</tr>
+<tr>
+<td>Processes</td>
+<td>Agent cannot spawn arbitrary subprocesses</td>
+</tr>
+<tr>
+<td>Resources</td>
+<td>CPU and memory limits via cgroups or container constraints</td>
+</tr>
+<tr>
+<td>Time</td>
+<td>Maximum execution time per task, enforced by the framework</td>
+</tr>
+</tbody>
+</table></div>
+<p>In practice, the simplest sandboxing approach for local development is running each agent in a separate container or using macOS sandbox profiles:</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash"># Run a C2C agent in a container with limited access
+docker run --rm \
+  -v /tmp/c2c:/tmp/c2c \
+  -v /path/to/project:/project:ro \
+  --network none \
+  --memory 512m \
+  --cpus 1 \
+  c2c-security-agent
+</code></pre></div>
+<p>The <code>--network none</code> flag is critical. A security auditor agent does not need network access to scan local code. If it is compromised, it cannot exfiltrate data.</p>
+<h2 id="where-c2c-meets-claude-code-today">Where C2C Meets Claude Code Today<a class="headerlink" href="#where-c2c-meets-claude-code-today">¶</a></h2>
+<p>The C2C protocol is forward-looking, but pieces of it are already implementable within Claude Code&rsquo;s current architecture. Here is the practical roadmap:</p>
+<p><strong>Today (fully implementable):</strong>
+- MCP bridge server that routes tasks to external agents
+- Shared filesystem transport for agent coordination
+- Claude Code subagents (as described in Chapter 6) as lightweight C2C participants
+- Audit logging of all inter-agent communication</p>
+<p><strong>Near-term (requires minor tooling):</strong>
+- Unix socket transport with proper agent lifecycle management
+- Local agent registry with health checking
+- Rate limiting and capability-based authorization</p>
+<p><strong>Future (requires Claude Code changes):</strong>
+- Native C2C support in Claude Code&rsquo;s agent framework
+- Built-in agent discovery and negotiation
+- First-class support for the saga pattern with automatic compensation</p>
+<p>The key insight is that you do not need to wait for native support. The MCP bridge pattern lets you build C2C-capable systems today, using Claude Code as one participant in a larger multi-agent workflow. Start with the shared filesystem transport — it is the most resilient and easiest to debug. Graduate to Unix sockets when you need lower latency. Consider HTTP only when you need cross-machine coordination.</p>
+<h2 id="chapter-summary">Chapter Summary<a class="headerlink" href="#chapter-summary">¶</a></h2>
+<p>The CLI-to-CLI Protocol addresses the fundamental limitation of today&rsquo;s AI agents: they work alone. By defining a simple, Unix-native message format with six message types (capability_query, task_request, task_result, status_update, handoff, negotiate), four transport mechanisms (stdio, Unix sockets, filesystem, HTTP), and a zero-trust security model, C2C enables the transition from monolithic AI sessions to specialized, coordinating agent systems.</p>
+<p>The protocol&rsquo;s power lies not in any single message type but in the patterns that emerge from their composition — pipelines, fan-out/fan-in, sagas, event-driven reactions, and consensus. These are the same patterns that transformed web development from monoliths to microservices, now applied to AI agents.</p>
+<p>The reference implementations in this chapter — approximately 200 lines each in Python and TypeScript — are production-ready starting points. The MCP bridge integration means you can start building C2C-capable systems today, within Claude Code&rsquo;s existing architecture, without waiting for native protocol support.</p>
+<p>We are at the beginning of the multi-agent era. The agents are ready. The protocols are defined. The question is no longer whether AI agents will coordinate — it is how well they will coordinate, and which protocols will become the standards. C2C is our answer: simple enough to implement in an afternoon, powerful enough to orchestrate a fleet of specialized agents, and secure enough to trust with production workloads.</p>
+<p>In the next chapter, we will build on C2C to construct complete multi-agent workflows — the orchestration layer that turns independent agents into a coordinated team.</p>
+<div class="chapter-nav-bottom" style="display:flex;justify-content:space-between;padding:2rem 0;margin-top:3rem;border-top:1px solid var(--border);"><a href="chapter-28.html" style="text-decoration:none;color:var(--accent-blue);">← Specializing Claude Code at the Source Code Level</a><a href="chapter-30.html" style="text-decoration:none;color:var(--accent-blue);text-align:right;">Building Multi-Specialized-CLI Systems →</a></div>
+</main>
+<footer class="doc-footer">
+  <p>© 2026 Tri Doan. <a href="index.html">Back to Table of Contents</a></p>
+</footer>
+<a href="#" id="back-to-top" style="display:none;position:fixed;bottom:2rem;right:2rem;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;text-decoration:none;font-size:1.2rem;z-index:99;">↑</a>
+<script>
+(function(){
+  // Scroll indicator
+  var bar=document.querySelector('.scroll-indicator .bar');
+  function updateBar(){
+    var s=window.scrollY,h=document.documentElement.scrollHeight-window.innerHeight;
+    bar.style.width=h>0?(s/h*100)+'%':'0%';
+  }
+  
+  // Back to top
+  var btt=document.getElementById('back-to-top');
+  function updateBtt(){if(btt)btt.style.display=window.scrollY>400?'flex':'none';}
+  
+  // Sidebar toggle
+  window.toggleSidebar=function(){
+    var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');
+    if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}
+  };
+  
+  // Copy code
+  window.copyCode=function(b){
+    var c=b.parentElement.querySelector('code');if(!c)return;
+    navigator.clipboard.writeText(c.textContent).then(function(){
+      var o=b.textContent;b.textContent='✓ Copied';b.style.color='var(--accent-green)';
+      setTimeout(function(){b.textContent=o;b.style.color='';},2000);
+    });
+  };
+  
+  // Close sidebar on link click (mobile)
+  document.querySelectorAll('.sidebar a').forEach(function(a){
+    a.addEventListener('click',function(){
+      if(window.innerWidth<=1024){
+        var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');
+        if(s)s.classList.remove('open');if(o)o.classList.remove('active');
+      }
+    });
+  });
+  
+  // Highlight active sidebar section on scroll
+  var sections=document.querySelectorAll('h1[id],h2[id],h3[id]');
+  var sidebarLinks=document.querySelectorAll('.sidebar a');
+  var linkMap={};
+  sidebarLinks.forEach(function(l){
+    var h=l.getAttribute('href');
+    if(h){var id=h.split('#').pop();if(id)linkMap[id]=l;}
+  });
+  
+  function highlightSection(){
+    var current='';
+    sections.forEach(function(s){
+      if(window.scrollY>=s.offsetTop-100)current=s.id;
+    });
+    sidebarLinks.forEach(function(l){l.classList.remove('active');});
+    if(current&&linkMap[current])linkMap[current].classList.add('active');
+  }
+  
+  var tk=false;
+  window.addEventListener('scroll',function(){
+    if(!tk){requestAnimationFrame(function(){updateBar();updateBtt();highlightSection();tk=false;});tk=true;}
+  });
+  updateBar();
+})();
+</script>
+</body>
+</html>

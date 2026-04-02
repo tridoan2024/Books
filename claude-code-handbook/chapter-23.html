@@ -1,0 +1,2027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 23: Multi-File Refactoring at Scale — Claude Code Handbook</title>
+<meta name="author" content="Tri Doan">
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-hover: #30363d;
+    --border: #30363d;
+    --border-muted: #21262d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #656d76;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-cyan: #39d2c0;
+    --code-bg: #161b22;
+    --sidebar-width: 300px;
+    --header-height: 60px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    color: var(--text-primary); background: var(--bg-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .scroll-indicator {
+    position: fixed; top: var(--header-height); left: 0; right: 0;
+    height: 3px; background: transparent; z-index: 101;
+  }
+  .scroll-indicator .bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    width: 0%; transition: width 0.1s;
+  }
+
+  .site-header {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--header-height);
+    display: flex; align-items: center; padding: 0 1.5rem;
+    z-index: 100; border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: rgba(22, 27, 34, 0.88);
+  }
+  .hamburger {
+    display: none; background: none; border: none;
+    color: var(--text-primary); font-size: 1.4rem;
+    cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem;
+    border-radius: 6px; transition: background 0.15s;
+  }
+  .hamburger:hover { background: var(--bg-tertiary); }
+  .site-header .logo {
+    font-size: 1rem; font-weight: 700; color: var(--text-primary);
+    display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
+  }
+  .site-header .logo .icon { font-size: 1.25rem; }
+  .site-header .badge {
+    background: var(--accent-green); color: #000;
+    font-size: 0.65rem; font-weight: 600; padding: 2px 8px;
+    border-radius: 12px; margin-left: 0.5rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .header-nav {
+    margin-left: auto; display: flex; gap: 6px; align-items: center;
+  }
+  .header-nav button {
+    background: none; border: 1px solid var(--border);
+    color: var(--text-secondary); cursor: pointer;
+    padding: 4px 12px; border-radius: 6px;
+    font-size: 0.78rem; font-family: inherit; transition: all 0.15s;
+  }
+  .header-nav button:hover {
+    color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--text-muted);
+  }
+  .header-nav button:disabled { opacity: 0.3; cursor: default; background: none; }
+  .header-nav .chapter-label {
+    color: var(--text-muted); font-size: 0.75rem;
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; padding: 0 6px;
+  }
+
+  .sidebar {
+    position: fixed; top: var(--header-height); left: 0; bottom: 0;
+    width: var(--sidebar-width); background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 1.25rem 0 3rem;
+    z-index: 50; transition: transform 0.3s ease;
+  }
+  .sidebar-title {
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--text-muted);
+    padding: 0 1.25rem; margin-bottom: 0.75rem;
+  }
+  .sidebar a {
+    display: block; color: var(--text-secondary); text-decoration: none;
+    font-size: 0.8125rem; line-height: 1.4;
+    border-left: 2px solid transparent; transition: all 0.15s ease;
+  }
+  .sidebar a:hover {
+    color: var(--text-primary); background: var(--bg-tertiary);
+    border-left-color: var(--accent-blue); text-decoration: none;
+  }
+  .sidebar a.active {
+    color: var(--accent-blue); border-left-color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.05);
+  }
+  .sidebar-part {
+    font-weight: 700; color: var(--accent-green) !important;
+    font-size: 0.78rem !important; padding: 0.6rem 1.25rem 0.35rem;
+    margin-top: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .sidebar-part:first-child { margin-top: 0; }
+  .sidebar-chapter {
+    font-weight: 600; color: var(--text-primary) !important;
+    padding: 0.3rem 1.25rem 0.3rem 1.75rem;
+  }
+  .sidebar-section {
+    padding: 0.2rem 1.25rem 0.2rem 2.5rem;
+    font-size: 0.78rem !important; color: var(--text-muted) !important;
+  }
+  .sidebar-section:hover { color: var(--text-secondary) !important; }
+  .sidebar-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: 40;
+  }
+
+  .hero {
+    text-align: center; padding: 80px 2rem 50px;
+    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 30% 20%, rgba(88,166,255,0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 80%, rgba(63,185,80,0.04) 0%, transparent 50%);
+    pointer-events: none;
+  }
+  .hero .shield { font-size: 4rem; display: block; margin-bottom: 1rem; filter: drop-shadow(0 0 20px rgba(88,166,255,0.3)); }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.25rem) !important; font-weight: 800 !important;
+    letter-spacing: 3px; color: var(--text-primary) !important;
+    margin: 0 0 0.4rem !important; border: none !important; padding: 0 !important;
+    text-align: center;
+  }
+  .hero .subtitle {
+    font-size: clamp(0.95rem, 2vw, 1.15rem); color: var(--text-secondary);
+    max-width: 600px; margin: 0 auto 1.25rem; line-height: 1.5;
+  }
+  .hero .author { font-size: 1rem; color: var(--accent-blue); font-weight: 500; }
+  .hero .meta {
+    margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted);
+    display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap;
+  }
+  .hero .meta span { display: flex; align-items: center; gap: 0.3rem; }
+
+  .main {
+    margin-left: var(--sidebar-width); margin-top: var(--header-height);
+    padding: 2.5rem 3rem 6rem; max-width: calc(var(--sidebar-width) + 860px);
+  }
+
+  h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border); color: var(--text-primary); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 3rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border-muted); color: var(--text-primary); }
+  h3 { font-size: 1.2rem; font-weight: 600; margin: 2rem 0 0.6rem; color: var(--text-primary); }
+  h4 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; color: var(--text-secondary); }
+  h5, h6 { font-size: 0.9rem; font-weight: 600; margin: 1.25rem 0 0.4rem; color: var(--text-secondary); }
+
+  .part-heading {
+    font-size: 1.75rem !important; text-align: center;
+    color: var(--accent-green) !important;
+    padding: 2rem 0 1rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .part-heading::after {
+    content: ''; display: block; width: 80px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
+    margin: 0.75rem auto 0; border-radius: 1px;
+  }
+  .chapter-heading {
+    font-size: 1.6rem !important; color: var(--accent-blue) !important;
+    padding-bottom: 0.5rem !important; margin-top: 3.5rem !important;
+    border-bottom: 1px solid rgba(88,166,255,0.2) !important;
+  }
+  .appendices-heading {
+    font-size: 1.5rem !important; text-align: center;
+    color: var(--accent-orange) !important;
+    padding: 1.5rem 0 0.75rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .appendices-heading::after {
+    content: ''; display: block; width: 60px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-orange), var(--accent-purple));
+    margin: 0.6rem auto 0; border-radius: 1px;
+  }
+
+  .headerlink {
+    color: var(--accent-blue); opacity: 0; margin-left: 0.3rem;
+    font-size: 0.8em; transition: opacity 0.15s; text-decoration: none;
+  }
+  h1:hover .headerlink, h2:hover .headerlink,
+  h3:hover .headerlink, h4:hover .headerlink { opacity: 0.5; }
+  .headerlink:hover { opacity: 1 !important; text-decoration: none; }
+
+  .reading-time {
+    font-size: 0.7rem; font-weight: 400; color: var(--text-muted);
+    background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px;
+    margin-left: 0.5rem; vertical-align: middle; letter-spacing: 0; text-transform: none;
+  }
+
+  p { margin: 0.75rem 0; }
+  strong { color: var(--text-primary); }
+  em { color: var(--text-secondary); }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border-muted); margin: 2.5rem 0; }
+
+  ul, ol { padding-left: 1.5rem; margin: 0.6rem 0; }
+  li { margin: 0.3rem 0; line-height: 1.6; }
+  li::marker { color: var(--text-muted); }
+
+  blockquote {
+    margin: 1.25rem 0; padding: 0.75rem 1rem;
+    border-left: 3px solid var(--accent-blue);
+    background: rgba(88,166,255,0.05);
+    border-radius: 0 6px 6px 0; color: var(--text-secondary);
+  }
+  blockquote p { margin: 0.3rem 0; }
+  blockquote strong { color: var(--text-primary); }
+
+  code {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.875em; background: var(--bg-tertiary);
+    padding: 0.15em 0.4em; border-radius: 4px; color: var(--accent-cyan);
+  }
+  .code-block {
+    position: relative; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
+  }
+  .code-block pre {
+    background: var(--code-bg); padding: 1rem 1.25rem;
+    overflow-x: auto; margin: 0; line-height: 1.5; border-radius: 8px;
+  }
+  .code-block pre code {
+    background: none; padding: 0; color: var(--text-primary);
+    font-size: 0.8125rem; display: block; white-space: pre;
+  }
+  .code-lang {
+    position: absolute; top: 0; right: 72px;
+    padding: 2px 10px; font-size: 0.65rem; color: var(--text-muted);
+    background: rgba(0,0,0,0.3); border-radius: 0 0 4px 4px;
+    text-transform: uppercase; letter-spacing: 0.5px; font-family: "SF Mono", monospace;
+  }
+  .copy-btn {
+    position: absolute; top: 6px; right: 8px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    color: var(--text-muted); padding: 3px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 0.7rem; font-family: inherit;
+    transition: all 0.15s; z-index: 2;
+  }
+  .copy-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  .table-wrap {
+    overflow-x: auto; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  thead th {
+    background: var(--bg-tertiary); color: var(--text-primary);
+    font-weight: 600; text-align: left; padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border); font-size: 0.8125rem;
+  }
+  tbody td {
+    padding: 0.5rem 0.75rem; border: 1px solid var(--border-muted);
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+  tbody tr:hover { background: var(--bg-tertiary); }
+
+  .chapter-nav-bottom {
+    display: flex; justify-content: space-between; align-items: stretch;
+    gap: 1rem; margin: 3rem 0 1rem; padding: 1.25rem 0 0;
+    border-top: 1px solid var(--border-muted);
+  }
+  .chapter-nav-bottom a {
+    display: flex; flex-direction: column; gap: 0.2rem;
+    padding: 0.75rem 1rem; border: 1px solid var(--border);
+    border-radius: 8px; text-decoration: none; transition: all 0.15s;
+    min-width: 0; max-width: 48%;
+  }
+  .chapter-nav-bottom a:hover {
+    background: var(--bg-tertiary); border-color: var(--accent-blue); text-decoration: none;
+  }
+  .chapter-nav-bottom .nav-label {
+    font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .chapter-nav-bottom .nav-title {
+    font-size: 0.85rem; color: var(--accent-blue); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chapter-nav-bottom .nav-next { margin-left: auto; text-align: right; }
+
+  #back-to-top {
+    position: fixed; bottom: 2rem; right: 2rem;
+    width: 40px; height: 40px; background: var(--bg-secondary);
+    border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-secondary); font-size: 1.1rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: all 0.2s; z-index: 90;
+  }
+  #back-to-top.visible { opacity: 1; pointer-events: auto; }
+  #back-to-top:hover { background: var(--bg-tertiary); color: var(--accent-blue); border-color: var(--accent-blue); }
+
+  .doc-footer {
+    margin-top: 4rem; padding: 1.5rem 0;
+    border-top: 1px solid var(--border-muted);
+    text-align: center; color: var(--text-muted); font-size: 0.8125rem;
+  }
+
+  @media (max-width: 1024px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay.open { display: block; }
+    .hamburger { display: block; }
+    .main { margin-left: 0; padding: 2rem 1.5rem 4rem; max-width: 100%; }
+    .hero { padding: 60px 1.5rem 40px; }
+  }
+  @media (max-width: 640px) {
+    .main { padding: 1.5rem 1rem 3rem; }
+    h1 { font-size: 1.5rem; } h2 { font-size: 1.25rem; }
+    .part-heading { font-size: 1.3rem !important; }
+    .chapter-heading { font-size: 1.2rem !important; }
+    pre { font-size: 0.75rem; padding: 0.75rem; }
+    table { font-size: 0.8rem; }
+    thead th, tbody td { padding: 0.4rem 0.5rem; }
+    .chapter-nav-bottom { flex-direction: column; }
+    .chapter-nav-bottom a { max-width: 100%; }
+    .header-nav .chapter-label { display: none; }
+    .hero .shield { font-size: 3rem; }
+    .hero .meta { flex-direction: column; gap: 0.5rem; }
+  }
+  @media print {
+    body { background: #fff; color: #1a1a1a; }
+    .site-header, .sidebar, .sidebar-overlay, #back-to-top,
+    .scroll-indicator, .copy-btn, .code-lang, .hamburger,
+    .header-nav { display: none !important; }
+    .main { margin-left: 0; max-width: 100%; padding: 1rem; }
+    .hero { background: #fff; border-bottom: 2px solid #000; padding: 2rem 1rem; }
+    .hero h1 { color: #000 !important; }
+    h1, h2, h3, h4 { color: #000; }
+    a { color: #0066cc; }
+    code { background: #f3f3f3; color: #333; }
+    .code-block pre { background: #f5f5f5; border-color: #ccc; }
+    .code-block pre code { color: #1a1a1a; }
+    blockquote { border-left-color: #666; background: #f9f9f9; color: #333; }
+    thead th { background: #eee; color: #000; border-color: #999; }
+    tbody td { border-color: #ddd; }
+    .part-heading { color: #000 !important; }
+    .chapter-heading { color: #000 !important; }
+    .chapter-nav-bottom, .headerlink, .reading-time { display: none; }
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  .toc { display: none; }
+  ::selection { background: rgba(88,166,255,0.3); }
+</style>
+
+<style>
+  /* Override for split pages - reduce memory usage */
+  img { max-width: 100%; height: auto; }
+  .main { min-height: 80vh; }
+</style>
+
+</head>
+<body>
+<div class="scroll-indicator"><div class="bar" id="scrollBar"></div></div>
+<header class="site-header">
+  <button class="hamburger" onclick="toggleSidebar()" aria-label="Toggle navigation">☰</button>
+  <div class="logo">
+    <span class="icon">⚡</span>Application Development Using Claude Code<span class="badge">Book</span>
+  </div>
+  <nav class="header-nav">
+    <button id="prev-btn" onclick="location.href='chapter-22.html'" disabled>← Prev</button>
+    <span class="chapter-label" id="chapter-label"></span>
+    <button id="next-btn" onclick="location.href='chapter-24.html'">Next →</button>
+  </nav>
+</header>
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-title">Table of Contents</div>
+    <a href="chapter-01.html" class="sidebar-part">PART I: FOUNDATIONS</a>
+    <a href="chapter-01.html" class="sidebar-chapter">Ch 1: Chapter 1: The Claude Code Revolution</a>
+    <a href="chapter-01.html#what-claude-code-actually-is" class="sidebar-section">What Claude Code Actually Is¶</a>
+    <a href="chapter-01.html#a-day-in-the-life-before-and-after" class="sidebar-section">A Day in the Life: Before and After¶</a>
+    <a href="chapter-01.html#the-paradigm-shift-from-write-code-to-engineer-with-ai" class="sidebar-section">The Paradigm Shift: From &amp;ldquo;Write Code&amp;rdqu...</a>
+    <a href="chapter-01.html#what-separates-beginners-from-professionals" class="sidebar-section">What Separates Beginners from Professionals¶</a>
+    <a href="chapter-01.html#baby-usage-vs-professional-usage-a-concrete-comparison" class="sidebar-section">Baby Usage vs. Professional Usage: A Concrete C...</a>
+    <a href="chapter-01.html#the-economics-why-this-matters" class="sidebar-section">The Economics: Why This Matters¶</a>
+    <a href="chapter-01.html#claude-code-vs-the-competition" class="sidebar-section">Claude Code vs. the Competition¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-01.html#what-you-will-build-by-the-end-of-this-book" class="sidebar-section">What You Will Build by the End of This Book¶</a>
+    <a href="chapter-01.html#prerequisites" class="sidebar-section">Prerequisites¶</a>
+    <a href="chapter-01.html#the-road-ahead" class="sidebar-section">The Road Ahead¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-02.html" class="sidebar-chapter">Ch 2: Chapter 2: Setup and Configuration Mastery</a>
+    <a href="chapter-02.html#installation-methods" class="sidebar-section">Installation Methods¶</a>
+    <a href="chapter-02.html#first-launch-what-happens" class="sidebar-section">First Launch: What Happens¶</a>
+    <a href="chapter-25.html#environment-setup" class="sidebar-section">Environment Setup¶</a>
+    <a href="chapter-02.html#shell-integration" class="sidebar-section">Shell Integration¶</a>
+    <a href="chapter-02.html#directory-structure-what-gets-created-where" class="sidebar-section">Directory Structure: What Gets Created Where¶</a>
+    <a href="chapter-02.html#ide-integration" class="sidebar-section">IDE Integration¶</a>
+    <a href="chapter-02.html#multi-model-setup" class="sidebar-section">Multi-Model Setup¶</a>
+    <a href="chapter-02.html#essential-built-in-commands" class="sidebar-section">Essential Built-In Commands¶</a>
+    <a href="chapter-02.html#effort-level-configuration" class="sidebar-section">Effort Level Configuration¶</a>
+    <a href="chapter-02.html#first-professional-session-walkthrough" class="sidebar-section">First Professional Session Walkthrough¶</a>
+    <a href="chapter-02.html#what-most-people-get-wrong-in-setup" class="sidebar-section">What Most People Get Wrong in Setup¶</a>
+    <a href="chapter-02.html#verifying-installation-the-doctor" class="sidebar-section">Verifying Installation: The Doctor¶</a>
+    <a href="chapter-02.html#troubleshooting-common-setup-issues" class="sidebar-section">Troubleshooting Common Setup Issues¶</a>
+    <a href="chapter-02.html#whats-next" class="sidebar-section">What&amp;rsquo;s Next¶</a>
+    <a href="chapter-02.html#what-most-people-get-wrong-the-setup-checklist" class="sidebar-section">What Most People Get Wrong: The Setup Checklist¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-03.html" class="sidebar-chapter">Ch 3: Chapter 3: Architecture Deep Dive -- How Claude Code...</a>
+    <a href="chapter-28.html#the-agentic-loop" class="sidebar-section">The Agentic Loop¶</a>
+    <a href="chapter-03.html#the-context-window" class="sidebar-section">The Context Window¶</a>
+    <a href="chapter-03.html#the-permission-system-in-depth" class="sidebar-section">The Permission System in Depth¶</a>
+    <a href="chapter-03.html#session-lifecycle" class="sidebar-section">Session Lifecycle¶</a>
+    <a href="chapter-03.html#subagent-architecture" class="sidebar-section">Subagent Architecture¶</a>
+    <a href="chapter-03.html#streaming-architecture" class="sidebar-section">Streaming Architecture¶</a>
+    <a href="chapter-03.html#all-hook-lifecycle-events" class="sidebar-section">All Hook Lifecycle Events¶</a>
+    <a href="chapter-03.html#performance-characteristics" class="sidebar-section">Performance Characteristics¶</a>
+    <a href="chapter-03.html#putting-it-together-a-complete-request-trace" class="sidebar-section">Putting It Together: A Complete Request Trace¶</a>
+    <a href="chapter-03.html#the-architecture-diagram" class="sidebar-section">The Architecture Diagram¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-04.html" class="sidebar-part">PART II: THE PROFESSIONAL CONFIGURATION STACK</a>
+    <a href="chapter-04.html" class="sidebar-chapter">Ch 4: Chapter 4: CLAUDE.md — Engineering Your Project Brain</a>
+    <a href="chapter-04.html#the-single-most-important-file" class="sidebar-section">The Single Most Important File¶</a>
+    <a href="chapter-04.html#the-claudemd-hierarchy" class="sidebar-section">The CLAUDE.md Hierarchy¶</a>
+    <a href="chapter-04.html#structure-best-practices" class="sidebar-section">Structure Best Practices¶</a>
+    <a href="chapter-04.html#the-import-system" class="sidebar-section">The @import System¶</a>
+    <a href="chapter-04.html#what-to-include" class="sidebar-section">What to Include¶</a>
+    <a href="chapter-04.html#what-not-to-include" class="sidebar-section">What NOT to Include¶</a>
+    <a href="chapter-04.html#real-world-examples" class="sidebar-section">Real-World Examples¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-04.html#testing-your-claudemd" class="sidebar-section">Testing Your CLAUDE.md¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-05.html" class="sidebar-chapter">Ch 5: Chapter 5: Settings, Permissions, and Security</a>
+    <a href="chapter-05.html#two-files-two-purposes" class="sidebar-section">Two Files, Two Purposes¶</a>
+    <a href="chapter-05.html#the-permission-system-deep-dive" class="sidebar-section">The Permission System Deep Dive¶</a>
+    <a href="chapter-05.html#security-deny-lists" class="sidebar-section">Security Deny Lists¶</a>
+    <a href="chapter-05.html#the-complete-settingsjson-schema" class="sidebar-section">The Complete settings.json Schema¶</a>
+    <a href="chapter-05.html#settings-for-different-environments" class="sidebar-section">Settings for Different Environments¶</a>
+    <a href="chapter-05.html#real-world-security-hardening" class="sidebar-section">Real-World Security Hardening¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-05.html#key-takeaways" class="sidebar-section">Key Takeaways¶</a>
+    <a href="chapter-06.html" class="sidebar-chapter">Ch 6: Chapter 6: Rules -- Path-Scoped Coding Standards</a>
+    <a href="chapter-06.html#what-rules-are" class="sidebar-section">What Rules Are¶</a>
+    <a href="chapter-06.html#rule-file-anatomy" class="sidebar-section">Rule File Anatomy¶</a>
+    <a href="chapter-06.html#path-scoping-mechanics" class="sidebar-section">Path Scoping Mechanics¶</a>
+    <a href="chapter-06.html#built-in-rule-examples" class="sidebar-section">Built-In Rule Examples¶</a>
+    <a href="chapter-06.html#writing-effective-rules" class="sidebar-section">Writing Effective Rules¶</a>
+    <a href="chapter-06.html#complete-example-full-stack-typescript-python-project" class="sidebar-section">Complete Example: Full-Stack TypeScript + Pytho...</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-07.html" class="sidebar-chapter">Ch 7: Chapter 7: Skills -- Building Reusable AI Workflows</a>
+    <a href="chapter-07.html#what-skills-are" class="sidebar-section">What Skills Are¶</a>
+    <a href="chapter-07.html#the-skillmd-anatomy" class="sidebar-section">The SKILL.md Anatomy¶</a>
+    <a href="chapter-26.html#dynamic-context-injection" class="sidebar-section">Dynamic Context Injection¶</a>
+    <a href="chapter-07.html#building-custom-skills-three-complete-examples" class="sidebar-section">Building Custom Skills: Three Complete Examples¶</a>
+    <a href="chapter-07.html#auto-activating-skills" class="sidebar-section">Auto-Activating Skills¶</a>
+    <a href="chapter-07.html#error-handling" class="sidebar-section">Error Handling¶</a>
+    <a href="chapter-07.html#security" class="sidebar-section">Security¶</a>
+    <a href="chapter-07.html#skill-libraries-organizing-skills-for-a-team" class="sidebar-section">Skill Libraries: Organizing Skills for a Team¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-07.html#building-a-skill-development-workflow" class="sidebar-section">Building a Skill Development Workflow¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-08.html" class="sidebar-chapter">Ch 8: Chapter 8: Hooks -- Automation Guardrails</a>
+    <a href="chapter-08.html#the-hook-lifecycle" class="sidebar-section">The Hook Lifecycle¶</a>
+    <a href="chapter-08.html#hook-wiring-in-settingsjson" class="sidebar-section">Hook Wiring in settings.json¶</a>
+    <a href="chapter-08.html#the-json-stdin-protocol" class="sidebar-section">The JSON Stdin Protocol¶</a>
+    <a href="chapter-08.html#the-four-hook-types" class="sidebar-section">The Four Hook Types¶</a>
+    <a href="chapter-08.html#five-production-ready-hook-examples" class="sidebar-section">Five Production-Ready Hook Examples¶</a>
+    <a href="chapter-08.html#building-a-custom-hook-step-by-step" class="sidebar-section">Building a Custom Hook &amp;ndash; Step by Step¶</a>
+    <a href="chapter-08.html#advanced-hook-patterns" class="sidebar-section">Advanced Hook Patterns¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-09.html" class="sidebar-part">PART III: TOOL SYSTEM MASTERY</a>
+    <a href="chapter-09.html" class="sidebar-chapter">Ch 9: Chapter 9: The Complete Tool System</a>
+    <a href="chapter-09.html#how-tools-work" class="sidebar-section">How Tools Work¶</a>
+    <a href="chapter-09.html#the-complete-tool-inventory" class="sidebar-section">The Complete Tool Inventory¶</a>
+    <a href="chapter-09.html#tool-selection-strategy" class="sidebar-section">Tool Selection Strategy¶</a>
+    <a href="chapter-09.html#the-tool-execution-pipeline" class="sidebar-section">The Tool Execution Pipeline¶</a>
+    <a href="chapter-09.html#toolresult-format" class="sidebar-section">ToolResult Format¶</a>
+    <a href="chapter-09.html#parallel-tool-execution" class="sidebar-section">Parallel Tool Execution¶</a>
+    <a href="chapter-09.html#tool-timeouts" class="sidebar-section">Tool Timeouts¶</a>
+    <a href="chapter-09.html#tool-specific-configuration" class="sidebar-section">Tool-Specific Configuration¶</a>
+    <a href="chapter-09.html#common-tool-patterns" class="sidebar-section">Common Tool Patterns¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-10.html" class="sidebar-chapter">Ch 10: Chapter 10: Bash Tool and Shell Operations</a>
+    <a href="chapter-10.html#what-the-bash-tool-can-do" class="sidebar-section">What the Bash Tool Can Do¶</a>
+    <a href="chapter-10.html#the-execution-model" class="sidebar-section">The Execution Model¶</a>
+    <a href="chapter-10.html#security-implications" class="sidebar-section">Security Implications¶</a>
+    <a href="chapter-10.html#permission-patterns" class="sidebar-section">Permission Patterns¶</a>
+    <a href="chapter-10.html#git-operations-via-bash" class="sidebar-section">Git Operations via Bash¶</a>
+    <a href="chapter-10.html#package-management" class="sidebar-section">Package Management¶</a>
+    <a href="chapter-10.html#process-management" class="sidebar-section">Process Management¶</a>
+    <a href="chapter-10.html#testing-via-bash" class="sidebar-section">Testing via Bash¶</a>
+    <a href="chapter-10.html#build-systems" class="sidebar-section">Build Systems¶</a>
+    <a href="chapter-10.html#output-handling" class="sidebar-section">Output Handling¶</a>
+    <a href="chapter-10.html#sandboxing-and-safety-modes" class="sidebar-section">Sandboxing and Safety Modes¶</a>
+    <a href="chapter-10.html#linting-and-code-quality-via-bash" class="sidebar-section">Linting and Code Quality via Bash¶</a>
+    <a href="chapter-10.html#advanced-patterns" class="sidebar-section">Advanced Patterns¶</a>
+    <a href="chapter-10.html#what-not-to-do-with-bash" class="sidebar-section">What NOT to Do with Bash¶</a>
+    <a href="chapter-10.html#10-practical-bash-patterns" class="sidebar-section">10 Practical Bash Patterns¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-11.html" class="sidebar-chapter">Ch 11: Chapter 11: File Operations at Scale</a>
+    <a href="chapter-11.html#the-file-operation-toolkit" class="sidebar-section">The File Operation Toolkit¶</a>
+    <a href="chapter-11.html#read-loading-files-into-context" class="sidebar-section">Read: Loading Files Into Context¶</a>
+    <a href="chapter-11.html#edit-precision-modifications" class="sidebar-section">Edit: Precision Modifications¶</a>
+    <a href="chapter-11.html#write-creating-and-rewriting-files" class="sidebar-section">Write: Creating and Rewriting Files¶</a>
+    <a href="chapter-11.html#glob-finding-files-by-pattern" class="sidebar-section">Glob: Finding Files by Pattern¶</a>
+    <a href="chapter-11.html#grep-searching-file-contents" class="sidebar-section">Grep: Searching File Contents¶</a>
+    <a href="chapter-11.html#notebookedit-modifying-jupyter-notebooks" class="sidebar-section">NotebookEdit: Modifying Jupyter Notebooks¶</a>
+    <a href="chapter-11.html#performance-considerations" class="sidebar-section">Performance Considerations¶</a>
+    <a href="chapter-11.html#the-tool-interaction-matrix" class="sidebar-section">The Tool Interaction Matrix¶</a>
+    <a href="chapter-11.html#large-codebase-patterns" class="sidebar-section">Large Codebase Patterns¶</a>
+    <a href="chapter-11.html#multi-file-editing-patterns" class="sidebar-section">Multi-File Editing Patterns¶</a>
+    <a href="chapter-11.html#10-file-operation-recipes" class="sidebar-section">10 File Operation Recipes¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-12.html" class="sidebar-chapter">Ch 12: Chapter 12: Agent Tool and Multi-Agent Patterns</a>
+    <a href="chapter-12.html#what-the-agent-tool-does" class="sidebar-section">What the Agent Tool Does¶</a>
+    <a href="chapter-12.html#agent-types" class="sidebar-section">Agent Types¶</a>
+    <a href="chapter-12.html#when-to-use-agent" class="sidebar-section">When to Use Agent¶</a>
+    <a href="chapter-12.html#agent-parameters" class="sidebar-section">Agent Parameters¶</a>
+    <a href="chapter-12.html#writing-effective-agent-prompts" class="sidebar-section">Writing Effective Agent Prompts¶</a>
+    <a href="chapter-12.html#parallel-agent-patterns" class="sidebar-section">Parallel Agent Patterns¶</a>
+    <a href="chapter-12.html#communicating-with-running-agents" class="sidebar-section">Communicating with Running Agents¶</a>
+    <a href="chapter-12.html#custom-agents-from-claudeagents" class="sidebar-section">Custom Agents from .claude/agents/¶</a>
+    <a href="chapter-12.html#worktree-workflows-in-depth" class="sidebar-section">Worktree Workflows in Depth¶</a>
+    <a href="chapter-12.html#mcp-extending-claude-code-with-external-tools" class="sidebar-section">MCP: Extending Claude Code with External Tools¶</a>
+    <a href="chapter-12.html#cost-implications" class="sidebar-section">Cost Implications¶</a>
+    <a href="chapter-12.html#real-world-workflow-end-to-end-bug-investigation" class="sidebar-section">Real-World Workflow: End-to-End Bug Investigation¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-13.html" class="sidebar-part">PART IV: CONTEXT ENGINEERING</a>
+    <a href="chapter-13.html" class="sidebar-chapter">Ch 13: Chapter 13: Token Economics and Context Windows</a>
+    <a href="chapter-13.html#what-the-context-window-actually-is" class="sidebar-section">What the Context Window Actually Is¶</a>
+    <a href="chapter-13.html#what-a-token-is" class="sidebar-section">What a Token Is¶</a>
+    <a href="chapter-13.html#token-budgeting-where-the-200k-actually-goes" class="sidebar-section">Token Budgeting: Where the 200K Actually Goes¶</a>
+    <a href="chapter-13.html#how-tokens-work-in-code-vs-prose" class="sidebar-section">How Tokens Work in Code vs. Prose¶</a>
+    <a href="chapter-13.html#token-pricing" class="sidebar-section">Token Pricing¶</a>
+    <a href="chapter-13.html#prompt-caching" class="sidebar-section">Prompt Caching¶</a>
+    <a href="chapter-13.html#extended-thinking-tokens" class="sidebar-section">Extended Thinking Tokens¶</a>
+    <a href="chapter-13.html#context-window-management-strategies" class="sidebar-section">Context Window Management Strategies¶</a>
+    <a href="chapter-13.html#what-happens-when-you-hit-the-limit" class="sidebar-section">What Happens When You Hit the Limit¶</a>
+    <a href="chapter-13.html#monitoring-your-context-usage" class="sidebar-section">Monitoring Your Context Usage¶</a>
+    <a href="chapter-13.html#cost-optimization-patterns" class="sidebar-section">Cost Optimization Patterns¶</a>
+    <a href="chapter-13.html#real-world-cost-scenarios" class="sidebar-section">Real-World Cost Scenarios¶</a>
+    <a href="chapter-13.html#the-context-engineering-mindset" class="sidebar-section">The Context Engineering Mindset¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-14.html" class="sidebar-chapter">Ch 14: Chapter 14: Memory, Sessions, and Persistence</a>
+    <a href="chapter-14.html#the-three-persistence-mechanisms" class="sidebar-section">The Three Persistence Mechanisms¶</a>
+    <a href="chapter-14.html#auto-memory-claudes-long-term-knowledge" class="sidebar-section">Auto-Memory: Claude&amp;rsquo;s Long-Term Knowledge¶</a>
+    <a href="chapter-14.html#session-management" class="sidebar-section">Session Management¶</a>
+    <a href="chapter-14.html#context-compaction" class="sidebar-section">Context Compaction¶</a>
+    <a href="chapter-14.html#plan-mode" class="sidebar-section">Plan Mode¶</a>
+    <a href="chapter-14.html#the-clear-discipline" class="sidebar-section">The /clear Discipline¶</a>
+    <a href="chapter-14.html#the-btw-command" class="sidebar-section">The /btw Command¶</a>
+    <a href="chapter-14.html#the-rewind-command" class="sidebar-section">The /rewind Command¶</a>
+    <a href="chapter-14.html#practical-persistence-workflow" class="sidebar-section">Practical Persistence Workflow¶</a>
+    <a href="chapter-14.html#the-interplay-between-persistence-mechanisms" class="sidebar-section">The Interplay Between Persistence Mechanisms¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-15.html" class="sidebar-chapter">Ch 15: Chapter 15: Prompt Engineering for Code Generation</a>
+    <a href="chapter-15.html#prompting-vs-prompt-engineering" class="sidebar-section">Prompting vs. Prompt Engineering¶</a>
+    <a href="chapter-15.html#the-prompt-engineering-stack" class="sidebar-section">The Prompt Engineering Stack¶</a>
+    <a href="chapter-15.html#the-20-prompt-patterns" class="sidebar-section">The 20 Prompt Patterns¶</a>
+    <a href="chapter-15.html#the-meta-skill-when-to-prompt-vs-when-to-configure" class="sidebar-section">The Meta-Skill: When to Prompt vs. When to Conf...</a>
+    <a href="chapter-15.html#measuring-prompt-quality" class="sidebar-section">Measuring Prompt Quality¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-16.html" class="sidebar-part">PART V: BUILDING REAL APPLICATIONS</a>
+    <a href="chapter-16.html" class="sidebar-chapter">Ch 16: Chapter 16: Project Architecture Patterns</a>
+    <a href="chapter-16.html#the-claudemd-first-approach" class="sidebar-section">The CLAUDE.md-First Approach¶</a>
+    <a href="chapter-16.html#directory-conventions-that-help-claude-navigate" class="sidebar-section">Directory Conventions That Help Claude Navigate¶</a>
+    <a href="chapter-16.html#project-types-and-their-ideal-claude-code-setups" class="sidebar-section">Project Types and Their Ideal Claude Code Setups¶</a>
+    <a href="chapter-16.html#architecture-documentation-for-claude" class="sidebar-section">Architecture Documentation for Claude¶</a>
+    <a href="chapter-16.html#component-responsibilities" class="sidebar-section">Component Responsibilities¶</a>
+    <a href="chapter-16.html#data-flow" class="sidebar-section">Data Flow¶</a>
+    <a href="chapter-16.html#api-contracts" class="sidebar-section">API Contracts¶</a>
+    <a href="chapter-16.html#the-claude-ready-project-checklist" class="sidebar-section">The &amp;ldquo;Claude-Ready&amp;rdquo; Project Checklist¶</a>
+    <a href="chapter-16.html#scaffolding-a-new-project-with-claude-code" class="sidebar-section">Scaffolding a New Project with Claude Code¶</a>
+    <a href="chapter-16.html#evolving-architecture-with-claude-code" class="sidebar-section">Evolving Architecture with Claude Code¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-17.html" class="sidebar-chapter">Ch 17: Chapter 17: Building a Full-Stack Web Application</a>
+    <a href="chapter-17.html#the-application-taskflow" class="sidebar-section">The Application: TaskFlow¶</a>
+    <a href="chapter-17.html#phase-1-project-setup" class="sidebar-section">Phase 1: Project Setup¶</a>
+    <a href="chapter-17.html#phase-2-database-and-api" class="sidebar-section">Phase 2: Database and API¶</a>
+    <a href="chapter-17.html#phase-3-frontend" class="sidebar-section">Phase 3: Frontend¶</a>
+    <a href="chapter-17.html#phase-4-real-time-features" class="sidebar-section">Phase 4: Real-Time Features¶</a>
+    <a href="chapter-17.html#phase-5-testing" class="sidebar-section">Phase 5: Testing¶</a>
+    <a href="chapter-17.html#phase-6-deployment" class="sidebar-section">Phase 6: Deployment¶</a>
+    <a href="chapter-25.html#lessons-learned" class="sidebar-section">Lessons Learned¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-18.html" class="sidebar-chapter">Ch 18: Chapter 18: Building CLI Tools and APIs</a>
+    <a href="chapter-18.html#part-1-building-a-python-cli-tool" class="sidebar-section">Part 1: Building a Python CLI Tool¶</a>
+    <a href="chapter-18.html#part-2-building-a-rest-api" class="sidebar-section">Part 2: Building a REST API¶</a>
+    <a href="chapter-18.html#part-3-building-a-graphql-api" class="sidebar-section">Part 3: Building a GraphQL API¶</a>
+    <a href="chapter-18.html#patterns-that-work-well-for-cliapi-development" class="sidebar-section">Patterns That Work Well for CLI/API Development¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-19.html" class="sidebar-chapter">Ch 19: Chapter 19: Test-Driven Development with Claude Code</a>
+    <a href="chapter-19.html#why-tdd-is-more-powerful-with-claude-code" class="sidebar-section">Why TDD Is More Powerful with Claude Code¶</a>
+    <a href="chapter-19.html#the-claude-code-tdd-workflow" class="sidebar-section">The Claude Code TDD Workflow¶</a>
+    <a href="chapter-19.html#test-frameworks-claude-knows-well" class="sidebar-section">Test Frameworks Claude Knows Well¶</a>
+    <a href="chapter-19.html#writing-testable-code-with-claude" class="sidebar-section">Writing Testable Code with Claude¶</a>
+    <a href="chapter-19.html#test-patterns-claude-excels-at" class="sidebar-section">Test Patterns Claude Excels At¶</a>
+    <a href="chapter-19.html#test-coverage-strategies" class="sidebar-section">Test Coverage Strategies¶</a>
+    <a href="chapter-19.html#setting-up-test-automation" class="sidebar-section">Setting Up Test Automation¶</a>
+    <a href="chapter-19.html#debugging-failing-tests" class="sidebar-section">Debugging Failing Tests¶</a>
+    <a href="chapter-19.html#real-example-tdd-a-rate-limiter" class="sidebar-section">Real Example: TDD a Rate Limiter¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-20.html" class="sidebar-chapter">Ch 20: Chapter 20: CI/CD Integration</a>
+    <a href="chapter-20.html#headless-mode-running-claude-code-without-a-terminal" class="sidebar-section">Headless Mode: Running Claude Code Without a Te...</a>
+    <a href="chapter-20.html#github-actions-integration" class="sidebar-section">GitHub Actions Integration¶</a>
+    <a href="chapter-20.html#pre-commit-hooks" class="sidebar-section">Pre-Commit Hooks¶</a>
+    <a href="chapter-20.html#automated-pr-reviews" class="sidebar-section">Automated PR Reviews¶</a>
+    <a href="chapter-20.html#automated-fixes" class="sidebar-section">Automated Fixes¶</a>
+    <a href="chapter-20.html#deployment-pipelines" class="sidebar-section">Deployment Pipelines¶</a>
+    <a href="chapter-20.html#azure-devops-integration" class="sidebar-section">Azure DevOps Integration¶</a>
+    <a href="chapter-20.html#cost-management-in-ci" class="sidebar-section">Cost Management in CI¶</a>
+    <a href="chapter-20.html#the-complete-production-pipeline" class="sidebar-section">The Complete Production Pipeline¶</a>
+    <a href="chapter-20.html#environment-setup-for-ci" class="sidebar-section">Environment Setup for CI¶</a>
+    <a href="chapter-20.html#monitoring-and-observability" class="sidebar-section">Monitoring and Observability¶</a>
+    <a href="chapter-20.html#troubleshooting-ci-integration" class="sidebar-section">Troubleshooting CI Integration¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-21.html" class="sidebar-part">PART VI: ADVANCED MASTERY</a>
+    <a href="chapter-21.html" class="sidebar-chapter">Ch 21: Chapter 21: Custom Agents and Intent Routing</a>
+    <a href="chapter-21.html#what-agents-are" class="sidebar-section">What Agents Are¶</a>
+    <a href="chapter-21.html#the-agent-definition-format" class="sidebar-section">The Agent Definition Format¶</a>
+    <a href="chapter-21.html#frontmatter-fields-complete-reference" class="sidebar-section">Frontmatter Fields — Complete Reference¶</a>
+    <a href="chapter-21.html#five-complete-agent-definitions" class="sidebar-section">Five Complete Agent Definitions¶</a>
+    <a href="chapter-21.html#how-agents-get-delegated-to" class="sidebar-section">How Agents Get Delegated To¶</a>
+    <a href="chapter-21.html#agent-vs-skill-decision-matrix" class="sidebar-section">Agent vs. Skill — Decision Matrix¶</a>
+    <a href="chapter-21.html#intent-routing-auto-detecting-what-you-want" class="sidebar-section">Intent Routing — Auto-Detecting What You Want¶</a>
+    <a href="chapter-21.html#building-domain-specific-agents" class="sidebar-section">Building Domain-Specific Agents¶</a>
+    <a href="chapter-21.html#multi-agent-orchestration" class="sidebar-section">Multi-Agent Orchestration¶</a>
+    <a href="chapter-21.html#agent-communication-patterns" class="sidebar-section">Agent Communication Patterns¶</a>
+    <a href="chapter-21.html#cost-management-for-agents" class="sidebar-section">Cost Management for Agents¶</a>
+    <a href="chapter-21.html#practical-tips-for-effective-agents" class="sidebar-section">Practical Tips for Effective Agents¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-22.html" class="sidebar-chapter">Ch 22: Chapter 22: Prompt Patterns That 10x Your Output</a>
+    <a href="chapter-22.html#pattern-1-the-constraint-pattern" class="sidebar-section">Pattern 1: The Constraint Pattern¶</a>
+    <a href="chapter-22.html#pattern-2-the-architecture-first-pattern" class="sidebar-section">Pattern 2: The Architecture-First Pattern¶</a>
+    <a href="chapter-22.html#pattern-3-the-test-first-pattern" class="sidebar-section">Pattern 3: The Test-First Pattern¶</a>
+    <a href="chapter-22.html#pattern-4-the-chain-of-files-pattern" class="sidebar-section">Pattern 4: The Chain-of-Files Pattern¶</a>
+    <a href="chapter-22.html#pattern-5-the-progressive-refinement-pattern" class="sidebar-section">Pattern 5: The Progressive Refinement Pattern¶</a>
+    <a href="chapter-22.html#pattern-6-the-example-driven-pattern" class="sidebar-section">Pattern 6: The Example-Driven Pattern¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-23.html" class="active" class="sidebar-chapter">Ch 23: Chapter 23: Multi-File Refactoring at Scale</a>
+    <a href="chapter-23.html#why-multi-file-refactoring-is-hard" class="sidebar-section">Why Multi-File Refactoring Is Hard¶</a>
+    <a href="chapter-23.html#strategy-1-plan-mode-for-complex-refactors" class="sidebar-section">Strategy 1: Plan Mode for Complex Refactors¶</a>
+    <a href="chapter-23.html#strategy-2-the-worktree-approach" class="sidebar-section">Strategy 2: The Worktree Approach¶</a>
+    <a href="chapter-23.html#strategy-3-the-batch-command" class="sidebar-section">Strategy 3: The /batch Command¶</a>
+    <a href="chapter-23.html#strategy-4-progressive-refactoring" class="sidebar-section">Strategy 4: Progressive Refactoring¶</a>
+    <a href="chapter-23.html#specific-refactoring-patterns" class="sidebar-section">Specific Refactoring Patterns¶</a>
+    <a href="chapter-23.html#maintaining-consistency" class="sidebar-section">Maintaining Consistency¶</a>
+    <a href="chapter-23.html#rollback-strategies" class="sidebar-section">Rollback Strategies¶</a>
+    <a href="chapter-23.html#large-codebase-techniques" class="sidebar-section">Large Codebase Techniques¶</a>
+    <a href="chapter-23.html#what-most-people-get-wrong" class="sidebar-section">What Most People Get Wrong¶</a>
+    <a href="chapter-23.html#complete-walkthrough-monolith-to-services" class="sidebar-section">Complete Walkthrough: Monolith to Services¶</a>
+    <a href="chapter-23.html#when-not-to-refactor-with-claude-code" class="sidebar-section">When Not to Refactor with Claude Code¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-24.html" class="sidebar-chapter">Ch 24: Chapter 24: MCP Servers — Extending Claude Code&#x27;s Reach</a>
+    <a href="chapter-24.html#what-mcp-is" class="sidebar-section">What MCP Is¶</a>
+    <a href="chapter-24.html#why-mcp-matters" class="sidebar-section">Why MCP Matters¶</a>
+    <a href="chapter-24.html#mcp-transport-stdio" class="sidebar-section">MCP Transport: stdio¶</a>
+    <a href="chapter-24.html#registering-mcp-servers" class="sidebar-section">Registering MCP Servers¶</a>
+    <a href="chapter-24.html#how-mcp-tools-appear-in-claude-code" class="sidebar-section">How MCP Tools Appear in Claude Code¶</a>
+    <a href="chapter-24.html#building-an-mcp-server-from-scratch-python" class="sidebar-section">Building an MCP Server from Scratch (Python)¶</a>
+    <a href="chapter-24.html#building-an-mcp-server-typescriptnodejs" class="sidebar-section">Building an MCP Server (TypeScript/Node.js)¶</a>
+    <a href="chapter-24.html#the-mcp-ecosystem" class="sidebar-section">The MCP Ecosystem¶</a>
+    <a href="chapter-24.html#mcp-resources-vs-tools" class="sidebar-section">MCP Resources vs. Tools¶</a>
+    <a href="chapter-24.html#advanced-mcp-patterns" class="sidebar-section">Advanced MCP Patterns¶</a>
+    <a href="chapter-24.html#security-considerations" class="sidebar-section">Security Considerations¶</a>
+    <a href="chapter-24.html#debugging-mcp-servers" class="sidebar-section">Debugging MCP Servers¶</a>
+    <a href="chapter-24.html#real-world-use-case-internal-tools-integration" class="sidebar-section">Real-World Use Case: Internal Tools Integration¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-25.html" class="sidebar-part">PART VII: CASE STUDIES AND REFERENCE</a>
+    <a href="chapter-25.html" class="sidebar-chapter">Ch 25: Chapter 25: Case Study — SaaS Application from Zero ...</a>
+    <a href="chapter-25.html#the-application-invoiceflow" class="sidebar-section">The Application: InvoiceFlow¶</a>
+    <a href="chapter-25.html#day-1-project-setup-and-architecture" class="sidebar-section">Day 1: Project Setup and Architecture¶</a>
+    <a href="chapter-25.html#day-2-authentication-and-users" class="sidebar-section">Day 2: Authentication and Users¶</a>
+    <a href="chapter-25.html#day-3-core-features-clients-and-invoices" class="sidebar-section">Day 3: Core Features — Clients and Invoices¶</a>
+    <a href="chapter-25.html#day-4-payments-and-email" class="sidebar-section">Day 4: Payments and Email¶</a>
+    <a href="chapter-25.html#day-5-dashboard-and-polish" class="sidebar-section">Day 5: Dashboard and Polish¶</a>
+    <a href="chapter-25.html#day-6-testing-and-security" class="sidebar-section">Day 6: Testing and Security¶</a>
+    <a href="chapter-25.html#day-7-deployment" class="sidebar-section">Day 7: Deployment¶</a>
+    <a href="chapter-25.html#key-metrics" class="sidebar-section">Key Metrics¶</a>
+    <a href="chapter-25.html#lessons-learned" class="sidebar-section">Lessons Learned¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-26.html" class="sidebar-chapter">Ch 26: Chapter 26: Complete Command and Tool Reference</a>
+    <a href="chapter-26.html#part-1-built-in-commands" class="sidebar-section">Part 1: Built-in Commands¶</a>
+    <a href="chapter-26.html#part-2-all-tools-reference" class="sidebar-section">Part 2: All Tools Reference¶</a>
+    <a href="chapter-26.html#part-3-configuration-reference" class="sidebar-section">Part 3: Configuration Reference¶</a>
+    <a href="chapter-26.html#part-4-environment-variables" class="sidebar-section">Part 4: Environment Variables¶</a>
+    <a href="chapter-26.html#quick-lookup-index" class="sidebar-section">Quick Lookup Index¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-27.html" class="sidebar-chapter">Ch 27: Chapter 27: Troubleshooting, FAQ, and Expert Tips</a>
+    <a href="chapter-27.html#part-1-troubleshooting" class="sidebar-section">Part 1: Troubleshooting¶</a>
+    <a href="chapter-27.html#part-2-frequently-asked-questions" class="sidebar-section">Part 2: Frequently Asked Questions¶</a>
+    <a href="chapter-27.html#part-3-expert-tips" class="sidebar-section">Part 3: Expert Tips¶</a>
+    <a href="chapter-27.html#summary" class="sidebar-section">Summary¶</a>
+    <a href="chapter-28.html" class="sidebar-part">PART VIII: SPECIALIZED CLI SYSTEMS</a>
+    <a href="chapter-28.html" class="sidebar-chapter">Ch 28: Chapter 28: Specializing Claude Code at the Source C...</a>
+    <a href="chapter-28.html#the-five-customization-layers" class="sidebar-section">The Five Customization Layers¶</a>
+    <a href="chapter-28.html#claude-codes-source-architecture" class="sidebar-section">Claude Code&amp;rsquo;s Source Architecture¶</a>
+    <a href="chapter-28.html#adding-custom-tools-to-the-registry" class="sidebar-section">Adding Custom Tools to the Registry¶</a>
+    <a href="chapter-28.html#modifying-the-agentic-loop" class="sidebar-section">Modifying the Agentic Loop¶</a>
+    <a href="chapter-28.html#custom-permission-modes" class="sidebar-section">Custom Permission Modes¶</a>
+    <a href="chapter-28.html#building-specialized-cli-products" class="sidebar-section">Building Specialized CLI Products¶</a>
+    <a href="chapter-28.html#deployment-building-and-distributing-your-fork" class="sidebar-section">Deployment: Building and Distributing Your Fork¶</a>
+    <a href="chapter-28.html#when-to-stay-at-layer-4" class="sidebar-section">When to Stay at Layer 4¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-29.html" class="sidebar-chapter">Ch 29: Chapter 29: CLI-to-CLI Protocol — Agent-to-Agent Com...</a>
+    <a href="chapter-29.html#the-vision-cli-agents-that-talk-to-each-other" class="sidebar-section">The Vision: CLI Agents That Talk to Each Other¶</a>
+    <a href="chapter-29.html#designing-the-cli-to-cli-protocol-c2c" class="sidebar-section">Designing the CLI-to-CLI Protocol (C2C)¶</a>
+    <a href="chapter-29.html#implementing-c2c-in-practice" class="sidebar-section">Implementing C2C in Practice¶</a>
+    <a href="chapter-29.html#protocol-patterns" class="sidebar-section">Protocol Patterns¶</a>
+    <a href="chapter-29.html#security-and-governance" class="sidebar-section">Security and Governance¶</a>
+    <a href="chapter-29.html#where-c2c-meets-claude-code-today" class="sidebar-section">Where C2C Meets Claude Code Today¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-30.html" class="sidebar-chapter">Ch 30: Chapter 30: Building Multi-Specialized-CLI Systems</a>
+    <a href="chapter-30.html#why-multi-cli-architecture" class="sidebar-section">Why Multi-CLI Architecture¶</a>
+    <a href="chapter-30.html#architecture-patterns" class="sidebar-section">Architecture Patterns¶</a>
+    <a href="chapter-30.html#state-management-across-agents" class="sidebar-section">State Management Across Agents¶</a>
+    <a href="chapter-30.html#building-the-orchestrator" class="sidebar-section">Building the Orchestrator¶</a>
+    <a href="chapter-30.html#dynamic-task-decomposition" class="sidebar-section">Dynamic Task Decomposition¶</a>
+    <a href="chapter-30.html#complete-end-to-end-example" class="sidebar-section">Complete End-to-End Example¶</a>
+    <a href="chapter-30.html#failure-handling-and-resilience" class="sidebar-section">Failure Handling and Resilience¶</a>
+    <a href="chapter-30.html#production-deployment" class="sidebar-section">Production Deployment¶</a>
+    <a href="chapter-30.html#message-tracing" class="sidebar-section">Message Tracing¶</a>
+    <a href="chapter-30.html#the-future-of-multi-cli-systems" class="sidebar-section">The Future of Multi-CLI Systems¶</a>
+    <a href="chapter-30.html#chapter-summary" class="sidebar-section">Chapter Summary¶</a>
+    <a href="chapter-30.html#appendices" class="sidebar-part">APPENDICES</a>
+</nav>
+<main class="main">
+<h1 id="chapter-23-multi-file-refactoring-at-scale">Chapter 23: Multi-File Refactoring at Scale<a class="headerlink" href="#chapter-23-multi-file-refactoring-at-scale">¶</a> <span class="reading-time">~32 min read</span></h1>
+<p>You&rsquo;re staring at a 2,400-line <code>OrderController.ts</code> that handles order creation, payment processing, inventory checks, email notifications, audit logging, and PDF receipt generation. Everyone on the team agrees it needs to be broken up. Nobody wants to do it. The file has 47 imports and is touched by every PR.</p>
+<p>This is where Claude Code becomes the most valuable tool in your arsenal. Multi-file refactoring — the systematic restructuring of code across dozens of files while maintaining correctness — is the task that most dramatically separates Claude Code from other AI tools. It can hold the full dependency graph in context, make coordinated changes across files, and verify correctness at every step.</p>
+<p>But &ldquo;refactor this&rdquo; is not a strategy. This chapter gives you the strategies.</p>
+<h2 id="why-multi-file-refactoring-is-hard">Why Multi-File Refactoring Is Hard<a class="headerlink" href="#why-multi-file-refactoring-is-hard">¶</a></h2>
+<p>Single-file changes are straightforward: read the file, make the change, run the test. Multi-file refactoring introduces three challenges that compound:</p>
+<ol>
+<li><strong>Dependency chains</strong> — Changing a function signature in file A requires updating every caller in files B through Z. Miss one and the build breaks.</li>
+<li><strong>Ordering sensitivity</strong> — Some changes must happen before others. Moving a function to a new module before updating imports creates a window where the code is broken.</li>
+<li><strong>Consistency requirements</strong> — A rename that&rsquo;s applied to 18 of 20 files is worse than not renaming at all. Partial refactors create confusion.</li>
+</ol>
+<p>Claude Code handles all three because it can search the entire codebase (<code>Grep</code>, <code>Glob</code>), make precise edits across files (<code>Edit</code> with <code>replace_all</code>), and verify results after each step (<code>Bash</code> to run tests). The key is giving it the right strategy.</p>
+<h2 id="strategy-1-plan-mode-for-complex-refactors">Strategy 1: Plan Mode for Complex Refactors<a class="headerlink" href="#strategy-1-plan-mode-for-complex-refactors">¶</a></h2>
+<p><strong>Plan mode</strong> is Claude Code&rsquo;s read-only exploration mode. When you enter plan mode, Claude can read files, search the codebase, and analyze dependencies — but it cannot write, edit, or execute commands. This constraint forces it to think before acting.</p>
+<h3 id="when-to-use-plan-mode">When to Use Plan Mode<a class="headerlink" href="#when-to-use-plan-mode">¶</a></h3>
+<p>Use plan mode when:
+- The refactor affects 5+ files
+- You&rsquo;re not sure about the decomposition
+- Circular dependencies might exist
+- The change affects public APIs that other teams consume
+- You want to understand the blast radius before touching anything</p>
+<h3 id="the-workflow">The Workflow<a class="headerlink" href="#the-workflow">¶</a></h3>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Step 1: Enter plan mode
+Step 2: Claude explores the codebase (read-only)
+Step 3: Claude designs a step-by-step refactoring plan
+Step 4: You review and approve (or modify) the plan
+Step 5: Claude executes the approved plan
+Step 6: You verify at each checkpoint
+</code></pre></div>
+<h3 id="complete-walkthrough-planning-a-service-extraction">Complete Walkthrough: Planning a Service Extraction<a class="headerlink" href="#complete-walkthrough-planning-a-service-extraction">¶</a></h3>
+<p>Here is the exact interaction, from the prompt you type through the complete plan Claude generates, to partial execution.</p>
+<p><strong>Your prompt to enter plan mode:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Enter plan mode.
+
+I want to refactor src/services/order-service.ts (2400 lines) into:
+1. OrderCreationService — handles order creation flow
+2. PaymentService — processes payments via Stripe
+3. InventoryService — stock checks and reservations
+4. NotificationService — email/SMS notifications
+5. OrderController — thin controller that orchestrates
+
+Map all internal and external dependencies. Identify the safest 
+decomposition order. Create a step-by-step plan where each step 
+leaves the codebase in a working state.
+</code></pre></div>
+<p><strong>What Claude does in plan mode:</strong></p>
+<p>Claude reads the file, searches for all import references across the project, maps internal function calls, and produces something like this:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>## Refactoring Plan: order-service.ts Decomposition
+
+### Current State Analysis
+- order-service.ts: 2,400 lines, 47 imports, 23 exported functions
+- Called by: 8 route handlers in src/routes/orders.ts
+              3 cron jobs in src/cron/order-jobs.ts
+              2 webhook handlers in src/webhooks/stripe.ts
+              1 admin endpoint in src/routes/admin.ts
+- External dependencies:
+    - stripe (payment processing)
+    - @sendgrid/mail (email)
+    - pdfkit (receipt generation)
+    - ioredis (caching)
+    - pg (database queries)
+
+### Internal Dependency Graph
+
+  createOrder() ──► checkStock() ──► reserveItems()
+       │                                    │
+       ├──────► processPayment()            │
+       │              │                     │
+       ├──────► sendOrderConfirmation() ◄───┘
+       │
+       ├──────► logOrderCreated()
+       │
+       └──────► generateReceipt()
+
+  cancelOrder() ──► releaseReservation()
+       │
+       ├──────► processRefund()
+       │
+       ├──────► sendCancellationEmail()
+       │
+       └──────► logOrderCancelled()
+
+### Cross-Cutting Concerns
+- Database connection: used by 14 of 23 functions
+- Redis cache: used by checkStock(), getOrder(), listOrders()
+- Error handling: all functions throw OrderServiceError
+
+### Extraction Order (safest → riskiest)
+
+1. AuditService (logOrderCreated, logOrderCancelled, logPaymentProcessed,
+   logRefundIssued) — NO internal callers from other functions. Pure leaf
+   nodes. Zero risk.
+
+2. NotificationService (sendOrderConfirmation, sendShippingUpdate,
+   sendCancellationEmail, generateReceipt) — Called only at end of flows.
+   One dependency on pdfkit. Low risk.
+
+3. PaymentService (processPayment, processRefund, validatePaymentMethod,
+   createPaymentIntent) — Self-contained Stripe logic. Called by
+   createOrder and cancelOrder. Medium risk — webhook handler in
+   src/webhooks/stripe.ts calls processRefund directly.
+
+4. InventoryService (checkStock, reserveItems, releaseReservation,
+   updateStockAfterShipment) — Called during order creation and
+   cancellation. Medium risk — the reserveItems/releaseReservation
+   pair must be atomic.
+
+5. OrderCreationService (createOrder, getOrder, listOrders, updateOrder,
+   cancelOrder) — Depends on ALL above services. Extract last. Highest
+   risk — this is where orchestration logic lives.
+
+### Execution Plan
+
+Step 1: Extract AuditService
+- Create src/services/audit-service.ts
+- Move: logOrderCreated, logPaymentProcessed, logOrderCancelled,
+  logRefundIssued
+- Move related types: AuditEvent, AuditLogEntry
+- Update imports in order-service.ts to use new AuditService
+- Verify: npm test -- --testPathPattern=order
+- Expected: 47 tests pass, zero behavior change
+
+Step 2: Extract NotificationService
+- Create src/services/notification-service.ts
+- Move: sendOrderConfirmation, sendShippingUpdate, sendCancellationEmail,
+  generateReceipt
+- Move dependencies: @sendgrid/mail import, pdfkit import
+- Move related types: NotificationPayload, EmailTemplate
+- Move template constants: ORDER_CONFIRMATION_TEMPLATE, etc.
+- Update call sites in order-service.ts
+- Verify: npm test -- --testPathPattern=&quot;order|notification&quot;
+
+Step 3: Extract PaymentService
+- Create src/services/payment-service.ts
+- Move: processPayment, processRefund, validatePaymentMethod,
+  createPaymentIntent
+- Move: stripe SDK initialization, Stripe types
+- Update call sites in order-service.ts
+- CRITICAL: Update src/webhooks/stripe.ts — it directly calls
+  processRefund. New import path required.
+- Verify: npm test -- --testPathPattern=&quot;order|payment|stripe&quot;
+
+Step 4: Extract InventoryService
+- Create src/services/inventory-service.ts
+- Move: checkStock, reserveItems, releaseReservation,
+  updateStockAfterShipment
+- Keep the reservation atomicity: reserveItems and releaseReservation
+  must share the same database transaction context
+- Update call sites in order-service.ts
+- Verify: npm test -- --testPathPattern=&quot;order|inventory&quot;
+
+Step 5: Reduce OrderController to orchestration
+- Rename remaining order-service.ts to order-controller.ts
+- Inject all four services via constructor
+- Each route handler becomes: parse request → call services →
+  format response
+- Remove all direct database/SDK imports — controller should only
+  import service interfaces
+- Target: under 200 lines
+- Verify: full test suite (npm test)
+
+Step 6: Clean up
+- Update barrel exports in src/services/index.ts
+- Remove any dead imports
+- Update src/routes/orders.ts to inject services into controller
+- Run full test suite
+- Grep for old import paths to confirm zero references remain
+
+### Risk Assessment
+- Highest risk: Step 3 (PaymentService) — the webhook handler is an
+  external caller that test coverage might miss
+- Mitigation: Manually verify stripe webhook integration test exists
+  before starting Step 3
+</code></pre></div>
+<p><strong>This is why plan mode exists.</strong> That analysis identified that <code>src/webhooks/stripe.ts</code> directly calls <code>processRefund</code> — something you might have missed if Claude had just started extracting code. Without plan mode, you&rsquo;d discover the broken webhook handler when the Stripe integration test fails (best case) or when a customer&rsquo;s refund doesn&rsquo;t process (worst case).</p>
+<p><strong>Reviewing and adjusting the plan:</strong></p>
+<p>After reading the plan, you might say:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Good plan. Two changes:
+1. Combine Steps 1 and 2 into a single step — AuditService and 
+   NotificationService are both leaf nodes with no interdependencies.
+2. Before Step 3, add a step to verify the Stripe webhook integration 
+   test exists. If it doesn't, write it first.
+
+Execute the adjusted plan, starting with the combined Step 1.
+</code></pre></div>
+<p>Claude exits plan mode and begins executing. It creates both services, moves the functions, updates all import paths, runs the tests, and reports the results. You review the diff, commit, and say &ldquo;Execute Step 2&rdquo; (the webhook test verification).</p>
+<h3 id="the-critical-insight-about-plan-mode">The Critical Insight About Plan Mode<a class="headerlink" href="#the-critical-insight-about-plan-mode">¶</a></h3>
+<p>Plan mode is not just &ldquo;think before you code.&rdquo; It&rsquo;s a forcing function that produces an artifact — the plan — that you can review, modify, and reference throughout execution. Without it, Claude holds the plan in its conversational context, which degrades as the conversation grows. With it, the plan is explicit and reviewable.</p>
+<h2 id="strategy-2-the-worktree-approach">Strategy 2: The Worktree Approach<a class="headerlink" href="#strategy-2-the-worktree-approach">¶</a></h2>
+<p>For risky refactors where you might need to throw away everything and start over, <strong>worktree isolation</strong> gives you a full safety net — not just <code>git stash</code>, but a completely separate working directory with its own branch.</p>
+<h3 id="how-git-worktrees-work">How Git Worktrees Work<a class="headerlink" href="#how-git-worktrees-work">¶</a></h3>
+<p>A <strong>git worktree</strong> is a separate checkout of your repository with its own working directory and branch. Changes in the worktree don&rsquo;t affect your main working directory until you explicitly merge.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Your main directory:    ~/project/               (branch: main)
+Worktree:               ~/project/.claude/worktrees/refactor-auth/
+                                                  (branch: refactor-auth)
+</code></pre></div>
+<p>Both directories share the same <code>.git</code> database, so commits in the worktree are visible from the main directory once you merge. But the working files are completely separate — an experimental change in the worktree cannot corrupt your main branch.</p>
+<h3 id="the-complete-worktree-workflow">The Complete Worktree Workflow<a class="headerlink" href="#the-complete-worktree-workflow">¶</a></h3>
+<p><strong>Step 1: Create the worktree</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Create a worktree for refactoring the authentication module.
+</code></pre></div>
+<p>Claude creates a worktree under <code>.claude/worktrees/</code>, creates a new branch, and switches its working context to the worktree directory. From this point, every file read, edit, and bash command operates in the worktree — your main directory is untouched.</p>
+<p><strong>Step 2: Do the refactoring work</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Refactor src/auth/ to use a strategy pattern for authentication 
+providers. Currently we have if/else chains for Google, GitHub, 
+and email/password. Each provider should be a separate class 
+implementing an AuthProvider interface.
+</code></pre></div>
+<p>Claude works freely. It creates new files, moves code, updates imports, runs tests. If something breaks, it fixes it. If the approach isn&rsquo;t working, you have options.</p>
+<p><strong>Step 3a: The refactor succeeds</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>The refactor looks good. All tests pass. Merge it back to main.
+</code></pre></div>
+<p>Claude exits the worktree, merges the branch into main (or creates a PR if you prefer code review), and removes the worktree directory.</p>
+<p><strong>Step 3b: The refactor fails</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>This approach isn't working. The strategy pattern adds too much 
+complexity for three providers. Discard the worktree.
+</code></pre></div>
+<p>Claude discards the worktree and its branch. Your main directory is exactly as you left it. Zero cleanup required. No <code>git stash pop</code>, no <code>git reset --hard</code>, no &ldquo;which changes were mine and which were the refactor?&rdquo;</p>
+<h3 id="when-to-use-worktrees">When to Use Worktrees<a class="headerlink" href="#when-to-use-worktrees">¶</a></h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Use Worktree?</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Experimental refactor (might not work)</td>
+<td>Yes</td>
+<td>Free rollback</td>
+</tr>
+<tr>
+<td>Large refactor spanning multiple sessions</td>
+<td>Yes</td>
+<td>Isolates work-in-progress from main</td>
+</tr>
+<tr>
+<td>Refactor you want to PR before merging</td>
+<td>Yes</td>
+<td>Branch is ready for review</td>
+</tr>
+<tr>
+<td>Trying two approaches to compare</td>
+<td>Yes (two worktrees)</td>
+<td>Compare side by side</td>
+</tr>
+<tr>
+<td>Small, confident refactor (&lt;5 files)</td>
+<td>No</td>
+<td>Overhead not worth it</td>
+</tr>
+<tr>
+<td>Mechanical rename across 30 files</td>
+<td>No</td>
+<td>Low risk, use batch instead</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="parallel-worktrees-for-ab-refactoring">Parallel Worktrees for A/B Refactoring<a class="headerlink" href="#parallel-worktrees-for-ab-refactoring">¶</a></h3>
+<p>When you&rsquo;re not sure which approach is better, create two worktrees:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Create two worktrees:
+1. refactor-strategy-pattern — refactor auth using the strategy pattern
+2. refactor-functional — refactor auth using functional composition
+
+In each worktree, implement the approach and run the full test suite.
+Report back: lines of code, test results, and which approach you 
+recommend.
+</code></pre></div>
+<p>Claude creates both worktrees, implements each approach in isolation, and provides a comparison. You keep the better one and discard the other.</p>
+<h2 id="strategy-3-the-batch-command">Strategy 3: The /batch Command<a class="headerlink" href="#strategy-3-the-batch-command">¶</a></h2>
+<p>The <code>/batch</code> command is Claude Code&rsquo;s parallel execution engine. It&rsquo;s designed for mechanical changes — the same transformation applied to many files simultaneously, using worktrees for isolation and agents for parallelism.</p>
+<h3 id="how-batch-works-internally">How /batch Works Internally<a class="headerlink" href="#how-batch-works-internally">¶</a></h3>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>┌─────────────────────────────────────────────┐
+│ /batch &quot;Update error format in src/api/&quot;    │
+└──────────────────┬──────────────────────────┘
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+   ┌──────────────┐  ┌──────────────┐
+   │ Worktree A   │  │ Worktree B   │
+   │ Agent 1      │  │ Agent 2      │
+   │ Files 1-15   │  │ Files 16-30  │
+   └──────┬───────┘  └──────┬───────┘
+          │                 │
+          ▼                 ▼
+   ┌──────────────────────────────┐
+   │ Merge results back           │
+   │ Report: 30 files changed     │
+   │ Show any conflicts            │
+   └──────────────────────────────┘
+</code></pre></div>
+<ol>
+<li>Claude identifies all affected files using <code>Grep</code> and <code>Glob</code></li>
+<li>Splits them into groups (typically by directory or dependency)</li>
+<li>Creates parallel worktrees — one per agent</li>
+<li>Each agent applies the transformation independently</li>
+<li>Results merge back into your working directory</li>
+<li>Any merge conflicts are presented for manual resolution</li>
+</ol>
+<h3 id="when-to-use-batch-vs-plan-mode">When to Use /batch vs. Plan Mode<a class="headerlink" href="#when-to-use-batch-vs-plan-mode">¶</a></h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Criteria</th>
+<th>/batch</th>
+<th>Plan Mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Same transformation across many files</td>
+<td>Yes</td>
+<td>Overkill</td>
+</tr>
+<tr>
+<td>Each file can be changed independently</td>
+<td>Required</td>
+<td>Not required</td>
+</tr>
+<tr>
+<td>Order matters</td>
+<td>Not supported</td>
+<td>Supports ordered steps</td>
+</tr>
+<tr>
+<td>Changes depend on each other</td>
+<td>Not supported</td>
+<td>Handles dependencies</td>
+</tr>
+<tr>
+<td>10+ files with the same change</td>
+<td>Sweet spot</td>
+<td>Too slow</td>
+</tr>
+<tr>
+<td>Complex decomposition with shared state</td>
+<td>Wrong tool</td>
+<td>Correct tool</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="complete-batch-example">Complete /batch Example<a class="headerlink" href="#complete-batch-example">¶</a></h3>
+<p>You&rsquo;ve decided to standardize all API error responses across 28 route files:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>/batch &quot;In all files matching src/api/routes/**/*.ts, replace 
+the old error format:
+  res.status(XXX).json({ error: message })
+with the new standardized format:
+  res.status(XXX).json({ 
+    error: { 
+      code: ERROR_CODE_CONSTANT, 
+      message, 
+      timestamp: new Date().toISOString(),
+      requestId: req.headers['x-request-id'] 
+    } 
+  })
+
+Import { ErrorCode } from '@/types/errors' at the top of each file 
+if not already imported.
+
+Map each HTTP status to the correct ErrorCode:
+- 400 → ErrorCode.BAD_REQUEST
+- 401 → ErrorCode.UNAUTHORIZED
+- 403 → ErrorCode.FORBIDDEN
+- 404 → ErrorCode.NOT_FOUND
+- 409 → ErrorCode.CONFLICT
+- 422 → ErrorCode.VALIDATION_ERROR
+- 500 → ErrorCode.INTERNAL_ERROR&quot;
+</code></pre></div>
+<p>Claude splits the 28 files across agents. Each agent reads its assigned files, applies the transformation, adds the import if needed, and maps the status codes. Within a few minutes you get a summary:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Batch complete:
+  28 files modified
+  73 error responses updated
+  14 files needed ErrorCode import added
+  0 conflicts
+  All agents completed successfully
+</code></pre></div>
+<p>You then run the test suite once to verify everything works.</p>
+<h3 id="manual-batch-pattern">Manual Batch Pattern<a class="headerlink" href="#manual-batch-pattern">¶</a></h3>
+<p>If you&rsquo;re not using <code>/batch</code>, you can achieve similar results with an explicit prompt:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Find all files matching src/routes/**/*.ts that contain 
+res.status(4xx).json({ error: ... }).
+
+For each file:
+1. Replace the old error format with the new standardized format
+2. Import the ErrorResponse type from src/types/errors.ts
+3. Use the correct HTTP error code constant
+
+Show me a summary when done: file name, number of changes per file.
+</code></pre></div>
+<p>Claude uses <code>Grep</code> to find all matching files, reads each one, applies the transformation with <code>Edit</code>, and reports the summary. This is sequential rather than parallel, so it&rsquo;s slower on large codebases, but it doesn&rsquo;t require the <code>/batch</code> infrastructure.</p>
+<h2 id="strategy-4-progressive-refactoring">Strategy 4: Progressive Refactoring<a class="headerlink" href="#strategy-4-progressive-refactoring">¶</a></h2>
+<p>For refactors that can&rsquo;t be batched (each step depends on the previous), <strong>progressive refactoring</strong> breaks the work into safe stages where each stage leaves the code working.</p>
+<h3 id="when-to-use-progressive-refactoring">When to Use Progressive Refactoring<a class="headerlink" href="#when-to-use-progressive-refactoring">¶</a></h3>
+<p>Use this when:
+- The refactor has dependencies between steps
+- You want to commit at safe points
+- The full refactor is too large for a single session
+- You need to be able to stop and resume
+- Each intermediate state must be deployable</p>
+<h3 id="example-migrating-from-callbacks-to-asyncawait">Example: Migrating from Callbacks to Async/Await<a class="headerlink" href="#example-migrating-from-callbacks-to-asyncawait">¶</a></h3>
+<p>This migration can&rsquo;t be batched because converting a function to async changes its return type, which affects all callers, which might also need to become async.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Step 1: &quot;Add async versions of the 3 database functions in 
+src/db/queries.ts. Name them getUser_async, getOrders_async, 
+getProducts_async. Keep the old callback versions working.&quot;
+</code></pre></div>
+<p>Run tests. Both old and new versions work.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Step 2: &quot;Update src/services/user-service.ts to use the async 
+versions. Make the service methods async. Keep the old callback 
+versions of the service methods as deprecated wrappers.&quot;
+</code></pre></div>
+<p>Run tests. User service works with async, other services still use callbacks.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Step 3: &quot;Update src/services/order-service.ts to use async. 
+Same pattern: async methods + deprecated callback wrappers.&quot;
+</code></pre></div>
+<p>Run tests.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Step 4: &quot;Update all route handlers in src/routes/ to use the 
+async service methods. Remove the callback wrappers.&quot;
+</code></pre></div>
+<p>Run tests.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Step 5: &quot;Remove the old callback database functions. Remove all 
+deprecated wrappers. Clean up any unused imports.&quot;
+</code></pre></div>
+<p>Run full test suite.</p>
+<p>Each step is independently deployable. If step 3 reveals a problem, you can revert to step 2 without losing steps 1-2&rsquo;s progress.</p>
+<h3 id="the-commit-after-each-step-pattern">The Commit-After-Each-Step Pattern<a class="headerlink" href="#the-commit-after-each-step-pattern">¶</a></h3>
+<p>Progressive refactoring pairs naturally with frequent commits:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>After each step:
+1. Run tests: pytest -x (or npm test)
+2. If tests pass: git add the changed files, commit with 
+   message describing what this step accomplished
+3. If tests fail: fix the failure before proceeding
+
+This way I can git revert any individual step if needed.
+</code></pre></div>
+<h2 id="specific-refactoring-patterns">Specific Refactoring Patterns<a class="headerlink" href="#specific-refactoring-patterns">¶</a></h2>
+<h3 id="rename-refactoring-comprehensive">Rename Refactoring (Comprehensive)<a class="headerlink" href="#rename-refactoring-comprehensive">¶</a></h3>
+<p>Renaming a type, class, or interface across an entire codebase is the bread-and-butter of multi-file refactoring. Your IDE can handle simple renames, but when the name appears in strings, config files, database queries, documentation, and test fixtures, you need Claude Code&rsquo;s understanding of context.</p>
+<p>Here&rsquo;s a complete example: renaming <code>UserManager</code> to <code>UserService</code> across a 25-file codebase.</p>
+<p><strong>The prompt:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Rename UserManager to UserService everywhere in the codebase.
+
+This includes:
+- The class definition and its file name
+- All imports (update the import path)
+- All type annotations referencing UserManager
+- All variable names (userManager → userService, user_manager → user_service)
+- All comments and documentation
+- All test files and test references
+- Config files that reference the class name
+- Database seed files that might reference it
+- CI/CD pipeline configs
+
+After renaming, grep the entire codebase for &quot;UserManager&quot; and 
+&quot;userManager&quot; and &quot;user_manager&quot; to verify zero references remain.
+</code></pre></div>
+<p><strong>What Claude does, step by step:</strong></p>
+<ol>
+<li><strong>Find all references</strong> — Claude runs three Grep searches:</li>
+</ol>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Grep(&quot;UserManager&quot;) → finds class def, imports, type annotations
+Grep(&quot;userManager&quot;) → finds variable names, object properties
+Grep(&quot;user_manager&quot;) → finds snake_case references (config, Python)
+</code></pre></div>
+<p>This produces a complete list. For a real codebase, it might look like:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>src/services/user-manager.ts         — class definition (1 reference)
+src/services/index.ts                — barrel export (1 reference)
+src/controllers/auth-controller.ts   — import + usage (3 references)
+src/controllers/admin-controller.ts  — import + usage (2 references)
+src/middleware/auth.ts               — import + usage (2 references)
+src/routes/user-routes.ts            — import + usage (4 references)
+src/routes/admin-routes.ts           — import + usage (2 references)
+src/types/services.ts                — type reference (1 reference)
+src/di/container.ts                  — DI registration (3 references)
+src/config/services.yaml             — service name (1 reference)
+tests/services/user-manager.test.ts  — import + 12 test references
+tests/controllers/auth.test.ts       — mock reference (3 references)
+tests/integration/user-flow.test.ts  — factory reference (2 references)
+docs/architecture.md                 — documentation (4 references)
+docker-compose.yml                   — service name (1 reference)
+README.md                            — documentation (2 references)
+</code></pre></div>
+<ol>
+<li>
+<p><strong>Rename the file first</strong> — <code>user-manager.ts</code> → <code>user-service.ts</code></p>
+</li>
+<li>
+<p><strong>Update the class definition:</strong></p>
+</li>
+</ol>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// Before
+export class UserManager {
+// After
+export class UserService {
+</code></pre></div>
+<ol>
+<li><strong>Update each file using Edit with replace_all:</strong></li>
+</ol>
+<p>For each file, Claude uses the <code>Edit</code> tool with <code>replace_all: true</code> to replace every occurrence in that file. For the import updates, it changes both the class name and the file path:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// Before
+import { UserManager } from '../services/user-manager';
+// After
+import { UserService } from '../services/user-service';
+</code></pre></div>
+<p>For variable names:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// Before
+const userManager = new UserManager(db);
+// After
+const userService = new UserService(db);
+</code></pre></div>
+<p>For the DI container:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// Before
+container.register('userManager', UserManager);
+// After
+container.register('userService', UserService);
+</code></pre></div>
+<p>For the YAML config:</p>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-yaml"># Before
+user_manager:
+  timeout: 30
+# After
+user_service:
+  timeout: 30
+</code></pre></div>
+<ol>
+<li>
+<p><strong>Rename the test file</strong> — <code>user-manager.test.ts</code> → <code>user-service.test.ts</code></p>
+</li>
+<li>
+<p><strong>Final verification</strong> — Claude runs three Grep searches to confirm zero references remain:</p>
+</li>
+</ol>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Grep(&quot;UserManager&quot;) → 0 results
+Grep(&quot;userManager&quot;) → 0 results
+Grep(&quot;user_manager&quot;) → 0 results (except git history)
+</code></pre></div>
+<ol>
+<li><strong>Run tests</strong> — Confirms all tests pass with the new names.</li>
+</ol>
+<p>The entire operation touches 16 files and makes ~45 individual replacements. Done manually, this takes 30-45 minutes and you&rsquo;ll miss at least one reference. Claude Code does it in under 2 minutes with zero misses.</p>
+<h3 id="extract-module-pattern">Extract Module Pattern<a class="headerlink" href="#extract-module-pattern">¶</a></h3>
+<p>Taking a monolithic file and splitting it into well-organized modules is one of the most common refactoring tasks. Here&rsquo;s the complete pattern.</p>
+<p><strong>Starting point:</strong> <code>src/utils/helpers.ts</code> — a 1,200-line &ldquo;junk drawer&rdquo; that every file in the project imports from.</p>
+<p><strong>The prompt:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Read src/utils/helpers.ts completely. Categorize every exported 
+function by responsibility:
+
+- String manipulation (formatName, slugify, truncate, etc.)
+- Date/time operations (formatDate, parseTimestamp, getRelativeTime, etc.)
+- Validation (isEmail, isUUID, isPhoneNumber, etc.)
+- HTTP utilities (parseQueryString, buildUrl, sanitizeHeaders, etc.)
+- Crypto (hashPassword, generateToken, verifySignature, etc.)
+
+Then extract each category into its own module:
+- src/utils/strings.ts
+- src/utils/dates.ts
+- src/utils/validation.ts
+- src/utils/http.ts
+- src/utils/crypto.ts
+
+Update src/utils/index.ts to re-export everything from the new 
+modules (backward compatibility). Then find every file that imports 
+from helpers.ts and update to import from the specific module instead.
+
+Delete helpers.ts only after all imports are updated and tests pass.
+</code></pre></div>
+<p><strong>Why backward compatibility matters:</strong> The re-export from <code>index.ts</code> means the code is never broken, even mid-refactor. Any file still importing from <code>@/utils</code> continues to work. You can update the imports progressively (or all at once), and the re-exports serve as a safety net until every import is updated.</p>
+<p><strong>Claude&rsquo;s execution:</strong></p>
+<ol>
+<li>Read the file, categorize 34 exported functions into 5 groups</li>
+<li>Create five new modules, moving functions and their dependencies</li>
+<li>Create <code>src/utils/index.ts</code> that re-exports everything:</li>
+</ol>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// src/utils/index.ts — backward compatibility
+export * from './strings';
+export * from './dates';
+export * from './validation';
+export * from './http';
+export * from './crypto';
+</code></pre></div>
+<ol>
+<li>Run tests — all pass (nothing changed from the consumer&rsquo;s perspective)</li>
+<li>Update imports in 42 files: <code>from '@/utils/helpers'</code> → <code>from '@/utils/strings'</code> (or dates, validation, etc., depending on what&rsquo;s used)</li>
+<li>Run tests again — all pass</li>
+<li>Delete <code>helpers.ts</code></li>
+<li>Final Grep for <code>helpers</code> to confirm no references remain</li>
+</ol>
+<p><strong>The key insight:</strong> The re-export barrel file makes this refactor safe. At no point is the code broken. Even if Claude misses an import update, the barrel file catches it. You can verify by deleting the barrel file at the end — if anything breaks, there&rsquo;s still an import that needs updating.</p>
+<p><strong>Handling internal dependencies between functions:</strong></p>
+<p>The tricky part of module extraction is when functions depend on each other. If <code>formatName</code> in the strings module calls <code>isValidCharset</code> in the validation module, you&rsquo;ve created a cross-module dependency that didn&rsquo;t exist before. Claude handles this by:</p>
+<ol>
+<li>Identifying all internal function calls within <code>helpers.ts</code> before splitting</li>
+<li>Mapping which calls cross category boundaries</li>
+<li>For shared utilities called by multiple categories, creating a <code>src/utils/internal.ts</code> module that both depend on — avoiding circular imports</li>
+<li>For functions that belong to one category but are called by another, using the module&rsquo;s public API (import from the other module) rather than duplicating code</li>
+</ol>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Before extraction, show me a table of cross-category dependencies:
+which functions in each category call functions in a different category.
+If there are circular dependencies, identify shared utilities that 
+should be extracted into a common/internal module first.
+</code></pre></div>
+<p>This pre-analysis prevents the most common module extraction failure: you split the file, discover circular imports, and have to redesign the module boundaries.</p>
+<p><strong>The Python equivalent:</strong></p>
+<p>For Python codebases, the same pattern applies with <code>__init__.py</code> as the barrel file:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-python"># src/utils/__init__.py — backward compatibility
+from .strings import format_name, slugify, truncate
+from .dates import format_date, parse_timestamp, get_relative_time
+from .validation import is_email, is_uuid, is_phone_number
+from .http import parse_query_string, build_url, sanitize_headers
+from .crypto import hash_password, generate_token, verify_signature
+</code></pre></div>
+<p>Old imports (<code>from src.utils import format_name</code>) keep working. New imports (<code>from src.utils.strings import format_name</code>) are more specific and preferred for new code.</p>
+<h3 id="change-function-signature-pattern">Change Function Signature Pattern<a class="headerlink" href="#change-function-signature-pattern">¶</a></h3>
+<p>Changing a function&rsquo;s parameters is dangerous because every caller must be updated simultaneously. Here&rsquo;s a systematic approach.</p>
+<p><strong>Scenario:</strong> You need to add a <code>requestContext</code> parameter to the <code>createOrder</code> function, which is called from 14 different locations across the codebase.</p>
+<p><strong>The prompt:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>I need to add a requestContext: RequestContext parameter as the 
+first argument to createOrder() in src/services/order-service.ts.
+
+Step 1: Find every call site for createOrder across the entire 
+codebase. Show me the full list with file:line.
+
+Step 2: Update the function signature.
+
+Step 3: Update every call site to pass the requestContext. Each 
+caller should get its requestContext from:
+- Route handlers: req.context (already available)
+- Cron jobs: CronContext.create(jobName)
+- Webhook handlers: WebhookContext.create(webhookId)
+- Tests: TestContext.create()
+
+Step 4: Run tests. Fix any failures.
+
+Step 5: Grep for &quot;createOrder(&quot; to verify every call site includes 
+the new parameter.
+</code></pre></div>
+<p><strong>What Claude does:</strong></p>
+<p>First, it finds every call site:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>src/routes/orders.ts:45           — route handler (POST /orders)
+src/routes/orders.ts:89           — route handler (POST /orders/bulk)
+src/routes/admin.ts:123           — admin endpoint
+src/cron/order-processing.ts:34   — cron job
+src/cron/retry-failed.ts:67       — retry cron
+src/webhooks/stripe.ts:89         — payment webhook
+src/webhooks/inventory.ts:45      — inventory webhook
+tests/services/order.test.ts:23   — unit test
+tests/services/order.test.ts:56   — unit test
+tests/services/order.test.ts:89   — unit test
+tests/services/order.test.ts:112  — unit test
+tests/integration/order-flow.test.ts:34  — integration test
+tests/integration/order-flow.test.ts:78  — integration test
+tests/integration/order-flow.test.ts:120 — integration test
+</code></pre></div>
+<p>14 call sites across 8 files. Claude updates the function signature, then updates each caller with the appropriate context source. Route handlers use <code>req.context</code>, cron jobs create a <code>CronContext</code>, webhook handlers create a <code>WebhookContext</code>, and tests use <code>TestContext.create()</code>.</p>
+<p>The critical part is the verification step. Claude runs <code>Grep("createOrder(")</code> and checks that every result includes <code>requestContext</code> as the first argument. Any match that doesn&rsquo;t have it is a missed call site.</p>
+<h3 id="database-migration-refactoring">Database Migration Refactoring<a class="headerlink" href="#database-migration-refactoring">¶</a></h3>
+<p>Database schema changes ripple through every layer of the application. This is the hardest refactoring type because it affects migrations, ORM models, service layer, API types, and tests — all of which must be updated atomically from the database&rsquo;s perspective but can be staged from the code&rsquo;s perspective.</p>
+<p><strong>Scenario:</strong> Splitting a <code>users</code> table&rsquo;s <code>address</code> text column into structured fields: <code>street</code>, <code>city</code>, <code>state</code>, <code>zip</code>, <code>country</code>.</p>
+<p><strong>The prompt:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>I need to split the users.address text column into structured 
+address fields: street, city, state, zip_code, country.
+
+This affects:
+1. Database migration (add new columns, backfill from address, 
+   drop address column)
+2. ORM model (src/models/user.ts)
+3. Service layer (src/services/user-service.ts)
+4. API request/response types (src/types/user.ts)
+5. Route handlers (src/routes/users.ts)
+6. Tests (tests/services/user.test.ts, tests/routes/users.test.ts)
+
+Execute this in order. The migration should be safe for zero-downtime 
+deployment:
+- Phase 1: Add new columns (nullable), deploy code that writes to both
+- Phase 2: Backfill new columns from address
+- Phase 3: Make new columns required, remove reads from old column
+- Phase 4: Drop address column
+
+Implement Phase 1 and Phase 2 now. We'll do Phase 3 and 4 in a 
+follow-up.
+</code></pre></div>
+<p><strong>Phase 1 execution:</strong></p>
+<p>Claude creates the migration:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// migrations/20260401_split_user_address.ts
+import { Knex } from 'knex';
+
+export async function up(knex: Knex): Promise&lt;void&gt; {
+  await knex.schema.alterTable('users', (table) =&gt; {
+    table.string('street', 255).nullable();
+    table.string('city', 100).nullable();
+    table.string('state', 50).nullable();
+    table.string('zip_code', 20).nullable();
+    table.string('country', 100).nullable().defaultTo('US');
+  });
+}
+
+export async function down(knex: Knex): Promise&lt;void&gt; {
+  await knex.schema.alterTable('users', (table) =&gt; {
+    table.dropColumn('street');
+    table.dropColumn('city');
+    table.dropColumn('state');
+    table.dropColumn('zip_code');
+    table.dropColumn('country');
+  });
+}
+</code></pre></div>
+<p>Updates the ORM model to include both old and new fields:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// src/models/user.ts
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  address?: string;        // deprecated — will be removed in Phase 4
+  street?: string;         // new
+  city?: string;           // new
+  state?: string;          // new
+  zip_code?: string;       // new
+  country?: string;        // new
+}
+</code></pre></div>
+<p>Updates the service layer to write to both old and new fields:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// src/services/user-service.ts
+async function updateUserAddress(
+  userId: string,
+  address: StructuredAddress
+): Promise&lt;void&gt; {
+  await db('users').where({ id: userId }).update({
+    // Write to new columns
+    street: address.street,
+    city: address.city,
+    state: address.state,
+    zip_code: address.zipCode,
+    country: address.country,
+    // Write to old column for backward compatibility
+    address: `${address.street}, ${address.city}, ${address.state} ${address.zipCode}, ${address.country}`,
+  });
+}
+</code></pre></div>
+<p><strong>Phase 2 execution:</strong></p>
+<p>Claude creates a backfill migration that parses the existing <code>address</code> text field and populates the structured columns:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// migrations/20260401_backfill_user_address.ts
+import { Knex } from 'knex';
+
+export async function up(knex: Knex): Promise&lt;void&gt; {
+  const users = await knex('users')
+    .whereNotNull('address')
+    .whereNull('street');
+
+  for (const user of users) {
+    const parsed = parseAddress(user.address);
+    await knex('users').where({ id: user.id }).update({
+      street: parsed.street,
+      city: parsed.city,
+      state: parsed.state,
+      zip_code: parsed.zipCode,
+      country: parsed.country || 'US',
+    });
+  }
+}
+
+function parseAddress(address: string): StructuredAddress {
+  // Best-effort parsing of &quot;123 Main St, Springfield, IL 62701, US&quot;
+  const parts = address.split(',').map((p) =&gt; p.trim());
+  const stateZip = (parts[2] || '').split(' ').filter(Boolean);
+  return {
+    street: parts[0] || '',
+    city: parts[1] || '',
+    state: stateZip[0] || '',
+    zipCode: stateZip[1] || '',
+    country: parts[3] || 'US',
+  };
+}
+</code></pre></div>
+<p>After both phases, tests pass. The old <code>address</code> column still works (nothing reads exclusively from it), the new columns are populated, and the code writes to both. Phases 3 and 4 can be deployed separately once you&rsquo;re confident the backfill is correct.</p>
+<p><strong>Why this pattern matters:</strong> Database migrations are irreversible in production. The phased approach means you can deploy Phase 1, monitor for issues, deploy Phase 2, verify data, and only then proceed to Phase 3 (removing the old column). At every phase, the application works correctly.</p>
+<h2 id="maintaining-consistency">Maintaining Consistency<a class="headerlink" href="#maintaining-consistency">¶</a></h2>
+<p>Partial refactors are worse than no refactor at all. A codebase where half the error responses use the old format and half use the new format is a codebase where nobody knows which format to follow. These techniques ensure your refactor is complete.</p>
+<h3 id="atomic-commits-per-refactoring-step">Atomic Commits Per Refactoring Step<a class="headerlink" href="#atomic-commits-per-refactoring-step">¶</a></h3>
+<p>Each commit should represent a complete logical transformation. Not &ldquo;updated 3 of 7 files&rdquo; but &ldquo;migrated all route handlers to new error format.&rdquo;</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>After each refactoring step, before committing:
+1. Grep for the OLD pattern — should return zero results
+2. Grep for the NEW pattern — should return the expected count
+3. Run the test suite
+4. Only commit if all three checks pass
+
+If the old pattern still exists in some files, update those files 
+before committing. A partial migration should never be committed.
+</code></pre></div>
+<h3 id="the-completeness-check">The Completeness Check<a class="headerlink" href="#the-completeness-check">¶</a></h3>
+<p>After any rename or pattern change, always verify completeness:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Verify the refactoring is complete:
+
+1. Grep for the old pattern in ALL file types (not just .ts):
+   - Source files (*.ts, *.tsx, *.js)
+   - Config files (*.json, *.yaml, *.yml, *.toml)
+   - Test files (*.test.ts, *.spec.ts)
+   - Documentation (*.md)
+   - CI/CD configs (.github/*, Dockerfile, docker-compose.yml)
+   - Scripts (*.sh)
+
+2. If any references remain, update them.
+3. Show me the final count: zero old references, N new references.
+</code></pre></div>
+<h3 id="the-barrel-file-strategy">The Barrel File Strategy<a class="headerlink" href="#the-barrel-file-strategy">¶</a></h3>
+<p>When splitting a module, create a barrel file (index.ts or <strong>init</strong>.py) that re-exports everything from the new locations. This provides backward compatibility during the transition:</p>
+<div class="code-block"><span class="code-lang">typescript</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-typescript">// src/utils/index.ts — temporary barrel for backward compatibility
+export { formatName, slugify, truncate } from './strings';
+export { formatDate, parseTimestamp } from './dates';
+export { isEmail, isUUID } from './validation';
+</code></pre></div>
+<p>Old imports (<code>from '@/utils'</code>) keep working. New code uses specific imports (<code>from '@/utils/strings'</code>). Over time, update all old imports to specific ones. When the barrel file has zero importers, delete it.</p>
+<h3 id="lint-rules-as-guardrails">Lint Rules as Guardrails<a class="headerlink" href="#lint-rules-as-guardrails">¶</a></h3>
+<p>For long-running refactors that span multiple sessions, add a lint rule to prevent regression:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Add an ESLint rule (or a comment in CLAUDE.md) that prevents 
+new code from using the old pattern. For example, after renaming 
+UserManager to UserService:
+
+&quot;Do not use UserManager anywhere in new code. 
+The class was renamed to UserService.&quot;
+</code></pre></div>
+<p>This prevents other developers (or future Claude Code sessions) from accidentally reintroducing the old pattern.</p>
+<h2 id="rollback-strategies">Rollback Strategies<a class="headerlink" href="#rollback-strategies">¶</a></h2>
+<p>Refactoring goes wrong. A test you didn&rsquo;t know about breaks. A runtime behavior changes that unit tests don&rsquo;t cover. A configuration file was missed. Here&rsquo;s how to recover.</p>
+<h3 id="git-reset-to-last-safe-commit">Git Reset to Last Safe Commit<a class="headerlink" href="#git-reset-to-last-safe-commit">¶</a></h3>
+<p>If you committed after each step (as recommended), rolling back is trivial:</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash"># See the refactoring commits
+git log --oneline -10
+
+# Revert the last step
+git revert HEAD
+
+# Or revert to a specific safe point
+git revert HEAD~3..HEAD
+</code></pre></div>
+<p>The key is that each commit is a complete, working state. You&rsquo;re not reverting to a half-broken intermediate state.</p>
+<h3 id="git-stash-for-quick-experiments">Git Stash for Quick Experiments<a class="headerlink" href="#git-stash-for-quick-experiments">¶</a></h3>
+<p>When you want to try something without committing:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Stash the current changes before trying an alternative approach.
+If the alternative works, drop the stash. If not, pop the stash 
+to restore the original approach.
+</code></pre></div>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash">git stash push -m &quot;refactor: approach A (WIP)&quot;
+# Try approach B...
+# If B fails:
+git stash pop
+# If B works:
+git stash drop
+</code></pre></div>
+<h3 id="branch-comparison">Branch Comparison<a class="headerlink" href="#branch-comparison">¶</a></h3>
+<p>When you&rsquo;re not sure if the refactor changed behavior:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Compare the behavior of the refactored code against the original.
+
+1. Run the test suite on the current branch (refactored)
+2. Show me any test output differences vs. main branch
+3. If there are differences, show me the git diff for the 
+   files that produce different behavior
+</code></pre></div>
+<h3 id="cherry-pick-recovery">Cherry-Pick Recovery<a class="headerlink" href="#cherry-pick-recovery">¶</a></h3>
+<p>When a multi-step refactor partially fails and you want to keep the good steps:</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash"># You're on a branch with steps 1-5
+# Steps 1-3 are good, step 4 broke things
+
+# Create a new branch from before the refactor
+git checkout main
+git checkout -b refactor-take-2
+
+# Cherry-pick only the good steps
+git cherry-pick &lt;commit-hash-step-1&gt;
+git cherry-pick &lt;commit-hash-step-2&gt;
+git cherry-pick &lt;commit-hash-step-3&gt;
+
+# Now redo step 4 with a different approach
+</code></pre></div>
+<h3 id="the-rewind-escape-hatch">The /rewind Escape Hatch<a class="headerlink" href="#the-rewind-escape-hatch">¶</a></h3>
+<p>If a refactoring step goes sideways mid-execution — Claude is making changes but hasn&rsquo;t committed and things are breaking:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>/rewind
+</code></pre></div>
+<p>This rolls the conversation back to a previous point. Combined with <code>git checkout .</code> to restore files, you can revert both the conversation state and the file state to any safe checkpoint.</p>
+<p><strong>Important:</strong> <code>/rewind</code> resets the conversation, not the filesystem. You need to restore files separately:</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash"># Restore all modified files to their last committed state
+git checkout .
+
+# Or restore specific files
+git checkout -- src/services/order-service.ts
+</code></pre></div>
+<h3 id="the-diff-before-commit-gate">The Diff-Before-Commit Gate<a class="headerlink" href="#the-diff-before-commit-gate">¶</a></h3>
+<p>Never commit blindly after a refactoring step. Always review what changed:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Before committing, show me:
+1. git diff --stat (which files changed and how much)
+2. git diff --name-only (just file names, cleaner view)
+3. If any UNEXPECTED file appears, show me the diff for 
+   that file specifically
+
+I only want to commit files that are part of this refactoring step.
+</code></pre></div>
+<p>This catches the common issue of Claude making &ldquo;helpful&rdquo; changes to files outside the refactoring scope. If you asked Claude to extract a PaymentService and it also &ldquo;improved&rdquo; the error handling in three unrelated files, you want to know before committing.</p>
+<p>Stage only the files from this refactoring step, not everything:</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-bash"># Stage only the files from this refactoring step
+git add src/services/payment-service.ts src/services/order-service.ts
+# NOT git add -A (which would stage everything)
+
+git diff --cached --stat  # Review what you're about to commit
+</code></pre></div>
+<h3 id="test-selection-for-speed">Test Selection for Speed<a class="headerlink" href="#test-selection-for-speed">¶</a></h3>
+<p>Running the full test suite after every refactoring step is correct but slow. On a large codebase with 2,000 tests, the full suite might take 5 minutes. When you&rsquo;re doing a 6-step refactor, that&rsquo;s 30 minutes of waiting.</p>
+<p>The faster approach:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>After this step, run only the tests related to the files we changed:
+- pytest tests/services/test_payment.py -x (stop on first failure)
+- pytest tests/integration/test_order_flow.py -x
+
+Save the full suite for after the final step.
+</code></pre></div>
+<p>The <code>-x</code> flag (pytest) or <code>--bail</code> flag (Jest) stops on the first failure, giving you immediate feedback rather than running 2,000 tests when test #3 already failed.</p>
+<h2 id="large-codebase-techniques">Large Codebase Techniques<a class="headerlink" href="#large-codebase-techniques">¶</a></h2>
+<p>Everything above works for codebases under a few hundred files. When you&rsquo;re working with 1,000+ files, you hit Claude Code&rsquo;s context window limits and need different strategies.</p>
+<h3 id="context-window-management">Context Window Management<a class="headerlink" href="#context-window-management">¶</a></h3>
+<p>Claude Code can hold roughly 100-200 files in context before performance degrades. For larger codebases, you need to be strategic about what Claude reads.</p>
+<p><strong>The scoped exploration pattern:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>I need to rename the ApiResponse type to ServiceResponse across 
+the entire codebase. But the codebase has 2,000+ files.
+
+Step 1: Grep for &quot;ApiResponse&quot; and show me ONLY the file paths 
+and match counts. Don't read the files yet.
+
+Step 2: Group the files by directory. Show me which directories 
+have the most references.
+
+Step 3: Process one directory at a time, starting with 
+src/types/ (where the type is defined). After each directory, 
+run the type checker to catch any issues.
+</code></pre></div>
+<p>This approach never loads all 2,000 files into context. Claude processes them in directory-sized batches, keeping the context window focused on the current batch.</p>
+<h3 id="the-directory-at-a-time-pattern">The Directory-at-a-Time Pattern<a class="headerlink" href="#the-directory-at-a-time-pattern">¶</a></h3>
+<p>For very large refactors, process one directory at a time and commit after each:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Process the rename in this order:
+1. src/types/ — rename the type definition
+2. src/services/ — update service layer
+3. src/controllers/ — update controllers
+4. src/routes/ — update routes
+5. src/middleware/ — update middleware
+6. tests/ — update all tests
+
+After each directory:
+- Run tsc --noEmit to check types
+- Commit with message &quot;refactor: rename ApiResponse → ServiceResponse in [directory]&quot;
+- Use /compact to free context before the next directory
+</code></pre></div>
+<p>The <code>/compact</code> command between directories is critical. It compresses the conversation history, freeing context window space for the next batch of files. Without it, by directory 4 or 5, Claude&rsquo;s context is full of previous directories&rsquo; content and performance drops.</p>
+<h3 id="chunking-with-file-lists">Chunking with File Lists<a class="headerlink" href="#chunking-with-file-lists">¶</a></h3>
+<p>When a directory itself has too many files:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Here are the first 20 files that need updating:
+1. src/api/routes/users.ts
+2. src/api/routes/orders.ts
+...
+20. src/api/routes/webhooks.ts
+
+Update these 20 files. When done, I'll give you the next batch.
+</code></pre></div>
+<p>This manual chunking ensures Claude never tries to hold more files than it can handle. Each batch is small enough for precise edits and large enough to be efficient.</p>
+<h3 id="the-grep-first-read-second-pattern">The Grep-First, Read-Second Pattern<a class="headerlink" href="#the-grep-first-read-second-pattern">¶</a></h3>
+<p>Never ask Claude to &ldquo;read all files matching X&rdquo; in a large codebase. Instead:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>1. Grep for &quot;oldFunction&quot; across the entire codebase — show me 
+   only file paths (not content)
+2. For each file, show me only the matching lines (not the full file)
+3. Based on the matches, I'll tell you which files to read fully 
+   and which can be updated with a simple replace_all
+</code></pre></div>
+<p>Most files in a large rename need only a mechanical <code>replace_all</code>. Only files where the change is more nuanced (e.g., the function definition itself, complex call sites) need a full read.</p>
+<h3 id="pre-flight-validation">Pre-Flight Validation<a class="headerlink" href="#pre-flight-validation">¶</a></h3>
+<p>Before starting a large refactor, validate that your tools will work:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Before we start the refactor, verify:
+1. The test suite passes: npm test (or pytest)
+2. The type checker passes: tsc --noEmit (or mypy)
+3. The linter passes: eslint . (or ruff check)
+4. Git status is clean: no uncommitted changes
+
+If any of these fail, fix them first. I don't want to debug 
+pre-existing failures mixed with refactoring failures.
+</code></pre></div>
+<p>This is the equivalent of a surgeon checking the operating room before the procedure. A clean baseline means every failure during refactoring is caused by the refactoring.</p>
+<h3 id="the-type-checker-as-a-refactoring-safety-net">The Type Checker as a Refactoring Safety Net<a class="headerlink" href="#the-type-checker-as-a-refactoring-safety-net">¶</a></h3>
+<p>In TypeScript and Python (with mypy/pyright) codebases, the type checker is your most valuable refactoring tool. It catches errors that tests miss — particularly missed call sites and incorrect parameter types.</p>
+<p><strong>The workflow:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>After each refactoring step, run BOTH:
+1. tsc --noEmit (type check without building)
+2. npm test (runtime verification)
+
+If the type checker finds errors that tests don't, that tells you 
+the test coverage has gaps. Note those gaps for later.
+</code></pre></div>
+<p>Type checkers catch errors statically, which means they find <strong>every</strong> call site that&rsquo;s wrong, not just the ones that happen to be covered by tests. For a function signature change, the type checker is more thorough than the test suite because it checks every reference in the code, not just the paths that tests exercise.</p>
+<p><strong>Python example with mypy:</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>After renaming the parameter, run:
+  mypy src/ --strict --no-error-summary
+
+Show me any type errors. Each one is a missed call site that 
+needs updating.
+</code></pre></div>
+<h3 id="session-spanning-for-multi-day-refactors">Session Spanning for Multi-Day Refactors<a class="headerlink" href="#session-spanning-for-multi-day-refactors">¶</a></h3>
+<p>Some refactors are too large for a single session. When you need to spread work across multiple days:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Before ending this session, create a checkpoint:
+1. Commit all completed steps with descriptive messages
+2. Create a file called REFACTORING_STATUS.md in the repo root:
+   - Which steps are complete
+   - Which steps remain
+   - Any issues discovered
+   - The exact prompt to resume with
+3. Push the branch so it's backed up
+
+Next session, I'll say &quot;resume the refactoring&quot; and you should 
+read REFACTORING_STATUS.md first.
+</code></pre></div>
+<p>The status file acts as a handoff document between sessions. Claude doesn&rsquo;t remember previous sessions (unless using auto-memory), so this explicit artifact ensures continuity.</p>
+<h2 id="what-most-people-get-wrong">What Most People Get Wrong<a class="headerlink" href="#what-most-people-get-wrong">¶</a></h2>
+<h3 id="1-trying-to-refactor-and-add-features-simultaneously">1. Trying to Refactor and Add Features Simultaneously<a class="headerlink" href="#1-trying-to-refactor-and-add-features-simultaneously">¶</a></h3>
+<p>The most common mistake. You&rsquo;re refactoring the payment module and think &ldquo;while I&rsquo;m in here, let me add support for Apple Pay.&rdquo; Now you can&rsquo;t tell if a test failure is from the refactor or the new feature. Refactoring is behavior-preserving by definition. If you&rsquo;re changing behavior, that&rsquo;s a separate commit.</p>
+<h3 id="2-skipping-the-test-baseline">2. Skipping the Test Baseline<a class="headerlink" href="#2-skipping-the-test-baseline">¶</a></h3>
+<p>If you don&rsquo;t know which tests pass before refactoring, you can&rsquo;t tell which tests you broke. Run the full suite first. Record the result. Any new failures after refactoring are yours.</p>
+<h3 id="3-making-the-refactor-too-large">3. Making the Refactor Too Large<a class="headerlink" href="#3-making-the-refactor-too-large">¶</a></h3>
+<p>A refactor that touches 50 files in one commit is unreviewable. Break it into steps. Each step should be reviewable in 5 minutes, not 50. As discussed in Chapter 22&rsquo;s checkpoint pattern, the cost of running tests between steps is trivial compared to the cost of debugging a 50-file change.</p>
+<h3 id="4-not-verifying-string-references">4. Not Verifying String References<a class="headerlink" href="#4-not-verifying-string-references">¶</a></h3>
+<p>Code refactoring tools (and Claude Code) are excellent at finding code references. They&rsquo;re less reliable with string references — class names in config files, table names in SQL strings, path references in documentation. Always run a project-wide grep for the old name after the refactor, including non-code files.</p>
+<h3 id="5-forgetting-about-cicd">5. Forgetting About CI/CD<a class="headerlink" href="#5-forgetting-about-cicd">¶</a></h3>
+<p>Your GitHub Actions workflow references <code>UserManager</code> in a test step. Your Dockerfile copies <code>user-manager.ts</code> by name. Your docker-compose mounts a volume to the old path. These break silently — the code works locally but fails in CI.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>After the refactor, also check:
+- .github/workflows/*.yml
+- Dockerfile and docker-compose.yml
+- Makefile
+- package.json scripts
+- Any deployment scripts in scripts/ or tools/
+</code></pre></div>
+<h3 id="6-not-using-compact-between-refactoring-steps">6. Not Using /compact Between Refactoring Steps<a class="headerlink" href="#6-not-using-compact-between-refactoring-steps">¶</a></h3>
+<p>By step 4 of a 6-step refactor, Claude&rsquo;s context window is full of the code from steps 1-3. It starts making mistakes — missing imports, using old names, forgetting the plan. Use <code>/compact</code> between major steps to free context.</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>/compact refactoring plan and current step
+</code></pre></div>
+<p>This keeps the plan and current progress in context while compressing the details of completed steps.</p>
+<h3 id="7-relying-on-claude-will-figure-it-out">7. Relying on &ldquo;Claude Will Figure It Out&rdquo;<a class="headerlink" href="#7-relying-on-claude-will-figure-it-out">¶</a></h3>
+<p>Claude Code is powerful, but it&rsquo;s not magic. A vague prompt like &ldquo;refactor the backend&rdquo; produces a vague result. The specific strategies in this chapter — plan mode, worktrees, batch, progressive — exist because different refactoring shapes need different approaches. Use the right tool for the job.</p>
+<h2 id="complete-walkthrough-monolith-to-services">Complete Walkthrough: Monolith to Services<a class="headerlink" href="#complete-walkthrough-monolith-to-services">¶</a></h2>
+<p>Here is every prompt in a real refactoring session, from a 2,000-line monolithic controller to five focused services.</p>
+<h3 id="starting-point">Starting Point<a class="headerlink" href="#starting-point">¶</a></h3>
+<p><code>src/controllers/order-controller.ts</code> — 2,000 lines containing:
+- Order CRUD operations
+- Payment processing (Stripe integration)
+- Inventory management
+- Email notifications
+- Audit logging
+- PDF receipt generation</p>
+<h3 id="session">Session<a class="headerlink" href="#session">¶</a></h3>
+<p><strong>Prompt 1: Explore and plan</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Enter plan mode. Read src/controllers/order-controller.ts completely. 
+Map every function, its dependencies (what it calls), and its 
+callers (what calls it from outside this file).
+
+Group functions by responsibility:
+- Order CRUD
+- Payment processing
+- Inventory management
+- Notifications
+- Audit logging
+
+Show the dependency graph between groups. Identify the extraction 
+order that minimizes risk.
+</code></pre></div>
+<p>Claude produces a dependency graph and extraction plan. You review it.</p>
+<p><strong>Prompt 2: Establish test baseline</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Run the existing test suite for orders: npm test -- --testPathPattern=order
+
+Show me the results: how many tests, how many pass, coverage for 
+order-controller.ts.
+</code></pre></div>
+<p>Results: 47 tests, all passing, 72% coverage. This is your baseline.</p>
+<p><strong>Prompt 3: Extract audit logging (simplest, no dependencies)</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Extract all audit logging functions from order-controller.ts into 
+a new src/services/audit-service.ts.
+
+Functions to move: logOrderCreated, logPaymentProcessed, 
+logOrderCancelled, logRefundIssued.
+
+Update all call sites in order-controller.ts to import from 
+the new service.
+
+Run tests after.
+</code></pre></div>
+<p>Tests pass. Commit: <code>refactor: extract AuditService (step 1/5)</code>.</p>
+<p><strong>Prompt 4: Extract notifications</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Extract notification functions into src/services/notification-service.ts.
+
+Functions: sendOrderConfirmation, sendShippingNotification, 
+sendRefundNotification, generateReceipt.
+
+The generateReceipt function uses PDFKit — move that dependency 
+to the new service.
+
+Update call sites. Run tests.
+</code></pre></div>
+<p>Tests pass. Commit: <code>refactor: extract NotificationService (step 2/5)</code>.</p>
+<p><strong>Prompt 5: Extract inventory management</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Extract inventory functions into src/services/inventory-service.ts.
+
+Functions: checkStock, reserveItems, releaseReservation, 
+updateStockAfterShipment.
+
+These functions access the database directly — they should accept 
+a database connection as a constructor parameter.
+
+Update call sites. Run tests.
+</code></pre></div>
+<p>Tests pass. Commit: <code>refactor: extract InventoryService (step 3/5)</code>.</p>
+<p><strong>Prompt 6: Extract payment processing</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Extract payment functions into src/services/payment-service.ts.
+
+Functions: processPayment, processRefund, validatePaymentMethod, 
+createPaymentIntent.
+
+The Stripe SDK dependency moves to this service. Environment 
+variable STRIPE_SECRET_KEY should be read in this service's 
+constructor.
+
+Update call sites. Run tests.
+</code></pre></div>
+<p>One test fails — a mock was set up for the old import path. Claude fixes the mock, tests pass. Commit: <code>refactor: extract PaymentService (step 4/5)</code>.</p>
+<p><strong>Prompt 7: Reduce the controller</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>order-controller.ts should now only contain:
+- Route handler functions (createOrder, getOrder, updateOrder, etc.)
+- Orchestration logic (call services in the right order)
+- HTTP concern handling (request parsing, response formatting)
+
+Remove any business logic that should live in services. The 
+controller should be under 200 lines.
+
+Run tests. Then show me the final line count of each file.
+</code></pre></div>
+<p>Tests pass. Final state:</p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>src/controllers/order-controller.ts    — 187 lines (was 2,000)
+src/services/payment-service.ts        — 245 lines
+src/services/inventory-service.ts      — 178 lines
+src/services/notification-service.ts   — 312 lines
+src/services/audit-service.ts          — 89 lines
+</code></pre></div>
+<p>Commit: <code>refactor: reduce OrderController to thin orchestration (step 5/5)</code>.</p>
+<p><strong>Prompt 8: Final verification</strong></p>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>Run the full test suite (not just order tests). Grep the codebase 
+for any remaining direct database calls in order-controller.ts. 
+Verify no business logic leaked back into the controller.
+</code></pre></div>
+<p>All 203 tests pass. No direct database calls in the controller. Refactoring complete.</p>
+<h3 id="what-made-this-work">What Made This Work<a class="headerlink" href="#what-made-this-work">¶</a></h3>
+<ol>
+<li><strong>Plan mode</strong> mapped dependencies before any changes</li>
+<li><strong>Extraction order</strong> went from least to most dependent (audit → notifications → inventory → payments → controller)</li>
+<li><strong>Tests ran after every step</strong> — the one failure in step 4 was caught and fixed immediately</li>
+<li><strong>Commits at each safe point</strong> — any step could be independently reverted</li>
+<li><strong>Each step was small enough</strong> to reason about but large enough to be meaningful</li>
+<li><strong>The controller was reduced last</strong> — it depended on everything else being in place</li>
+</ol>
+<h2 id="when-not-to-refactor-with-claude-code">When Not to Refactor with Claude Code<a class="headerlink" href="#when-not-to-refactor-with-claude-code">¶</a></h2>
+<p>Some refactors are better done manually or with traditional tooling:</p>
+<ul>
+<li><strong>Simple renames in one language</strong> — Your IDE&rsquo;s rename refactoring (F2 in VS Code) is faster and more reliable for a single rename within one language. Use Claude Code when the rename spans config files, documentation, CI/CD, and multiple languages.</li>
+<li><strong>Formatting-only changes</strong> — Run your formatter directly (<code>ruff format</code>, <code>prettier</code>). Claude Code adds nothing here.</li>
+<li><strong>Import sorting</strong> — Use <code>isort</code> or your language&rsquo;s equivalent. Deterministic tools are better for deterministic problems.</li>
+<li><strong>Dead code removal</strong> — Use coverage tools to identify dead code, then remove manually. Claude Code might misidentify code as dead when it&rsquo;s used by dynamic imports or reflection.</li>
+<li><strong>Trivial changes that don&rsquo;t require understanding</strong> — If the transformation can be expressed as a regex find-and-replace, use <code>sed</code> or your editor&rsquo;s multi-cursor. Claude Code&rsquo;s value is in changes that require understanding what the code does.</li>
+</ul>
+<p>Claude Code shines when refactoring requires <strong>understanding</strong> — when the transformation depends on knowing what the code does, not just what it looks like.</p>
+<h2 id="chapter-summary">Chapter Summary<a class="headerlink" href="#chapter-summary">¶</a></h2>
+<p>Multi-file refactoring at scale is where Claude Code delivers its highest ROI. The strategies in this chapter turn a dreaded, error-prone task into a systematic, verifiable process.</p>
+<p><strong>Five key takeaways:</strong></p>
+<ol>
+<li>
+<p><strong>Choose the right strategy for the refactoring shape.</strong> Plan mode for complex decompositions. Worktrees for risky experiments. <code>/batch</code> for mechanical changes across many files. Progressive refactoring for dependent, ordered steps. Using the wrong strategy makes easy refactors hard and hard refactors impossible.</p>
+</li>
+<li>
+<p><strong>Plan before you execute.</strong> Plan mode&rsquo;s read-only constraint forces Claude to understand the dependency graph, identify risks (like that webhook handler calling <code>processRefund</code> directly), and design an extraction order. Skipping the plan is how you end up with circular dependencies at step 4 and have to start over.</p>
+</li>
+<li>
+<p><strong>Commit at every safe checkpoint.</strong> Each commit should be a complete, working state that could be deployed independently. &ldquo;refactor: extract PaymentService (step 3/5)&rdquo; is reviewable, revertible, and meaningful. A single 50-file commit is none of those things.</p>
+</li>
+<li>
+<p><strong>Verify completeness, not just correctness.</strong> Tests passing means the code works. Grep returning zero results for the old pattern means the refactor is complete. Both are required. A partial refactor where half the code uses the old pattern and half uses the new pattern is worse than no refactor at all.</p>
+</li>
+<li>
+<p><strong>Manage the context window on large codebases.</strong> Process directories one at a time, use <code>/compact</code> between steps, grep for file paths before reading file contents, and chunk large batches. Claude Code&rsquo;s accuracy degrades when the context window is full — keeping it focused is your responsibility.</p>
+</li>
+</ol>
+<div class="chapter-nav-bottom" style="display:flex;justify-content:space-between;padding:2rem 0;margin-top:3rem;border-top:1px solid var(--border);"><a href="chapter-22.html" style="text-decoration:none;color:var(--accent-blue);">← Prompt Patterns That 10x Your Output</a><a href="chapter-24.html" style="text-decoration:none;color:var(--accent-blue);text-align:right;">MCP Servers — Extending Claude Code&rsquo;s Reach →</a></div>
+</main>
+<footer class="doc-footer">
+  <p>© 2026 Tri Doan. <a href="index.html">Back to Table of Contents</a></p>
+</footer>
+<a href="#" id="back-to-top" style="display:none;position:fixed;bottom:2rem;right:2rem;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;text-decoration:none;font-size:1.2rem;z-index:99;">↑</a>
+<script>
+(function(){
+  // Scroll indicator
+  var bar=document.querySelector('.scroll-indicator .bar');
+  function updateBar(){
+    var s=window.scrollY,h=document.documentElement.scrollHeight-window.innerHeight;
+    bar.style.width=h>0?(s/h*100)+'%':'0%';
+  }
+  
+  // Back to top
+  var btt=document.getElementById('back-to-top');
+  function updateBtt(){if(btt)btt.style.display=window.scrollY>400?'flex':'none';}
+  
+  // Sidebar toggle
+  window.toggleSidebar=function(){
+    var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');
+    if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}
+  };
+  
+  // Copy code
+  window.copyCode=function(b){
+    var c=b.parentElement.querySelector('code');if(!c)return;
+    navigator.clipboard.writeText(c.textContent).then(function(){
+      var o=b.textContent;b.textContent='✓ Copied';b.style.color='var(--accent-green)';
+      setTimeout(function(){b.textContent=o;b.style.color='';},2000);
+    });
+  };
+  
+  // Close sidebar on link click (mobile)
+  document.querySelectorAll('.sidebar a').forEach(function(a){
+    a.addEventListener('click',function(){
+      if(window.innerWidth<=1024){
+        var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');
+        if(s)s.classList.remove('open');if(o)o.classList.remove('active');
+      }
+    });
+  });
+  
+  // Highlight active sidebar section on scroll
+  var sections=document.querySelectorAll('h1[id],h2[id],h3[id]');
+  var sidebarLinks=document.querySelectorAll('.sidebar a');
+  var linkMap={};
+  sidebarLinks.forEach(function(l){
+    var h=l.getAttribute('href');
+    if(h){var id=h.split('#').pop();if(id)linkMap[id]=l;}
+  });
+  
+  function highlightSection(){
+    var current='';
+    sections.forEach(function(s){
+      if(window.scrollY>=s.offsetTop-100)current=s.id;
+    });
+    sidebarLinks.forEach(function(l){l.classList.remove('active');});
+    if(current&&linkMap[current])linkMap[current].classList.add('active');
+  }
+  
+  var tk=false;
+  window.addEventListener('scroll',function(){
+    if(!tk){requestAnimationFrame(function(){updateBar();updateBtt();highlightSection();tk=false;});tk=true;}
+  });
+  updateBar();
+})();
+</script>
+</body>
+</html>
