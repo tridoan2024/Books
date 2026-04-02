@@ -1,0 +1,2051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 15: Observability, Monitoring, and Incident Response — The Siege Protocol</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-hover: #30363d;
+    --border: #30363d;
+    --border-muted: #21262d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #656d76;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-cyan: #39d2c0;
+    --code-bg: #161b22;
+    --sidebar-width: 300px;
+    --header-height: 60px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    color: var(--text-primary); background: var(--bg-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ─── SCROLL INDICATOR ─── */
+  .scroll-indicator {
+    position: fixed; top: var(--header-height); left: 0; right: 0;
+    height: 3px; background: transparent; z-index: 101;
+  }
+  .scroll-indicator .bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    width: 0%; transition: width 0.1s;
+  }
+
+  /* ─── HEADER ─── */
+  .site-header {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--header-height);
+    display: flex; align-items: center; padding: 0 1.5rem;
+    z-index: 100; border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: rgba(22, 27, 34, 0.88);
+  }
+  .hamburger {
+    display: none; background: none; border: none;
+    color: var(--text-primary); font-size: 1.4rem;
+    cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem;
+    border-radius: 6px; transition: background 0.15s;
+  }
+  .hamburger:hover { background: var(--bg-tertiary); }
+  .site-header .logo {
+    font-size: 1rem; font-weight: 700; color: var(--text-primary);
+    display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
+  }
+  .site-header .logo .icon { font-size: 1.25rem; }
+  .site-header .badge {
+    background: var(--accent-green); color: #000;
+    font-size: 0.65rem; font-weight: 600; padding: 2px 8px;
+    border-radius: 12px; margin-left: 0.5rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .header-nav {
+    margin-left: auto; display: flex; gap: 6px; align-items: center;
+  }
+  .header-nav button {
+    background: none; border: 1px solid var(--border);
+    color: var(--text-secondary); cursor: pointer;
+    padding: 4px 12px; border-radius: 6px;
+    font-size: 0.78rem; font-family: inherit; transition: all 0.15s;
+  }
+  .header-nav button:hover {
+    color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--text-muted);
+  }
+  .header-nav button:disabled { opacity: 0.3; cursor: default; background: none; }
+  .header-nav .chapter-label {
+    color: var(--text-muted); font-size: 0.75rem;
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; padding: 0 6px;
+  }
+
+  /* ─── SIDEBAR ─── */
+  .sidebar {
+    position: fixed; top: var(--header-height); left: 0; bottom: 0;
+    width: var(--sidebar-width); background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 1.25rem 0 3rem;
+    z-index: 50; transition: transform 0.3s ease;
+  }
+  .sidebar-title {
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--text-muted);
+    padding: 0 1.25rem; margin-bottom: 0.75rem;
+  }
+  .sidebar a {
+    display: block; color: var(--text-secondary); text-decoration: none;
+    font-size: 0.8125rem; line-height: 1.4;
+    border-left: 2px solid transparent; transition: all 0.15s ease;
+  }
+  .sidebar a:hover {
+    color: var(--text-primary); background: var(--bg-tertiary);
+    border-left-color: var(--accent-blue); text-decoration: none;
+  }
+  .sidebar a.active {
+    color: var(--accent-blue); border-left-color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.05);
+  }
+  .sidebar-part {
+    font-weight: 700; color: var(--accent-green) !important;
+    font-size: 0.78rem !important; padding: 0.6rem 1.25rem 0.35rem;
+    margin-top: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .sidebar-part:first-child { margin-top: 0; }
+  .sidebar-chapter {
+    font-weight: 600; color: var(--text-primary) !important;
+    padding: 0.3rem 1.25rem 0.3rem 1.75rem;
+  }
+  .sidebar-appendix {
+    font-weight: 600; color: var(--accent-orange) !important;
+    padding: 0.3rem 1.25rem 0.3rem 1.75rem; margin-top: 0.15rem;
+  }
+  .sidebar-appendices {
+    font-weight: 700; color: var(--accent-orange) !important;
+    font-size: 0.78rem !important; padding: 0.6rem 1.25rem 0.35rem;
+    margin-top: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .sidebar-section {
+    padding: 0.2rem 1.25rem 0.2rem 2.5rem;
+    font-size: 0.78rem !important; color: var(--text-muted) !important;
+  }
+  .sidebar-section:hover { color: var(--text-secondary) !important; }
+  .sidebar-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: 40;
+  }
+
+  /* ─── HERO ─── */
+  .hero {
+    text-align: center; padding: 80px 2rem 50px;
+    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 30% 20%, rgba(88,166,255,0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 80%, rgba(63,185,80,0.04) 0%, transparent 50%);
+    pointer-events: none;
+  }
+  .hero .shield { font-size: 4rem; display: block; margin-bottom: 1rem; filter: drop-shadow(0 0 20px rgba(88,166,255,0.3)); }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.25rem) !important; font-weight: 800 !important;
+    letter-spacing: 3px; color: var(--text-primary) !important;
+    margin: 0 0 0.4rem !important; border: none !important; padding: 0 !important;
+    text-align: center;
+  }
+  .hero .subtitle {
+    font-size: clamp(0.95rem, 2vw, 1.15rem); color: var(--text-secondary);
+    max-width: 600px; margin: 0 auto 1.25rem; line-height: 1.5;
+  }
+  .hero .author { font-size: 1rem; color: var(--accent-blue); font-weight: 500; }
+  .hero .meta {
+    margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted);
+    display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap;
+  }
+  .hero .meta span { display: flex; align-items: center; gap: 0.3rem; }
+
+  /* ─── MAIN ─── */
+  .main {
+    margin-left: var(--sidebar-width); margin-top: var(--header-height);
+    padding: 2.5rem 3rem 6rem; max-width: calc(var(--sidebar-width) + 860px);
+  }
+
+  /* ─── TYPOGRAPHY ─── */
+  h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border); color: var(--text-primary); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 3rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border-muted); color: var(--text-primary); }
+  h3 { font-size: 1.2rem; font-weight: 600; margin: 2rem 0 0.6rem; color: var(--text-primary); }
+  h4 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; color: var(--text-secondary); }
+  h5, h6 { font-size: 0.9rem; font-weight: 600; margin: 1.25rem 0 0.4rem; color: var(--text-secondary); }
+
+  .part-heading {
+    font-size: 1.75rem !important; text-align: center;
+    color: var(--accent-green) !important;
+    padding: 2rem 0 1rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .part-heading::after {
+    content: ''; display: block; width: 80px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
+    margin: 0.75rem auto 0; border-radius: 1px;
+  }
+  .chapter-heading {
+    font-size: 1.6rem !important; color: var(--accent-blue) !important;
+    padding-bottom: 0.5rem !important; margin-top: 3.5rem !important;
+    border-bottom: 1px solid rgba(88,166,255,0.2) !important;
+  }
+  .appendix-heading {
+    font-size: 1.4rem !important; color: var(--accent-orange) !important;
+    padding-bottom: 0.5rem !important; margin-top: 3rem !important;
+    border-bottom: 1px dashed rgba(210,153,34,0.3) !important;
+  }
+  .appendices-heading {
+    font-size: 1.5rem !important; text-align: center;
+    color: var(--accent-orange) !important;
+    padding: 1.5rem 0 0.75rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .appendices-heading::after {
+    content: ''; display: block; width: 60px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-orange), var(--accent-purple));
+    margin: 0.6rem auto 0; border-radius: 1px;
+  }
+
+  .headerlink {
+    color: var(--accent-blue); opacity: 0; margin-left: 0.3rem;
+    font-size: 0.8em; transition: opacity 0.15s; text-decoration: none;
+  }
+  h1:hover .headerlink, h2:hover .headerlink,
+  h3:hover .headerlink, h4:hover .headerlink { opacity: 0.5; }
+  .headerlink:hover { opacity: 1 !important; text-decoration: none; }
+
+  .reading-time {
+    font-size: 0.7rem; font-weight: 400; color: var(--text-muted);
+    background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px;
+    margin-left: 0.5rem; vertical-align: middle; letter-spacing: 0; text-transform: none;
+  }
+
+  p { margin: 0.75rem 0; }
+  strong { color: var(--text-primary); }
+  em { color: var(--text-secondary); }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border-muted); margin: 2.5rem 0; }
+
+  ul, ol { padding-left: 1.5rem; margin: 0.6rem 0; }
+  li { margin: 0.3rem 0; line-height: 1.6; }
+  li::marker { color: var(--text-muted); }
+
+  blockquote {
+    margin: 1.25rem 0; padding: 0.75rem 1rem;
+    border-left: 3px solid var(--accent-blue);
+    background: rgba(88,166,255,0.05);
+    border-radius: 0 6px 6px 0; color: var(--text-secondary);
+  }
+  blockquote p { margin: 0.3rem 0; }
+  blockquote strong { color: var(--text-primary); }
+
+  code {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.875em; background: var(--bg-tertiary);
+    padding: 0.15em 0.4em; border-radius: 4px; color: var(--accent-cyan);
+  }
+  .code-block {
+    position: relative; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
+  }
+  .code-block pre {
+    background: var(--code-bg); padding: 1rem 1.25rem;
+    overflow-x: auto; margin: 0; line-height: 1.5; border-radius: 8px;
+  }
+  .code-block pre code {
+    background: none; padding: 0; color: var(--text-primary);
+    font-size: 0.8125rem; display: block; white-space: pre;
+  }
+  .code-lang {
+    position: absolute; top: 0; right: 72px;
+    padding: 2px 10px; font-size: 0.65rem; color: var(--text-muted);
+    background: rgba(0,0,0,0.3); border-radius: 0 0 4px 4px;
+    text-transform: uppercase; letter-spacing: 0.5px; font-family: "SF Mono", monospace;
+  }
+  .copy-btn {
+    position: absolute; top: 6px; right: 8px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    color: var(--text-muted); padding: 3px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 0.7rem; font-family: inherit;
+    transition: all 0.15s; z-index: 2;
+  }
+  .copy-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  .table-wrap {
+    overflow-x: auto; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  thead th {
+    background: var(--bg-tertiary); color: var(--text-primary);
+    font-weight: 600; text-align: left; padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border); font-size: 0.8125rem;
+  }
+  tbody td {
+    padding: 0.5rem 0.75rem; border: 1px solid var(--border-muted);
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+  tbody tr:hover { background: var(--bg-tertiary); }
+
+  .chapter-nav-bottom {
+    display: flex; justify-content: space-between; align-items: stretch;
+    gap: 1rem; margin: 3rem 0 1rem; padding: 1.25rem 0 0;
+    border-top: 1px solid var(--border-muted);
+  }
+  .chapter-nav-bottom a {
+    display: flex; flex-direction: column; gap: 0.2rem;
+    padding: 0.75rem 1rem; border: 1px solid var(--border);
+    border-radius: 8px; text-decoration: none; transition: all 0.15s;
+    min-width: 0; max-width: 48%;
+  }
+  .chapter-nav-bottom a:hover {
+    background: var(--bg-tertiary); border-color: var(--accent-blue); text-decoration: none;
+  }
+  .chapter-nav-bottom .nav-label {
+    font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .chapter-nav-bottom .nav-title {
+    font-size: 0.85rem; color: var(--accent-blue); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chapter-nav-bottom .nav-next { margin-left: auto; text-align: right; }
+
+  #back-to-top {
+    position: fixed; bottom: 2rem; right: 2rem;
+    width: 40px; height: 40px; background: var(--bg-secondary);
+    border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-secondary); font-size: 1.1rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: all 0.2s; z-index: 90;
+  }
+  #back-to-top.visible { opacity: 1; pointer-events: auto; }
+  #back-to-top:hover { background: var(--bg-tertiary); color: var(--accent-blue); border-color: var(--accent-blue); }
+
+  .doc-footer {
+    margin-top: 4rem; padding: 1.5rem 0;
+    border-top: 1px solid var(--border-muted);
+    text-align: center; color: var(--text-muted); font-size: 0.8125rem;
+  }
+
+  @media (max-width: 1024px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay.open { display: block; }
+    .hamburger { display: block; }
+    .main { margin-left: 0; padding: 2rem 1.5rem 4rem; max-width: 100%; }
+    .hero { padding: 60px 1.5rem 40px; }
+  }
+  @media (max-width: 640px) {
+    .main { padding: 1.5rem 1rem 3rem; }
+    h1 { font-size: 1.5rem; } h2 { font-size: 1.25rem; }
+    .part-heading { font-size: 1.3rem !important; }
+    .chapter-heading { font-size: 1.2rem !important; }
+    pre { font-size: 0.75rem; padding: 0.75rem; }
+    table { font-size: 0.8rem; }
+    thead th, tbody td { padding: 0.4rem 0.5rem; }
+    .chapter-nav-bottom { flex-direction: column; }
+    .chapter-nav-bottom a { max-width: 100%; }
+    .header-nav .chapter-label { display: none; }
+    .hero .shield { font-size: 3rem; }
+    .hero .meta { flex-direction: column; gap: 0.5rem; }
+  }
+  @media print {
+    body { background: #fff; color: #1a1a1a; }
+    .site-header, .sidebar, .sidebar-overlay, #back-to-top,
+    .scroll-indicator, .copy-btn, .code-lang, .hamburger,
+    .header-nav { display: none !important; }
+    .main { margin-left: 0; max-width: 100%; padding: 1rem; }
+    .hero { background: #fff; border-bottom: 2px solid #000; padding: 2rem 1rem; }
+    .hero h1 { color: #000 !important; }
+    h1, h2, h3, h4 { color: #000; }
+    a { color: #0066cc; }
+    code { background: #f3f3f3; color: #333; }
+    .code-block pre { background: #f5f5f5; border-color: #ccc; }
+    .code-block pre code { color: #1a1a1a; }
+    blockquote { border-left-color: #666; background: #f9f9f9; color: #333; }
+    thead th { background: #eee; color: #000; border-color: #999; }
+    tbody td { border-color: #ddd; }
+    .part-heading { color: #000 !important; }
+    .chapter-heading { color: #000 !important; }
+    .chapter-nav-bottom, .headerlink, .reading-time { display: none; }
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  .toc { display: none; }
+  ::selection { background: rgba(88,166,255,0.3); }
+</style>
+<style>
+.sidebar{position:fixed;top:0;left:0;width:280px;height:100vh;background:#161b22;border-right:1px solid #30363d;overflow-y:auto;z-index:100;padding:16px 0;transition:transform 0.3s;}
+.sidebar-header{padding:16px 20px;border-bottom:1px solid #30363d;}
+.sidebar-header h3{margin:0;font-size:1rem;color:#e6edf3;}
+.sidebar-links{padding:8px 0;}
+.sidebar-links a{display:block;padding:8px 20px;color:#8b949e;text-decoration:none;font-size:0.85rem;border-left:2px solid transparent;transition:all 0.2s;}
+.sidebar-links a:hover{color:#58a6ff;background:#1c2128;border-left-color:#58a6ff;}
+.sidebar-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99;}
+.sidebar-overlay.active{display:block;}
+.doc-header{position:fixed;top:0;left:280px;right:0;height:48px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;padding:0 20px;gap:16px;z-index:98;}
+.hamburger{display:none;background:none;border:none;color:#e6edf3;font-size:1.4rem;cursor:pointer;}
+.header-title{color:#e6edf3;font-weight:600;font-size:0.95rem;}
+.main{margin-left:280px;margin-top:48px;padding:40px;max-width:900px;}
+.chapter-nav{display:flex;justify-content:space-between;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #30363d;}
+.chapter-nav a{color:#58a6ff;text-decoration:none;font-size:0.9rem;}
+.chapter-nav a:hover{text-decoration:underline;}
+@media(max-width:1024px){.sidebar{transform:translateX(-100%);}.sidebar.open{transform:translateX(0);}.doc-header{left:0;}.hamburger{display:block;}.main{margin-left:0;}}
+</style>
+</head>
+<body>
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+<nav id="sidebar" class="sidebar">
+<div class="sidebar-header"><h3>📖 The Siege Protocol</h3></div>
+<div class="sidebar-links">
+<a href="index.html">📚 Table of Contents</a>
+<a href="chapter-01.html">Chapter 1: The Paradigm Shift — Why Traditional…</a>
+<a href="chapter-02.html">Chapter 2: Anatomy of an AI Agent — Attack Surf…</a>
+<a href="chapter-03.html">Chapter 3: RAG Pipeline Security — The Ingestio…</a>
+<a href="chapter-05.html">Chapter 5: Vector Database Security — The Persi…</a>
+<a href="chapter-06.html">Chapter 6: Multi-Agent Architecture Security — …</a>
+<a href="chapter-07.html">Chapter 7: Agent Tool Use Security — When AI To…</a>
+<a href="chapter-09.html">Chapter 9: The CLI Agent Revolution — A New Cla…</a>
+<a href="chapter-10.html">Chapter 10: Securing the Developer Workstation …</a>
+<a href="chapter-11.html">Chapter 11: CI/CD Pipeline Security in the Agen…</a>
+<a href="chapter-12.html">Chapter 12: Prompt Injection — The Definitive D…</a>
+<a href="chapter-13.html">Chapter 13: Data Exfiltration and Privacy in Ag…</a>
+<a href="chapter-14.html">Chapter 14: Identity, Authentication, and Autho…</a>
+<a href="chapter-15.html">Chapter 15: Observability, Monitoring, and Inci…</a>
+<a href="chapter-16.html">Chapter 16: Building an AI Agent Security Program</a>
+<a href="chapter-17.html">Chapter 17: The Future — What Comes After CLI A…</a>
+<a href="appendix-a.html">Appendix A: Tool and Framework Reference</a>
+<a href="appendix-b.html">Appendix B: Threat Model Templates</a>
+<a href="appendix-c.html">Appendix C: Security Checklists</a>
+<a href="appendix-d.html">Appendix D: Regulatory and Compliance Mapping</a>
+<a href="appendix-e.html">Appendix E: Lab Environment Setup Guide</a>
+</div></nav>
+
+<header class="doc-header">
+<button class="hamburger" onclick="toggleSidebar()">☰</button>
+<span class="header-title">The Siege Protocol</span>
+<a href="index.html" style="color:var(--text-secondary);text-decoration:none;font-size:0.85rem;">📚 TOC</a>
+</header>
+<main class="main">
+<h2 id="chapter-15-observability-monitoring-and-incident-response" class="chapter-heading">Chapter 15: Observability, Monitoring, and Incident Response <span class="reading-time">⏱ ~27 min read</span><a class="headerlink" href="#chapter-15-observability-monitoring-and-incident-response">&para;</a></h2>
+<p><em>"You cannot defend what you cannot see. In agentic systems, what you cannot see is trying to hide from you."</em></p>
+<p>The preceding chapters armed you with defensive architectures, hardened tool layers, and policy engines. But defense without visibility is guesswork. When an agent is compromised—not <em>if</em>, but <em>when</em>—your ability to detect, investigate, and recover depends entirely on the observability foundation you built before the incident occurred.</p>
+<p>This chapter bridges the gap between secure-by-design architectures and real-world operational security. We will construct the telemetry pipelines, detection engines, incident response playbooks, and SOC tooling required to operate AI agent systems in adversarial environments at scale.</p>
+<hr>
+<h2 id="151-the-observability-challenge">15.1 The Observability Challenge<a class="headerlink" href="#151-the-observability-challenge">&para;</a></h2>
+<h3 id="why-traditional-apm-misses-agent-threats">Why Traditional APM Misses Agent Threats<a class="headerlink" href="#why-traditional-apm-misses-agent-threats">&para;</a></h3>
+<p>Application Performance Monitoring (APM) tools like Datadog, New Relic, and Dynatrace were designed for request-response architectures. They excel at tracking HTTP latency, database query times, and error rates. But agentic AI systems break every assumption these tools rely on.</p>
+<p>Consider a typical agent workflow: a user asks an orchestrator agent to "summarize the latest security findings and email them to the team." The orchestrator delegates to a retrieval agent, which queries a vector database, passes results to a summarization agent, which calls an LLM, then hands the summary to a communication agent that invokes an email API. Traditional APM sees five independent service calls. It cannot reason about the <em>semantic intent</em> that threads them together, nor detect that the summarization agent injected an exfiltration payload into the email body.</p>
+<p>The core observability gaps in agentic systems include:</p>
+<ol><li><strong>Semantic opacity</strong> — APM tracks bytes and milliseconds, not meaning. A tool call that returns 200 OK may contain a prompt injection payload.</li><li><strong>Non-deterministic execution paths</strong> — The same input can produce radically different agent behaviors across runs, making baseline-based anomaly detection unreliable.</li><li><strong>Multi-hop attribution</strong> — When Agent C acts maliciously after receiving instructions from Agent B, which was orchestrated by Agent A responding to user input, tracing the causal chain requires purpose-built correlation.</li><li><strong>Context window as attack surface</strong> — The agent's context window is both working memory and attack vector. Traditional telemetry has no concept of monitoring what an LLM "thinks."</li><li><strong>Temporal decoupling</strong> — Agent actions may be scheduled, deferred, or triggered by asynchronous events, breaking the synchronous trace model.</li></ol>
+<h3 id="essential-telemetry-for-ai-agents">Essential Telemetry for AI Agents<a class="headerlink" href="#essential-telemetry-for-ai-agents">&para;</a></h3>
+<p>An effective agent observability stack must capture four categories of telemetry:</p>
+<div class="table-wrap"><table><thead><tr><th>Category</th><th>What to Capture</th><th>Why It Matters</th></tr></thead><tbody><tr><td><strong>Agent Lifecycle</strong></td><td>Spawn, delegate, terminate, error events</td><td>Detects unauthorized agent creation or unexpected termination</td></tr><tr><td><strong>LLM Interactions</strong></td><td>Prompts sent, completions received, token counts, model identifiers</td><td>Enables prompt injection detection and cost anomaly alerting</td></tr><tr><td><strong>Tool Invocations</strong></td><td>Tool name, parameters, return values, execution duration</td><td>Core audit trail for forensic reconstruction</td></tr><tr><td><strong>Data Flow</strong></td><td>Data read from sources, data written to sinks, cross-boundary transfers</td><td>Exfiltration detection and compliance enforcement</td></tr></tbody></table></div>
+<h3 id="structured-logging-for-agent-actions">Structured Logging for Agent Actions<a class="headerlink" href="#structured-logging-for-agent-actions">&para;</a></h3>
+<p>Unstructured log lines like <code>INFO: Agent processed request</code> are useless for security analysis. Every agent action must emit a structured event conforming to a consistent schema. The following middleware demonstrates how to instrument an agent framework with structured security-relevant logging:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import json
+import time
+import hashlib
+import logging
+from datetime import datetime, timezone
+from dataclasses import dataclass, field, asdict
+from typing import Any, Optional
+from enum import Enum
+
+class EventSeverity(Enum):
+    INFO = &quot;info&quot;
+    WARNING = &quot;warning&quot;
+    CRITICAL = &quot;critical&quot;
+
+@dataclass
+class AgentSecurityEvent:
+    &quot;&quot;&quot;Structured security event for agent telemetry.&quot;&quot;&quot;
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    event_type: str = &quot;&quot;
+    agent_id: str = &quot;&quot;
+    session_id: str = &quot;&quot;
+    trace_id: str = &quot;&quot;
+    span_id: str = &quot;&quot;
+    parent_span_id: Optional[str] = None
+    severity: str = EventSeverity.INFO.value
+    # Action context
+    action: str = &quot;&quot;
+    tool_name: Optional[str] = None
+    tool_parameters_hash: Optional[str] = None
+    tool_result_hash: Optional[str] = None
+    # Security context
+    user_id: Optional[str] = None
+    permission_scope: Optional[list] = None
+    data_classification: Optional[str] = None
+    policy_violations: Optional[list] = None
+    # Enrichment
+    llm_model: Optional[str] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    execution_duration_ms: Optional[float] = None
+    metadata: Optional[dict] = None
+
+    def to_json(self) -&gt; str:
+        return json.dumps(asdict(self), default=str)
+
+
+class AgentSecurityLogger:
+    &quot;&quot;&quot;Middleware that wraps agent tool calls with structured
+    security logging.&quot;&quot;&quot;
+
+    def __init__(self, agent_id: str, session_id: str, trace_id: str):
+        self.agent_id = agent_id
+        self.session_id = session_id
+        self.trace_id = trace_id
+        self.logger = logging.getLogger(&quot;agent.security&quot;)
+        self.span_counter = 0
+
+    def _generate_span_id(self) -&gt; str:
+        self.span_counter += 1
+        raw = f&quot;{self.trace_id}-{self.agent_id}-{self.span_counter}&quot;
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+    def _hash_content(self, content: Any) -&gt; str:
+        &quot;&quot;&quot;Hash parameters/results for audit without storing
+        sensitive data in logs.&quot;&quot;&quot;
+        serialized = json.dumps(content, sort_keys=True, default=str)
+        return hashlib.sha256(serialized.encode()).hexdigest()[:32]
+
+    def log_tool_call(
+        self,
+        tool_name: str,
+        parameters: dict,
+        result: Any,
+        duration_ms: float,
+        parent_span_id: Optional[str] = None,
+        data_classification: str = &quot;internal&quot;,
+        policy_violations: Optional[list] = None,
+    ) -&gt; AgentSecurityEvent:
+        severity = EventSeverity.INFO.value
+        if policy_violations:
+            severity = EventSeverity.CRITICAL.value
+        elif data_classification in (&quot;confidential&quot;, &quot;restricted&quot;):
+            severity = EventSeverity.WARNING.value
+
+        event = AgentSecurityEvent(
+            event_type=&quot;tool_invocation&quot;,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+            trace_id=self.trace_id,
+            span_id=self._generate_span_id(),
+            parent_span_id=parent_span_id,
+            severity=severity,
+            action=f&quot;tool_call:{tool_name}&quot;,
+            tool_name=tool_name,
+            tool_parameters_hash=self._hash_content(parameters),
+            tool_result_hash=self._hash_content(result),
+            data_classification=data_classification,
+            policy_violations=policy_violations,
+            execution_duration_ms=duration_ms,
+        )
+        self.logger.info(event.to_json())
+        return event
+
+    def log_llm_interaction(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        duration_ms: float,
+        prompt_hash: str,
+        completion_hash: str,
+    ) -&gt; AgentSecurityEvent:
+        event = AgentSecurityEvent(
+            event_type=&quot;llm_interaction&quot;,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+            trace_id=self.trace_id,
+            span_id=self._generate_span_id(),
+            action=&quot;llm_completion&quot;,
+            llm_model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            execution_duration_ms=duration_ms,
+            metadata={
+                &quot;prompt_hash&quot;: prompt_hash,
+                &quot;completion_hash&quot;: completion_hash,
+            },
+        )
+        self.logger.info(event.to_json())
+        return event</code></pre></div>
+<h3 id="distributed-tracing-across-agent-chains">Distributed Tracing Across Agent Chains<a class="headerlink" href="#distributed-tracing-across-agent-chains">&para;</a></h3>
+<p>When agents delegate to other agents, you need distributed tracing that preserves the causal chain. OpenTelemetry provides the foundation, but agent-specific semantics require custom span attributes:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+    OTLPSpanExporter,
+)
+from opentelemetry.trace import StatusCode
+import functools
+
+# Initialize tracer with agent-specific resource attributes
+provider = TracerProvider(
+    resource=trace.get_tracer_provider()
+    .get_tracer(__name__)
+    .__class__.__module__  # placeholder
+)
+provider.add_span_processor(
+    BatchSpanProcessor(OTLPSpanExporter(endpoint=&quot;http://otel-collector:4317&quot;))
+)
+trace.set_tracer_provider(provider)
+tracer = trace.get_tracer(&quot;agent.security.tracer&quot;, &quot;1.0.0&quot;)
+
+
+def trace_agent_action(tool_name: str, sensitivity: str = &quot;standard&quot;):
+    &quot;&quot;&quot;Decorator that wraps agent tool calls with OpenTelemetry spans
+    carrying security-relevant attributes.&quot;&quot;&quot;
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with tracer.start_as_current_span(
+                f&quot;agent.tool.{tool_name}&quot;,
+                attributes={
+                    &quot;agent.tool.name&quot;: tool_name,
+                    &quot;agent.tool.sensitivity&quot;: sensitivity,
+                    &quot;agent.session.id&quot;: kwargs.get(&quot;session_id&quot;, &quot;unknown&quot;),
+                    &quot;agent.data.classification&quot;: kwargs.get(
+                        &quot;data_classification&quot;, &quot;internal&quot;
+                    ),
+                },
+            ) as span:
+                try:
+                    result = func(*args, **kwargs)
+                    span.set_attribute(&quot;agent.tool.result.size&quot;, len(str(result)))
+                    span.set_status(StatusCode.OK)
+                    return result
+                except Exception as e:
+                    span.set_status(StatusCode.ERROR, str(e))
+                    span.set_attribute(&quot;agent.tool.error.type&quot;, type(e).__name__)
+                    span.record_exception(e)
+                    raise
+        return wrapper
+    return decorator
+
+
+# Usage across agent delegation chains
+class ResearchAgent:
+    @trace_agent_action(&quot;web_search&quot;, sensitivity=&quot;elevated&quot;)
+    def search(self, query: str, **kwargs):
+        # Search implementation
+        pass
+
+    @trace_agent_action(&quot;document_read&quot;, sensitivity=&quot;standard&quot;)
+    def read_document(self, doc_id: str, **kwargs):
+        # Document read implementation
+        pass</code></pre></div>
+<p>The critical insight is embedding security-relevant attributes—<code>sensitivity</code>, <code>data_classification</code>, <code>session_id</code>—directly into trace spans. This enables your SIEM to correlate tool invocations with policy violations without parsing unstructured log data.</p>
+<blockquote><p><strong>Key Takeaway</strong>
+Traditional APM is blind to the semantic, multi-hop, and non-deterministic nature of agentic systems. Build a purpose-built telemetry layer that captures agent lifecycle events, LLM interactions, tool invocations, and data flows as structured events with distributed trace correlation. Treat your observability pipeline as a security control, not an operational convenience.</p></blockquote>
+<hr>
+<h2 id="152-detection-engineering">15.2 Detection Engineering<a class="headerlink" href="#152-detection-engineering">&para;</a></h2>
+<p>Observability provides the raw signal. Detection engineering transforms that signal into actionable security alerts. This section presents detection strategies purpose-built for the threat landscape unique to agentic AI systems.</p>
+<h3 id="prompt-injection-detection-signatures">Prompt Injection Detection Signatures<a class="headerlink" href="#prompt-injection-detection-signatures">&para;</a></h3>
+<p>Prompt injection remains the most prevalent attack vector against AI agents. Detection operates at two layers: <strong>static signature matching</strong> for known patterns and <strong>semantic analysis</strong> for novel attacks.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import re
+from dataclasses import dataclass
+from typing import Optional
+from enum import Enum
+
+
+class ThreatLevel(Enum):
+    LOW = &quot;low&quot;
+    MEDIUM = &quot;medium&quot;
+    HIGH = &quot;high&quot;
+    CRITICAL = &quot;critical&quot;
+
+
+@dataclass
+class DetectionResult:
+    detected: bool
+    rule_id: str
+    threat_level: ThreatLevel
+    description: str
+    matched_pattern: Optional[str] = None
+    confidence: float = 0.0
+
+
+class PromptInjectionDetector:
+    &quot;&quot;&quot;Multi-layer prompt injection detection engine.
+
+    Combines static signatures, heuristic analysis, and
+    structural anomaly detection for defense-in-depth.
+    &quot;&quot;&quot;
+
+    # Static signatures — known injection patterns
+    STATIC_SIGNATURES = [
+        {
+            &quot;id&quot;: &quot;PI-001&quot;,
+            &quot;pattern&quot;: r&quot;(?i)(ignore|disregard|forget)\s+(all\s+)?&quot;
+                       r&quot;(previous|prior|above|earlier)\s+&quot;
+                       r&quot;(instructions|prompts|rules|directives)&quot;,
+            &quot;threat_level&quot;: ThreatLevel.CRITICAL,
+            &quot;description&quot;: &quot;Direct instruction override attempt&quot;,
+        },
+        {
+            &quot;id&quot;: &quot;PI-002&quot;,
+            &quot;pattern&quot;: r&quot;(?i)you\s+are\s+now\s+(a|an|acting\s+as)&quot;,
+            &quot;threat_level&quot;: ThreatLevel.HIGH,
+            &quot;description&quot;: &quot;Role reassignment injection&quot;,
+        },
+        {
+            &quot;id&quot;: &quot;PI-003&quot;,
+            &quot;pattern&quot;: r&quot;(?i)(system\s*prompt|system\s*message)\s*[:=]&quot;,
+            &quot;threat_level&quot;: ThreatLevel.CRITICAL,
+            &quot;description&quot;: &quot;System prompt manipulation attempt&quot;,
+        },
+        {
+            &quot;id&quot;: &quot;PI-004&quot;,
+            &quot;pattern&quot;: r&quot;(?i)\[\s*INST\s*\]|\&lt;\|im_start\|&quot;
+                       r&quot;\&gt;|&lt;\|system\|&gt;|&lt;\|endoftext\|&gt;&quot;,
+            &quot;threat_level&quot;: ThreatLevel.CRITICAL,
+            &quot;description&quot;: &quot;Model control token injection&quot;,
+        },
+        {
+            &quot;id&quot;: &quot;PI-005&quot;,
+            &quot;pattern&quot;: r&quot;(?i)(do\s+not|don&#x27;?t)\s+(follow|obey|listen\s+to)&quot;
+                       r&quot;\s+(the|your)\s+(system|original|initial)&quot;,
+            &quot;threat_level&quot;: ThreatLevel.HIGH,
+            &quot;description&quot;: &quot;Instruction negation pattern&quot;,
+        },
+        {
+            &quot;id&quot;: &quot;PI-006&quot;,
+            &quot;pattern&quot;: r&quot;(?i)translate\s+the\s+(above|following|previous)&quot;
+                       r&quot;\s+to\s+\w+\s*[:.]\s*\w+&quot;,
+            &quot;threat_level&quot;: ThreatLevel.MEDIUM,
+            &quot;description&quot;: &quot;Extraction via translation trick&quot;,
+        },
+        {
+            &quot;id&quot;: &quot;PI-007&quot;,
+            &quot;pattern&quot;: r&quot;(?i)(BEGIN|START)\s+(NEW|OVERRIDE)\s+&quot;
+                       r&quot;(SESSION|CONTEXT|INSTRUCTIONS)&quot;,
+            &quot;threat_level&quot;: ThreatLevel.CRITICAL,
+            &quot;description&quot;: &quot;Context boundary manipulation&quot;,
+        },
+    ]
+
+    # Heuristic thresholds
+    ENCODING_ENTROPY_THRESHOLD = 4.5
+    UNICODE_RATIO_THRESHOLD = 0.15
+    DELIMITER_DENSITY_THRESHOLD = 0.08
+
+    def __init__(self):
+        self.compiled_signatures = [
+            {**sig, &quot;compiled&quot;: re.compile(sig[&quot;pattern&quot;])}
+            for sig in self.STATIC_SIGNATURES
+        ]
+
+    def detect(self, text: str) -&gt; list[DetectionResult]:
+        &quot;&quot;&quot;Run all detection layers and return findings.&quot;&quot;&quot;
+        results = []
+        results.extend(self._check_static_signatures(text))
+        results.extend(self._check_structural_anomalies(text))
+        results.extend(self._check_encoding_attacks(text))
+        return results
+
+    def _check_static_signatures(self, text: str) -&gt; list[DetectionResult]:
+        results = []
+        for sig in self.compiled_signatures:
+            match = sig[&quot;compiled&quot;].search(text)
+            if match:
+                results.append(
+                    DetectionResult(
+                        detected=True,
+                        rule_id=sig[&quot;id&quot;],
+                        threat_level=sig[&quot;threat_level&quot;],
+                        description=sig[&quot;description&quot;],
+                        matched_pattern=match.group(0),
+                        confidence=0.90,
+                    )
+                )
+        return results
+
+    def _check_structural_anomalies(self, text: str) -&gt; list[DetectionResult]:
+        &quot;&quot;&quot;Detect structural patterns that suggest injection
+        even without matching known signatures.&quot;&quot;&quot;
+        results = []
+        delimiters = re.findall(
+            r&#x27;[{}\[\]&lt;&gt;|\\/#=\-]{3,}&#x27;, text
+        )
+        if len(delimiters) &gt; 3:
+            results.append(
+                DetectionResult(
+                    detected=True,
+                    rule_id=&quot;PI-HEUR-001&quot;,
+                    threat_level=ThreatLevel.MEDIUM,
+                    description=&quot;Excessive delimiter sequences &quot;
+                                &quot;(possible context boundary manipulation)&quot;,
+                    confidence=0.65,
+                )
+            )
+
+        # Detect suspiciously nested instruction patterns
+        instruction_keywords = re.findall(
+            r&#x27;(?i)(instruction|directive|command|rule|policy|constraint)&#x27;,
+            text,
+        )
+        if len(instruction_keywords) &gt; 4:
+            results.append(
+                DetectionResult(
+                    detected=True,
+                    rule_id=&quot;PI-HEUR-002&quot;,
+                    threat_level=ThreatLevel.MEDIUM,
+                    description=&quot;High density of instruction-related &quot;
+                                &quot;keywords in input&quot;,
+                    confidence=0.60,
+                )
+            )
+        return results
+
+    def _check_encoding_attacks(self, text: str) -&gt; list[DetectionResult]:
+        &quot;&quot;&quot;Detect Unicode and encoding-based evasion attempts.&quot;&quot;&quot;
+        results = []
+        non_ascii = sum(1 for c in text if ord(c) &gt; 127)
+        ratio = non_ascii / max(len(text), 1)
+        if ratio &gt; self.UNICODE_RATIO_THRESHOLD:
+            results.append(
+                DetectionResult(
+                    detected=True,
+                    rule_id=&quot;PI-ENC-001&quot;,
+                    threat_level=ThreatLevel.HIGH,
+                    description=f&quot;High Unicode ratio ({ratio:.2%}) &quot;
+                                f&quot;— possible encoding-based evasion&quot;,
+                    confidence=0.70,
+                )
+            )
+
+        # Detect homoglyph attacks (Cyrillic/Greek lookalikes)
+        homoglyph_ranges = [
+            (0x0400, 0x04FF),  # Cyrillic
+            (0x0370, 0x03FF),  # Greek
+            (0xFF00, 0xFFEF),  # Fullwidth forms
+        ]
+        homoglyph_count = sum(
+            1
+            for c in text
+            if any(start &lt;= ord(c) &lt;= end for start, end in homoglyph_ranges)
+        )
+        if homoglyph_count &gt; 3:
+            results.append(
+                DetectionResult(
+                    detected=True,
+                    rule_id=&quot;PI-ENC-002&quot;,
+                    threat_level=ThreatLevel.HIGH,
+                    description=&quot;Homoglyph characters detected — &quot;
+                                &quot;possible visual evasion attack&quot;,
+                    confidence=0.80,
+                )
+            )
+        return results</code></pre></div>
+<h3 id="anomaly-detection-for-agent-behavior">Anomaly Detection for Agent Behavior<a class="headerlink" href="#anomaly-detection-for-agent-behavior">&para;</a></h3>
+<p>Signature-based detection catches known attacks. Anomaly detection catches the unknown. The following system builds behavioral baselines for agents and alerts on deviations:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import math
+from collections import defaultdict
+from dataclasses import dataclass, field
+
+
+@dataclass
+class AgentBehaviorProfile:
+    &quot;&quot;&quot;Statistical profile of normal agent behavior.&quot;&quot;&quot;
+    tool_call_frequency: dict = field(default_factory=dict)
+    avg_calls_per_session: float = 0.0
+    std_calls_per_session: float = 0.0
+    tool_sequence_patterns: dict = field(default_factory=dict)
+    avg_token_consumption: float = 0.0
+    std_token_consumption: float = 0.0
+    known_data_sinks: set = field(default_factory=set)
+    max_observed_delegation_depth: int = 0
+
+
+class AgentAnomalyDetector:
+    &quot;&quot;&quot;Detects behavioral anomalies by comparing real-time agent
+    actions against learned baselines.&quot;&quot;&quot;
+
+    ZSCORE_THRESHOLD = 3.0  # Standard deviations from mean
+
+    def __init__(self):
+        self.profiles: dict[str, AgentBehaviorProfile] = {}
+        self.session_data: dict[str, list] = defaultdict(list)
+
+    def build_profile(
+        self, agent_id: str, historical_events: list[dict]
+    ) -&gt; AgentBehaviorProfile:
+        &quot;&quot;&quot;Build a behavioral baseline from historical telemetry.&quot;&quot;&quot;
+        profile = AgentBehaviorProfile()
+
+        sessions = defaultdict(list)
+        for event in historical_events:
+            sid = event.get(&quot;session_id&quot;, &quot;default&quot;)
+            sessions[sid].append(event)
+
+        # Tool call frequency distribution
+        tool_counts = defaultdict(int)
+        for event in historical_events:
+            tool = event.get(&quot;tool_name&quot;)
+            if tool:
+                tool_counts[tool] += 1
+        total = sum(tool_counts.values()) or 1
+        profile.tool_call_frequency = {
+            t: c / total for t, c in tool_counts.items()
+        }
+
+        # Session length statistics
+        session_lengths = [len(evts) for evts in sessions.values()]
+        if session_lengths:
+            mean = sum(session_lengths) / len(session_lengths)
+            variance = sum(
+                (x - mean) ** 2 for x in session_lengths
+            ) / len(session_lengths)
+            profile.avg_calls_per_session = mean
+            profile.std_calls_per_session = math.sqrt(variance) or 1.0
+
+        # Data sinks — where the agent normally sends output
+        for event in historical_events:
+            tool = event.get(&quot;tool_name&quot;, &quot;&quot;)
+            if tool in (&quot;send_email&quot;, &quot;write_file&quot;, &quot;http_post&quot;, &quot;api_call&quot;):
+                target = event.get(&quot;metadata&quot;, {}).get(&quot;target&quot;, &quot;&quot;)
+                if target:
+                    profile.known_data_sinks.add(target)
+
+        self.profiles[agent_id] = profile
+        return profile
+
+    def check_anomalies(
+        self, agent_id: str, current_session_events: list[dict]
+    ) -&gt; list[dict]:
+        &quot;&quot;&quot;Evaluate current session against baseline profile.&quot;&quot;&quot;
+        profile = self.profiles.get(agent_id)
+        if not profile:
+            return [{&quot;anomaly&quot;: &quot;no_baseline&quot;, &quot;severity&quot;: &quot;warning&quot;,
+                      &quot;detail&quot;: &quot;No behavioral baseline exists&quot;}]
+
+        anomalies = []
+
+        # Check 1: Session length anomaly
+        n_events = len(current_session_events)
+        if profile.std_calls_per_session &gt; 0:
+            z_score = (
+                (n_events - profile.avg_calls_per_session)
+                / profile.std_calls_per_session
+            )
+            if abs(z_score) &gt; self.ZSCORE_THRESHOLD:
+                anomalies.append({
+                    &quot;anomaly&quot;: &quot;session_length&quot;,
+                    &quot;severity&quot;: &quot;high&quot;,
+                    &quot;detail&quot;: f&quot;Session has {n_events} events &quot;
+                              f&quot;(z-score: {z_score:.2f})&quot;,
+                })
+
+        # Check 2: Novel tool usage
+        for event in current_session_events:
+            tool = event.get(&quot;tool_name&quot;)
+            if tool and tool not in profile.tool_call_frequency:
+                anomalies.append({
+                    &quot;anomaly&quot;: &quot;novel_tool&quot;,
+                    &quot;severity&quot;: &quot;critical&quot;,
+                    &quot;detail&quot;: f&quot;Agent invoked tool &#x27;{tool}&#x27; &quot;
+                              f&quot;never seen in baseline&quot;,
+                })
+
+        # Check 3: Unknown data sink
+        for event in current_session_events:
+            tool = event.get(&quot;tool_name&quot;, &quot;&quot;)
+            if tool in (&quot;send_email&quot;, &quot;write_file&quot;, &quot;http_post&quot;, &quot;api_call&quot;):
+                target = event.get(&quot;metadata&quot;, {}).get(&quot;target&quot;, &quot;&quot;)
+                if target and target not in profile.known_data_sinks:
+                    anomalies.append({
+                        &quot;anomaly&quot;: &quot;unknown_data_sink&quot;,
+                        &quot;severity&quot;: &quot;critical&quot;,
+                        &quot;detail&quot;: f&quot;Data sent to unrecognized sink: &quot;
+                                  f&quot;{target}&quot;,
+                    })
+
+        return anomalies</code></pre></div>
+<h3 id="sensitive-tool-call-alerting">Sensitive Tool Call Alerting<a class="headerlink" href="#sensitive-tool-call-alerting">&para;</a></h3>
+<p>Certain tool invocations demand immediate visibility regardless of behavioral context. The following Sigma detection rule triggers on any agent invoking high-risk tools:</p>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># sigma_rule_agent_sensitive_tool.yml
+title: AI Agent Sensitive Tool Invocation
+id: a3f8c2d1-9b4e-4f7a-8c6d-2e1f0a3b5c7d
+status: experimental
+description: &gt;
+  Detects when an AI agent invokes tools classified as
+  high-sensitivity, including shell execution, network
+  operations, credential access, or file system writes
+  to sensitive paths.
+author: Siege Protocol Security Team
+date: 2026/01/15
+logsource:
+  category: agent_telemetry
+  product: agent_security_platform
+detection:
+  sensitive_tools:
+    event_type: &quot;tool_invocation&quot;
+    tool_name:
+      - &quot;execute_shell&quot;
+      - &quot;http_request&quot;
+      - &quot;database_query&quot;
+      - &quot;credential_read&quot;
+      - &quot;file_write&quot;
+      - &quot;send_email&quot;
+      - &quot;api_call_external&quot;
+  sensitive_paths:
+    event_type: &quot;tool_invocation&quot;
+    tool_name: &quot;file_write&quot;
+    metadata.target|contains:
+      - &quot;/etc/&quot;
+      - &quot;/root/&quot;
+      - &quot;.ssh/&quot;
+      - &quot;.env&quot;
+      - &quot;credentials&quot;
+      - &quot;secrets&quot;
+  condition: sensitive_tools OR sensitive_paths
+level: high
+tags:
+  - attack.execution
+  - attack.t1059
+  - agent.tool_abuse
+falsepositives:
+  - Agents with legitimate shell or file access in their
+    authorized tool manifest</code></pre></div>
+<p>Equivalent Splunk SPL for environments using Splunk as the SIEM:</p>
+<div class="code-block"><span class="code-lang">spl</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>index=agent_telemetry event_type=&quot;tool_invocation&quot;
+  (tool_name IN (&quot;execute_shell&quot;, &quot;http_request&quot;,
+    &quot;database_query&quot;, &quot;credential_read&quot;, &quot;file_write&quot;,
+    &quot;send_email&quot;, &quot;api_call_external&quot;)
+  OR (tool_name=&quot;file_write&quot;
+    AND (metadata.target=&quot;*/etc/*&quot;
+      OR metadata.target=&quot;*.ssh/*&quot;
+      OR metadata.target=&quot;*.env&quot;
+      OR metadata.target=&quot;*credentials*&quot;
+      OR metadata.target=&quot;*secrets*&quot;)))
+| eval risk_score=case(
+    tool_name=&quot;execute_shell&quot;, 95,
+    tool_name=&quot;credential_read&quot;, 90,
+    tool_name=&quot;file_write&quot; AND match(metadata.target, &quot;.*(ssh|env|secret).*&quot;), 90,
+    tool_name=&quot;http_request&quot;, 70,
+    1=1, 50)
+| where risk_score &gt;= 70
+| stats count by agent_id, session_id, tool_name, risk_score
+| sort -risk_score</code></pre></div>
+<h3 id="exfiltration-pattern-detection">Exfiltration Pattern Detection<a class="headerlink" href="#exfiltration-pattern-detection">&para;</a></h3>
+<p>Data exfiltration from agents follows recognizable patterns: data is read from an internal source, then transmitted to an external sink within the same session or delegation chain. Detection requires correlating read and write operations:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>class ExfiltrationDetector:
+    &quot;&quot;&quot;Detects potential data exfiltration by correlating data
+    reads from internal sources with writes to external sinks.&quot;&quot;&quot;
+
+    INTERNAL_READ_TOOLS = {
+        &quot;database_query&quot;, &quot;file_read&quot;, &quot;vector_search&quot;,
+        &quot;secret_read&quot;, &quot;internal_api_call&quot;,
+    }
+    EXTERNAL_WRITE_TOOLS = {
+        &quot;http_request&quot;, &quot;send_email&quot;, &quot;api_call_external&quot;,
+        &quot;webhook_post&quot;, &quot;file_upload&quot;,
+    }
+
+    def __init__(self, time_window_seconds: int = 300):
+        self.time_window = time_window_seconds
+
+    def analyze_session(self, events: list[dict]) -&gt; list[dict]:
+        &quot;&quot;&quot;Scan a session for read-then-exfiltrate patterns.&quot;&quot;&quot;
+        alerts = []
+        reads = [
+            e for e in events
+            if e.get(&quot;tool_name&quot;) in self.INTERNAL_READ_TOOLS
+        ]
+        writes = [
+            e for e in events
+            if e.get(&quot;tool_name&quot;) in self.EXTERNAL_WRITE_TOOLS
+        ]
+
+        for write_event in writes:
+            write_ts = write_event.get(&quot;timestamp_epoch&quot;, 0)
+            preceding_reads = [
+                r for r in reads
+                if 0 &lt; (write_ts - r.get(&quot;timestamp_epoch&quot;, 0))
+                   &lt;= self.time_window
+            ]
+            if preceding_reads:
+                # Check if data volume exiting exceeds a threshold
+                read_hashes = {
+                    r.get(&quot;tool_result_hash&quot;) for r in preceding_reads
+                }
+                write_param_hash = write_event.get(&quot;tool_parameters_hash&quot;)
+
+                alerts.append({
+                    &quot;alert_type&quot;: &quot;potential_exfiltration&quot;,
+                    &quot;severity&quot;: &quot;critical&quot;,
+                    &quot;session_id&quot;: write_event.get(&quot;session_id&quot;),
+                    &quot;agent_id&quot;: write_event.get(&quot;agent_id&quot;),
+                    &quot;write_tool&quot;: write_event.get(&quot;tool_name&quot;),
+                    &quot;write_target&quot;: write_event.get(
+                        &quot;metadata&quot;, {}
+                    ).get(&quot;target&quot;, &quot;unknown&quot;),
+                    &quot;preceding_read_count&quot;: len(preceding_reads),
+                    &quot;read_tools&quot;: [
+                        r.get(&quot;tool_name&quot;) for r in preceding_reads
+                    ],
+                    &quot;time_span_seconds&quot;: (
+                        write_ts
+                        - min(r.get(&quot;timestamp_epoch&quot;, 0)
+                              for r in preceding_reads)
+                    ),
+                })
+        return alerts</code></pre></div>
+<h3 id="meta-detection-detecting-detection-evasion">Meta-Detection: Detecting Detection Evasion<a class="headerlink" href="#meta-detection-detecting-detection-evasion">&para;</a></h3>
+<p>Sophisticated attackers will attempt to evade your detection systems. Meta-detection monitors for behaviors that suggest active evasion:</p>
+<ul><li><strong>Log suppression</strong> — An agent that reduces its logging verbosity mid-session or strips metadata from events.</li><li><strong>Timing manipulation</strong> — Artificially spacing tool calls to stay below rate-based anomaly thresholds.</li><li><strong>Encoding obfuscation</strong> — Using Base64, Unicode substitutions, or character-level splitting to evade signature detection.</li><li><strong>Tool aliasing</strong> — Calling a benign tool wrapper that internally delegates to a sensitive tool, bypassing tool-name-based alerting.</li></ul>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>class MetaDetector:
+    &quot;&quot;&quot;Detects behaviors that suggest active evasion of
+    security monitoring.&quot;&quot;&quot;
+
+    def detect_log_suppression(
+        self, events: list[dict], expected_rate: float
+    ) -&gt; bool:
+        &quot;&quot;&quot;Alert when event emission rate drops significantly
+        below the expected baseline.&quot;&quot;&quot;
+        if not events:
+            return True  # No events at all is suspicious
+        duration = (
+            events[-1].get(&quot;timestamp_epoch&quot;, 0)
+            - events[0].get(&quot;timestamp_epoch&quot;, 0)
+        )
+        if duration &lt;= 0:
+            return False
+        actual_rate = len(events) / duration
+        return actual_rate &lt; (expected_rate * 0.3)
+
+    def detect_field_stripping(self, events: list[dict]) -&gt; list[dict]:
+        &quot;&quot;&quot;Detect events with suspiciously missing security
+        fields that should always be present.&quot;&quot;&quot;
+        required_fields = [
+            &quot;agent_id&quot;, &quot;session_id&quot;, &quot;trace_id&quot;, &quot;tool_name&quot;,
+        ]
+        suspicious = []
+        for event in events:
+            missing = [
+                f for f in required_fields if not event.get(f)
+            ]
+            if missing:
+                suspicious.append({
+                    &quot;event&quot;: event,
+                    &quot;missing_fields&quot;: missing,
+                    &quot;alert&quot;: &quot;Possible field stripping evasion&quot;,
+                })
+        return suspicious</code></pre></div>
+<blockquote><p><strong>Key Takeaway</strong>
+Detection engineering for AI agents requires layered defenses: static signatures catch known prompt injection patterns, behavioral anomaly detection identifies novel attacks, exfiltration correlators track data flow across read-write pairs, and meta-detectors watch for active evasion of your monitoring itself. No single layer is sufficient—compose them into a detection pipeline where each layer compensates for the blind spots of the others.</p></blockquote>
+<hr>
+<h2 id="153-incident-response-for-agent-compromises">15.3 Incident Response for Agent Compromises<a class="headerlink" href="#153-incident-response-for-agent-compromises">&para;</a></h2>
+<p>When detection fires, you need a well-rehearsed incident response (IR) process tailored to the unique characteristics of agentic AI systems. Traditional IR playbooks assume human adversaries manipulating static software. Agent compromises introduce a fundamentally different dynamic: the compromised entity can reason, adapt, and potentially resist containment.</p>
+<h3 id="ir-playbook-structure-for-agent-compromises">IR Playbook Structure for Agent Compromises<a class="headerlink" href="#ir-playbook-structure-for-agent-compromises">&para;</a></h3>
+<p>An effective agent IR playbook addresses six phases, adapted from NIST SP 800-61 but extended for agentic systems:</p>
+<ol><li><strong>Preparation</strong> — Tooling, permissions, and runbooks pre-staged for rapid response.</li><li><strong>Detection & Analysis</strong> — Triage alerts from the detection pipeline, determine scope of compromise.</li><li><strong>Containment</strong> — Isolate the affected agent(s) without disrupting uninvolved operations.</li><li><strong>Eradication</strong> — Remove the adversarial influence from the agent's context and data pipeline.</li><li><strong>Recovery</strong> — Restore agents to a known-good state with validated configurations.</li><li><strong>Post-Incident Activity</strong> — Analyze root cause, update detections, improve defenses.</li></ol>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># agent_compromise_playbook.yml
+playbook:
+  name: &quot;Agent Compromise Response&quot;
+  version: &quot;2.1&quot;
+  classification: &quot;INTERNAL — SECURITY OPERATIONS&quot;
+  trigger:
+    - alert_type: &quot;prompt_injection_detected&quot;
+      severity: [&quot;high&quot;, &quot;critical&quot;]
+    - alert_type: &quot;potential_exfiltration&quot;
+    - alert_type: &quot;novel_tool_invocation&quot;
+      severity: [&quot;critical&quot;]
+    - alert_type: &quot;behavioral_anomaly&quot;
+      z_score_threshold: 3.5
+
+  phase_1_detection_analysis:
+    steps:
+      - action: &quot;gather_context&quot;
+        description: &quot;Collect the full session trace for the
+          flagged agent&quot;
+        automation: &quot;fetch_session_trace(alert.session_id)&quot;
+      - action: &quot;identify_blast_radius&quot;
+        description: &quot;Enumerate all agents that received
+          delegated tasks from the compromised agent&quot;
+        automation: &quot;trace_delegation_chain(alert.trace_id)&quot;
+      - action: &quot;classify_severity&quot;
+        description: &quot;Determine if data was exfiltrated, if
+          tools were misused, or if the attack was contained
+          by policy enforcement&quot;
+        criteria:
+          P1_critical: &quot;Confirmed data exfiltration or
+            unauthorized external communication&quot;
+          P2_high: &quot;Policy violation detected and blocked,
+            but attack vector is novel&quot;
+          P3_medium: &quot;Known attack pattern blocked by
+            existing controls&quot;
+
+  phase_2_containment:
+    immediate_actions:
+      - action: &quot;suspend_agent_session&quot;
+        description: &quot;Terminate the active session for the
+          compromised agent&quot;
+        automation: &quot;agent_control.suspend(alert.agent_id)&quot;
+        max_latency: &quot;5 seconds&quot;
+      - action: &quot;revoke_credentials&quot;
+        description: &quot;Rotate any API keys, tokens, or
+          credentials the agent had access to&quot;
+        automation: &quot;credential_manager.rotate(alert.agent_id)&quot;
+      - action: &quot;quarantine_delegated_agents&quot;
+        description: &quot;Suspend all agents in the delegation
+          chain downstream of the compromised agent&quot;
+        automation: &gt;
+          for agent in delegation_chain(alert.trace_id):
+              agent_control.suspend(agent.id)
+      - action: &quot;preserve_evidence&quot;
+        description: &quot;Snapshot the agent&#x27;s context window,
+          tool call history, and any cached data&quot;
+        automation: &quot;forensics.snapshot(alert.session_id)&quot;
+
+  phase_3_eradication:
+    steps:
+      - action: &quot;analyze_injection_vector&quot;
+        description: &quot;Determine how the adversarial input
+          entered the agent&#x27;s context&quot;
+      - action: &quot;purge_contaminated_data&quot;
+        description: &quot;Remove any documents, embeddings, or
+          cached data that contained the injection payload&quot;
+      - action: &quot;update_detection_signatures&quot;
+        description: &quot;Add the new attack pattern to the
+          signature database&quot;
+
+  phase_4_recovery:
+    steps:
+      - action: &quot;restore_agent_configuration&quot;
+        description: &quot;Redeploy the agent from the
+          known-good configuration repository&quot;
+        automation: &quot;deploy.from_manifest(agent.manifest_hash)&quot;
+      - action: &quot;validate_restored_state&quot;
+        description: &quot;Run the agent validation suite to
+          confirm correct behavior&quot;
+        automation: &quot;test_suite.run(agent.id, mode=&#x27;security&#x27;)&quot;
+      - action: &quot;gradual_reintroduction&quot;
+        description: &quot;Enable the agent with elevated
+          monitoring for 48 hours&quot;
+        automation: &gt;
+          agent_control.enable(alert.agent_id,
+            monitoring_level=&quot;enhanced&quot;,
+            duration_hours=48)</code></pre></div>
+<h3 id="containment-strategies">Containment Strategies<a class="headerlink" href="#containment-strategies">&para;</a></h3>
+<p>Agent containment is more nuanced than terminating a process. The following strategies are ordered from least to most disruptive:</p>
+<div class="table-wrap"><table><thead><tr><th>Strategy</th><th>Description</th><th>When to Use</th></tr></thead><tbody><tr><td><strong>Tool Restriction</strong></td><td>Revoke specific tool permissions while keeping the agent operational</td><td>Low-severity alerts; suspected but unconfirmed compromise</td></tr><tr><td><strong>Context Quarantine</strong></td><td>Flush the agent's context window and reinitialize from checkpoint</td><td>Confirmed prompt injection; context is contaminated</td></tr><tr><td><strong>Session Termination</strong></td><td>End the agent's active session and all in-flight tasks</td><td>Active exploitation observed; data exfiltration in progress</td></tr><tr><td><strong>Cascade Suspension</strong></td><td>Suspend the compromised agent and all agents in its delegation tree</td><td>Multi-agent compromise; lateral movement suspected</td></tr><tr><td><strong>Full Isolation</strong></td><td>Revoke all network access and credentials; agent is fully offline</td><td>Confirmed breach with unknown scope; assume worst case</td></tr></tbody></table></div>
+<h3 id="forensic-analysis-of-agent-logs">Forensic Analysis of Agent Logs<a class="headerlink" href="#forensic-analysis-of-agent-logs">&para;</a></h3>
+<p>Post-incident forensics for agent compromises requires reconstructing the causal chain from telemetry. The following script automates initial forensic triage:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import json
+from datetime import datetime, timezone
+
+
+class AgentForensicAnalyzer:
+    &quot;&quot;&quot;Automated forensic analysis for agent security incidents.&quot;&quot;&quot;
+
+    def __init__(self, events: list[dict]):
+        self.events = sorted(
+            events, key=lambda e: e.get(&quot;timestamp&quot;, &quot;&quot;)
+        )
+
+    def reconstruct_timeline(self) -&gt; list[dict]:
+        &quot;&quot;&quot;Build a chronological timeline of all agent actions
+        with security annotations.&quot;&quot;&quot;
+        timeline = []
+        for event in self.events:
+            entry = {
+                &quot;timestamp&quot;: event.get(&quot;timestamp&quot;),
+                &quot;agent_id&quot;: event.get(&quot;agent_id&quot;),
+                &quot;action&quot;: event.get(&quot;action&quot;),
+                &quot;tool_name&quot;: event.get(&quot;tool_name&quot;),
+                &quot;severity&quot;: event.get(&quot;severity&quot;, &quot;info&quot;),
+                &quot;security_flags&quot;: [],
+            }
+            if event.get(&quot;policy_violations&quot;):
+                entry[&quot;security_flags&quot;].append(&quot;POLICY_VIOLATION&quot;)
+            if event.get(&quot;tool_name&quot;) in (
+                &quot;execute_shell&quot;, &quot;http_request&quot;, &quot;credential_read&quot;
+            ):
+                entry[&quot;security_flags&quot;].append(&quot;SENSITIVE_TOOL&quot;)
+            if event.get(&quot;data_classification&quot;) in (
+                &quot;confidential&quot;, &quot;restricted&quot;
+            ):
+                entry[&quot;security_flags&quot;].append(&quot;SENSITIVE_DATA&quot;)
+            timeline.append(entry)
+        return timeline
+
+    def identify_injection_point(self) -&gt; dict | None:
+        &quot;&quot;&quot;Attempt to identify the event where adversarial
+        input first entered the agent&#x27;s context.&quot;&quot;&quot;
+        for i, event in enumerate(self.events):
+            if event.get(&quot;policy_violations&quot;):
+                preceding = self.events[max(0, i - 10): i]
+                data_sources = [
+                    e for e in preceding
+                    if e.get(&quot;event_type&quot;) in (
+                        &quot;tool_invocation&quot;, &quot;llm_interaction&quot;
+                    )
+                    and e.get(&quot;tool_name&quot;) in (
+                        &quot;web_search&quot;, &quot;document_read&quot;, &quot;api_call&quot;,
+                        &quot;vector_search&quot;, &quot;user_input&quot;,
+                    )
+                ]
+                if data_sources:
+                    return {
+                        &quot;suspected_injection_event&quot;: data_sources[-1],
+                        &quot;first_violation_event&quot;: event,
+                        &quot;events_between&quot;: i - self.events.index(
+                            data_sources[-1]
+                        ),
+                    }
+        return None
+
+    def extract_iocs(self) -&gt; dict:
+        &quot;&quot;&quot;Extract Indicators of Compromise from the incident
+        event stream.&quot;&quot;&quot;
+        iocs = {
+            &quot;suspicious_targets&quot;: set(),
+            &quot;novel_tools_used&quot;: set(),
+            &quot;data_accessed&quot;: [],
+            &quot;external_endpoints&quot;: set(),
+        }
+        for event in self.events:
+            tool = event.get(&quot;tool_name&quot;, &quot;&quot;)
+            target = event.get(&quot;metadata&quot;, {}).get(&quot;target&quot;, &quot;&quot;)
+
+            if tool in (&quot;http_request&quot;, &quot;api_call_external&quot;):
+                if target:
+                    iocs[&quot;external_endpoints&quot;].add(target)
+            if event.get(&quot;severity&quot;) == &quot;critical&quot;:
+                if tool:
+                    iocs[&quot;novel_tools_used&quot;].add(tool)
+            if event.get(&quot;data_classification&quot;) in (
+                &quot;confidential&quot;, &quot;restricted&quot;
+            ):
+                iocs[&quot;data_accessed&quot;].append({
+                    &quot;tool&quot;: tool,
+                    &quot;timestamp&quot;: event.get(&quot;timestamp&quot;),
+                    &quot;classification&quot;: event.get(&quot;data_classification&quot;),
+                })
+            if target and tool in (&quot;send_email&quot;, &quot;webhook_post&quot;):
+                iocs[&quot;suspicious_targets&quot;].add(target)
+
+        iocs[&quot;suspicious_targets&quot;] = list(iocs[&quot;suspicious_targets&quot;])
+        iocs[&quot;novel_tools_used&quot;] = list(iocs[&quot;novel_tools_used&quot;])
+        iocs[&quot;external_endpoints&quot;] = list(iocs[&quot;external_endpoints&quot;])
+        return iocs
+
+    def generate_report(self) -&gt; str:
+        &quot;&quot;&quot;Produce a structured forensic report.&quot;&quot;&quot;
+        timeline = self.reconstruct_timeline()
+        injection = self.identify_injection_point()
+        iocs = self.extract_iocs()
+
+        report = {
+            &quot;report_type&quot;: &quot;agent_forensic_analysis&quot;,
+            &quot;generated_at&quot;: datetime.now(timezone.utc).isoformat(),
+            &quot;total_events_analyzed&quot;: len(self.events),
+            &quot;timeline_summary&quot;: {
+                &quot;first_event&quot;: (
+                    timeline[0][&quot;timestamp&quot;] if timeline else None
+                ),
+                &quot;last_event&quot;: (
+                    timeline[-1][&quot;timestamp&quot;] if timeline else None
+                ),
+                &quot;flagged_events&quot;: sum(
+                    1 for t in timeline if t[&quot;security_flags&quot;]
+                ),
+            },
+            &quot;injection_analysis&quot;: injection,
+            &quot;indicators_of_compromise&quot;: iocs,
+            &quot;recommendations&quot;: self._generate_recommendations(
+                injection, iocs
+            ),
+        }
+        return json.dumps(report, indent=2, default=str)
+
+    def _generate_recommendations(
+        self, injection: dict | None, iocs: dict
+    ) -&gt; list[str]:
+        recs = []
+        if injection:
+            source_tool = injection[&quot;suspected_injection_event&quot;].get(
+                &quot;tool_name&quot;, &quot;&quot;
+            )
+            recs.append(
+                f&quot;Review input sanitization for tool: {source_tool}&quot;
+            )
+            recs.append(
+                &quot;Add detection signature for this injection pattern&quot;
+            )
+        if iocs[&quot;external_endpoints&quot;]:
+            recs.append(
+                &quot;Block the following external endpoints: &quot;
+                + &quot;, &quot;.join(iocs[&quot;external_endpoints&quot;])
+            )
+        if iocs[&quot;data_accessed&quot;]:
+            recs.append(
+                &quot;Audit data access — notify data owners of potential &quot;
+                &quot;exposure for classified data&quot;
+            )
+        recs.append(
+            &quot;Rotate all credentials accessible to compromised agent&quot;
+        )
+        return recs</code></pre></div>
+<h3 id="recovery-procedures">Recovery Procedures<a class="headerlink" href="#recovery-procedures">&para;</a></h3>
+<p>Recovery follows a strict sequence to prevent re-compromise:</p>
+<ol><li><strong>Validate the source configuration</strong> — Ensure the agent's manifest, system prompt, and tool allowlist have not been tampered with in the configuration repository.</li><li><strong>Rebuild, don't patch</strong> — Redeploy agents from immutable artifacts rather than attempting to "fix" a running instance. Containerized agents should be replaced from a clean image.</li><li><strong>Verify data pipeline integrity</strong> — If the agent reads from a RAG pipeline, verify that the document store and vector embeddings have not been poisoned.</li><li><strong>Graduated re-enablement</strong> — Bring the agent back online with enhanced monitoring. Reduce permissions initially and expand them over a 24–48 hour observation period if no anomalies are detected.</li><li><strong>Validate with adversarial probes</strong> — Run your prompt injection test suite against the restored agent to confirm defenses are effective.</li></ol>
+<h3 id="post-incident-review">Post-Incident Review<a class="headerlink" href="#post-incident-review">&para;</a></h3>
+<p>The post-incident review for agent compromises should answer questions that go beyond traditional incident retrospectives:</p>
+<ul><li><strong>What was the injection vector?</strong> How did adversarial content enter the agent's context? Was it via user input, a RAG document, an API response, or inter-agent communication?</li><li><strong>Why did the detection pipeline miss or delay alerting?</strong> Was it a gap in signature coverage, a behavioral baseline that was too permissive, or log data that was incomplete?</li><li><strong>What was the full blast radius?</strong> Which agents were affected? What data was accessed or exfiltrated? Were downstream systems impacted?</li><li><strong>Could the agent have contained itself?</strong> If the agent has self-monitoring capabilities, why did they not trigger? Should guardrails be hardened?</li><li><strong>What organizational changes are needed?</strong> Do we need new policies for tool access? Should we change the agent's delegation authority?</li></ul>
+<p>Document findings in a structured format that feeds directly back into your detection engineering pipeline, creating a continuous improvement loop.</p>
+<blockquote><p><strong>Key Takeaway</strong>
+Incident response for agent compromises demands purpose-built playbooks that account for cascading delegation chains, context contamination, and the agent's ability to reason about its own containment. Pre-stage containment actions, preserve forensic evidence before any remediation, and always rebuild from known-good artifacts rather than patching compromised instances in place.</p></blockquote>
+<hr>
+<h2 id="154-lab-building-an-agent-security-operations-center">15.4 Lab: Building an Agent Security Operations Center<a class="headerlink" href="#154-lab-building-an-agent-security-operations-center">&para;</a></h2>
+<p>This lab synthesizes the concepts from the preceding sections into a functional Agent Security Operations Center (Agent SOC). You will build an integrated platform that ingests agent telemetry, applies detection rules in real time, presents a security dashboard, and automates initial incident response.</p>
+<h3 id="architecture-overview-1">Architecture Overview<a class="headerlink" href="#architecture-overview-1">&para;</a></h3>
+<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>┌──────────────────────────────────────────────────────┐
+│                   Agent Fleet                        │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐              │
+│  │ Agent A  │  │ Agent B  │  │ Agent C  │  ...        │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘            │
+│       │              │              │                  │
+│       └──────────────┼──────────────┘                  │
+│                      ▼                                 │
+│          ┌───────────────────────┐                     │
+│          │  Telemetry Collector  │                     │
+│          │  (OpenTelemetry)      │                     │
+│          └──────────┬────────────┘                     │
+└─────────────────────┼────────────────────────────────┘
+                      ▼
+        ┌─────────────────────────────┐
+        │     Event Stream (Kafka)    │
+        └──────────┬──────────────────┘
+                   │
+        ┌──────────┼──────────────┐
+        ▼          ▼              ▼
+  ┌──────────┐ ┌──────────┐ ┌──────────────┐
+  │Detection │ │ Storage  │ │  Dashboard   │
+  │ Engine   │ │(Elastic) │ │  (Grafana)   │
+  └────┬─────┘ └──────────┘ └──────────────┘
+       │
+       ▼
+  ┌──────────────┐
+  │  Response    │
+  │  Automator   │
+  └──────────────┘</code></pre></div>
+<h3 id="step-1-telemetry-ingestion-pipeline">Step 1: Telemetry Ingestion Pipeline<a class="headerlink" href="#step-1-telemetry-ingestion-pipeline">&para;</a></h3>
+<p>Configure the OpenTelemetry Collector to receive agent telemetry and forward it to both the detection engine and long-term storage:</p>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: &quot;0.0.0.0:4317&quot;
+      http:
+        endpoint: &quot;0.0.0.0:4318&quot;
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+  attributes:
+    actions:
+      - key: &quot;environment&quot;
+        value: &quot;production&quot;
+        action: upsert
+      - key: &quot;security.pipeline.version&quot;
+        value: &quot;2.1&quot;
+        action: upsert
+
+  filter/security:
+    spans:
+      include:
+        match_type: regexp
+        attributes:
+          - key: &quot;agent.tool.sensitivity&quot;
+            value: &quot;(elevated|critical)&quot;
+
+exporters:
+  kafka:
+    protocol_version: &quot;2.8.0&quot;
+    brokers:
+      - &quot;kafka-broker-1:9092&quot;
+      - &quot;kafka-broker-2:9092&quot;
+    topic: &quot;agent-security-events&quot;
+    encoding: json
+
+  elasticsearch:
+    endpoints:
+      - &quot;https://elastic-cluster:9200&quot;
+    index: &quot;agent-telemetry&quot;
+    pipeline: &quot;agent-security-enrichment&quot;
+
+  otlp/jaeger:
+    endpoint: &quot;jaeger-collector:4317&quot;
+    tls:
+      insecure: false
+
+service:
+  pipelines:
+    traces/all:
+      receivers: [otlp]
+      processors: [batch, attributes]
+      exporters: [elasticsearch, otlp/jaeger]
+
+    traces/security:
+      receivers: [otlp]
+      processors: [batch, filter/security]
+      exporters: [kafka]</code></pre></div>
+<h3 id="step-2-real-time-detection-engine">Step 2: Real-Time Detection Engine<a class="headerlink" href="#step-2-real-time-detection-engine">&para;</a></h3>
+<p>The detection engine consumes events from Kafka and applies the detection rules developed in Section 15.2:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import json
+import asyncio
+from dataclasses import dataclass
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+
+
+@dataclass
+class Alert:
+    alert_id: str
+    alert_type: str
+    severity: str
+    agent_id: str
+    session_id: str
+    trace_id: str
+    details: dict
+    timestamp: str
+
+
+class AgentSOCDetectionEngine:
+    &quot;&quot;&quot;Real-time detection engine that processes agent telemetry
+    from Kafka and emits security alerts.&quot;&quot;&quot;
+
+    def __init__(
+        self,
+        kafka_brokers: list[str],
+        input_topic: str = &quot;agent-security-events&quot;,
+        alert_topic: str = &quot;agent-security-alerts&quot;,
+    ):
+        self.kafka_brokers = kafka_brokers
+        self.input_topic = input_topic
+        self.alert_topic = alert_topic
+
+        # Initialize detection components
+        self.injection_detector = PromptInjectionDetector()
+        self.anomaly_detector = AgentAnomalyDetector()
+        self.exfil_detector = ExfiltrationDetector()
+        self.meta_detector = MetaDetector()
+
+        # Session event buffers for stateful detection
+        self.session_buffers: dict[str, list[dict]] = {}
+
+    async def start(self):
+        &quot;&quot;&quot;Main event processing loop.&quot;&quot;&quot;
+        consumer = AIOKafkaConsumer(
+            self.input_topic,
+            bootstrap_servers=self.kafka_brokers,
+            value_deserializer=lambda m: json.loads(m.decode()),
+            group_id=&quot;agent-soc-detection&quot;,
+            auto_offset_reset=&quot;latest&quot;,
+        )
+        self.producer = AIOKafkaProducer(
+            bootstrap_servers=self.kafka_brokers,
+            value_serializer=lambda v: json.dumps(v).encode(),
+        )
+
+        await consumer.start()
+        await self.producer.start()
+
+        try:
+            async for message in consumer:
+                event = message.value
+                await self._process_event(event)
+        finally:
+            await consumer.stop()
+            await self.producer.stop()
+
+    async def _process_event(self, event: dict):
+        &quot;&quot;&quot;Apply all detection layers to an incoming event.&quot;&quot;&quot;
+        session_id = event.get(&quot;session_id&quot;, &quot;unknown&quot;)
+
+        # Buffer events by session for stateful detection
+        if session_id not in self.session_buffers:
+            self.session_buffers[session_id] = []
+        self.session_buffers[session_id].append(event)
+
+        # Layer 1: Prompt injection signatures
+        if event.get(&quot;event_type&quot;) == &quot;llm_interaction&quot;:
+            prompt_text = event.get(&quot;metadata&quot;, {}).get(
+                &quot;prompt_text&quot;, &quot;&quot;
+            )
+            if prompt_text:
+                detections = self.injection_detector.detect(prompt_text)
+                for d in detections:
+                    if d.detected:
+                        await self._emit_alert(
+                            alert_type=&quot;prompt_injection&quot;,
+                            severity=d.threat_level.value,
+                            event=event,
+                            details={
+                                &quot;rule_id&quot;: d.rule_id,
+                                &quot;description&quot;: d.description,
+                                &quot;confidence&quot;: d.confidence,
+                            },
+                        )
+
+        # Layer 2: Behavioral anomaly detection
+        if event.get(&quot;event_type&quot;) == &quot;tool_invocation&quot;:
+            agent_id = event.get(&quot;agent_id&quot;, &quot;&quot;)
+            anomalies = self.anomaly_detector.check_anomalies(
+                agent_id, self.session_buffers[session_id]
+            )
+            for anomaly in anomalies:
+                if anomaly.get(&quot;severity&quot;) in (&quot;high&quot;, &quot;critical&quot;):
+                    await self._emit_alert(
+                        alert_type=f&quot;anomaly_{anomaly[&#x27;anomaly&#x27;]}&quot;,
+                        severity=anomaly[&quot;severity&quot;],
+                        event=event,
+                        details=anomaly,
+                    )
+
+        # Layer 3: Exfiltration pattern detection
+        exfil_alerts = self.exfil_detector.analyze_session(
+            self.session_buffers[session_id]
+        )
+        for exfil in exfil_alerts:
+            await self._emit_alert(
+                alert_type=&quot;potential_exfiltration&quot;,
+                severity=&quot;critical&quot;,
+                event=event,
+                details=exfil,
+            )
+
+        # Layer 4: Meta-detection (evasion monitoring)
+        stripped = self.meta_detector.detect_field_stripping(
+            [event]
+        )
+        for s in stripped:
+            await self._emit_alert(
+                alert_type=&quot;evasion_field_stripping&quot;,
+                severity=&quot;high&quot;,
+                event=event,
+                details=s,
+            )
+
+    async def _emit_alert(
+        self,
+        alert_type: str,
+        severity: str,
+        event: dict,
+        details: dict,
+    ):
+        &quot;&quot;&quot;Publish a security alert to the alerts topic.&quot;&quot;&quot;
+        import uuid
+        from datetime import datetime, timezone
+
+        alert = {
+            &quot;alert_id&quot;: str(uuid.uuid4()),
+            &quot;alert_type&quot;: alert_type,
+            &quot;severity&quot;: severity,
+            &quot;agent_id&quot;: event.get(&quot;agent_id&quot;),
+            &quot;session_id&quot;: event.get(&quot;session_id&quot;),
+            &quot;trace_id&quot;: event.get(&quot;trace_id&quot;),
+            &quot;details&quot;: details,
+            &quot;source_event&quot;: event,
+            &quot;timestamp&quot;: datetime.now(timezone.utc).isoformat(),
+        }
+        await self.producer.send(self.alert_topic, alert)</code></pre></div>
+<h3 id="step-3-soc-dashboard-configuration">Step 3: SOC Dashboard Configuration<a class="headerlink" href="#step-3-soc-dashboard-configuration">&para;</a></h3>
+<p>Configure Grafana dashboards that provide at-a-glance visibility into agent fleet security posture:</p>
+<div class="code-block"><span class="code-lang">json</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>{
+  &quot;dashboard&quot;: {
+    &quot;title&quot;: &quot;Agent Security Operations Center&quot;,
+    &quot;uid&quot;: &quot;agent-soc-v2&quot;,
+    &quot;panels&quot;: [
+      {
+        &quot;title&quot;: &quot;Active Alerts by Severity&quot;,
+        &quot;type&quot;: &quot;stat&quot;,
+        &quot;gridPos&quot;: {&quot;h&quot;: 4, &quot;w&quot;: 12, &quot;x&quot;: 0, &quot;y&quot;: 0},
+        &quot;targets&quot;: [
+          {
+            &quot;datasource&quot;: &quot;Elasticsearch&quot;,
+            &quot;query&quot;: &quot;alert_type:* AND NOT resolved:true&quot;,
+            &quot;metrics&quot;: [
+              {&quot;type&quot;: &quot;count&quot;, &quot;id&quot;: &quot;alert_count&quot;}
+            ],
+            &quot;bucketAggs&quot;: [
+              {&quot;field&quot;: &quot;severity&quot;, &quot;type&quot;: &quot;terms&quot;}
+            ]
+          }
+        ],
+        &quot;fieldConfig&quot;: {
+          &quot;overrides&quot;: [
+            {&quot;matcher&quot;: {&quot;id&quot;: &quot;byName&quot;, &quot;options&quot;: &quot;critical&quot;},
+             &quot;properties&quot;: [{&quot;id&quot;: &quot;color&quot;, &quot;value&quot;: &quot;#FF0000&quot;}]},
+            {&quot;matcher&quot;: {&quot;id&quot;: &quot;byName&quot;, &quot;options&quot;: &quot;high&quot;},
+             &quot;properties&quot;: [{&quot;id&quot;: &quot;color&quot;, &quot;value&quot;: &quot;#FF8C00&quot;}]},
+            {&quot;matcher&quot;: {&quot;id&quot;: &quot;byName&quot;, &quot;options&quot;: &quot;medium&quot;},
+             &quot;properties&quot;: [{&quot;id&quot;: &quot;color&quot;, &quot;value&quot;: &quot;#FFD700&quot;}]}
+          ]
+        }
+      },
+      {
+        &quot;title&quot;: &quot;Agent Tool Invocations — Last 24h&quot;,
+        &quot;type&quot;: &quot;timeseries&quot;,
+        &quot;gridPos&quot;: {&quot;h&quot;: 8, &quot;w&quot;: 12, &quot;x&quot;: 0, &quot;y&quot;: 4},
+        &quot;targets&quot;: [
+          {
+            &quot;datasource&quot;: &quot;Elasticsearch&quot;,
+            &quot;query&quot;: &quot;event_type:tool_invocation&quot;,
+            &quot;metrics&quot;: [
+              {&quot;type&quot;: &quot;count&quot;, &quot;id&quot;: &quot;tool_calls&quot;}
+            ],
+            &quot;bucketAggs&quot;: [
+              {&quot;field&quot;: &quot;tool_name&quot;, &quot;type&quot;: &quot;terms&quot;, &quot;size&quot;: 15},
+              {&quot;type&quot;: &quot;date_histogram&quot;, &quot;field&quot;: &quot;timestamp&quot;,
+               &quot;settings&quot;: {&quot;interval&quot;: &quot;5m&quot;}}
+            ]
+          }
+        ]
+      },
+      {
+        &quot;title&quot;: &quot;Prompt Injection Attempts — Trend&quot;,
+        &quot;type&quot;: &quot;timeseries&quot;,
+        &quot;gridPos&quot;: {&quot;h&quot;: 8, &quot;w&quot;: 12, &quot;x&quot;: 12, &quot;y&quot;: 4},
+        &quot;targets&quot;: [
+          {
+            &quot;datasource&quot;: &quot;Elasticsearch&quot;,
+            &quot;query&quot;: &quot;alert_type:prompt_injection&quot;,
+            &quot;metrics&quot;: [
+              {&quot;type&quot;: &quot;count&quot;, &quot;id&quot;: &quot;injection_count&quot;}
+            ],
+            &quot;bucketAggs&quot;: [
+              {&quot;type&quot;: &quot;date_histogram&quot;, &quot;field&quot;: &quot;timestamp&quot;,
+               &quot;settings&quot;: {&quot;interval&quot;: &quot;1h&quot;}}
+            ]
+          }
+        ]
+      },
+      {
+        &quot;title&quot;: &quot;Data Flow — Internal Reads vs External Writes&quot;,
+        &quot;type&quot;: &quot;barchart&quot;,
+        &quot;gridPos&quot;: {&quot;h&quot;: 8, &quot;w&quot;: 12, &quot;x&quot;: 12, &quot;y&quot;: 0},
+        &quot;targets&quot;: [
+          {
+            &quot;datasource&quot;: &quot;Elasticsearch&quot;,
+            &quot;query&quot;: &quot;event_type:tool_invocation AND (tool_name:(database_query OR file_read OR vector_search) OR tool_name:(http_request OR send_email OR api_call_external))&quot;,
+            &quot;metrics&quot;: [
+              {&quot;type&quot;: &quot;count&quot;, &quot;id&quot;: &quot;flow_count&quot;}
+            ],
+            &quot;bucketAggs&quot;: [
+              {&quot;field&quot;: &quot;tool_name&quot;, &quot;type&quot;: &quot;terms&quot;},
+              {&quot;type&quot;: &quot;date_histogram&quot;, &quot;field&quot;: &quot;timestamp&quot;,
+               &quot;settings&quot;: {&quot;interval&quot;: &quot;1h&quot;}}
+            ]
+          }
+        ]
+      },
+      {
+        &quot;title&quot;: &quot;Top Agents by Risk Score&quot;,
+        &quot;type&quot;: &quot;table&quot;,
+        &quot;gridPos&quot;: {&quot;h&quot;: 8, &quot;w&quot;: 24, &quot;x&quot;: 0, &quot;y&quot;: 12},
+        &quot;targets&quot;: [
+          {
+            &quot;datasource&quot;: &quot;Elasticsearch&quot;,
+            &quot;query&quot;: &quot;event_type:tool_invocation&quot;,
+            &quot;metrics&quot;: [
+              {&quot;type&quot;: &quot;count&quot;, &quot;id&quot;: &quot;total_calls&quot;},
+              {&quot;type&quot;: &quot;cardinality&quot;, &quot;field&quot;: &quot;tool_name&quot;,
+               &quot;id&quot;: &quot;unique_tools&quot;},
+              {&quot;type&quot;: &quot;max&quot;, &quot;field&quot;: &quot;severity_score&quot;,
+               &quot;id&quot;: &quot;max_severity&quot;}
+            ],
+            &quot;bucketAggs&quot;: [
+              {&quot;field&quot;: &quot;agent_id&quot;, &quot;type&quot;: &quot;terms&quot;, &quot;size&quot;: 20,
+               &quot;orderBy&quot;: &quot;max_severity&quot;}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre></div>
+<h3 id="step-4-automated-response-orchestrator">Step 4: Automated Response Orchestrator<a class="headerlink" href="#step-4-automated-response-orchestrator">&para;</a></h3>
+<p>The response automator consumes alerts and executes pre-defined containment actions without human intervention for high-confidence, high-severity scenarios:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import json
+import asyncio
+import logging
+from dataclasses import dataclass
+from aiokafka import AIOKafkaConsumer
+
+logger = logging.getLogger(&quot;agent_soc.response&quot;)
+
+
+@dataclass
+class ResponseAction:
+    action: str
+    target: str
+    parameters: dict
+    executed: bool = False
+    result: str = &quot;&quot;
+
+
+class AgentSOCResponseAutomator:
+    &quot;&quot;&quot;Automated incident response that executes containment
+    actions based on alert severity and confidence.&quot;&quot;&quot;
+
+    # Thresholds for automated response without human approval
+    AUTO_RESPONSE_THRESHOLDS = {
+        &quot;critical&quot;: {&quot;min_confidence&quot;: 0.85},
+        &quot;high&quot;: {&quot;min_confidence&quot;: 0.95},
+    }
+
+    def __init__(self, kafka_brokers: list[str], agent_control_api: str):
+        self.kafka_brokers = kafka_brokers
+        self.agent_control_api = agent_control_api
+        self.action_log: list[ResponseAction] = []
+
+    async def start(self):
+        &quot;&quot;&quot;Consume alerts and execute automated responses.&quot;&quot;&quot;
+        consumer = AIOKafkaConsumer(
+            &quot;agent-security-alerts&quot;,
+            bootstrap_servers=self.kafka_brokers,
+            value_deserializer=lambda m: json.loads(m.decode()),
+            group_id=&quot;agent-soc-response&quot;,
+        )
+        await consumer.start()
+        try:
+            async for message in consumer:
+                alert = message.value
+                await self._handle_alert(alert)
+        finally:
+            await consumer.stop()
+
+    async def _handle_alert(self, alert: dict):
+        &quot;&quot;&quot;Determine and execute the appropriate response.&quot;&quot;&quot;
+        severity = alert.get(&quot;severity&quot;, &quot;low&quot;)
+        confidence = alert.get(&quot;details&quot;, {}).get(&quot;confidence&quot;, 0.0)
+        alert_type = alert.get(&quot;alert_type&quot;, &quot;&quot;)
+        agent_id = alert.get(&quot;agent_id&quot;, &quot;&quot;)
+        session_id = alert.get(&quot;session_id&quot;, &quot;&quot;)
+
+        threshold = self.AUTO_RESPONSE_THRESHOLDS.get(severity)
+        if not threshold or confidence &lt; threshold[&quot;min_confidence&quot;]:
+            logger.info(
+                &quot;Alert %s below auto-response threshold — &quot;
+                &quot;routing to analyst queue&quot;,
+                alert.get(&quot;alert_id&quot;),
+            )
+            await self._route_to_analyst(alert)
+            return
+
+        # Execute graduated response based on alert type
+        if alert_type == &quot;potential_exfiltration&quot;:
+            actions = await self._respond_exfiltration(
+                agent_id, session_id, alert
+            )
+        elif alert_type == &quot;prompt_injection&quot;:
+            actions = await self._respond_injection(
+                agent_id, session_id, alert
+            )
+        elif alert_type.startswith(&quot;anomaly_&quot;):
+            actions = await self._respond_anomaly(
+                agent_id, session_id, alert
+            )
+        else:
+            actions = await self._respond_generic(
+                agent_id, session_id, alert
+            )
+
+        self.action_log.extend(actions)
+        logger.warning(
+            &quot;Automated response executed for alert %s: %d actions&quot;,
+            alert.get(&quot;alert_id&quot;),
+            len(actions),
+        )
+
+    async def _respond_exfiltration(
+        self, agent_id: str, session_id: str, alert: dict
+    ) -&gt; list[ResponseAction]:
+        &quot;&quot;&quot;Maximum response — immediate isolation.&quot;&quot;&quot;
+        actions = []
+
+        # 1. Terminate session immediately
+        action = await self._execute_action(
+            &quot;terminate_session&quot;,
+            session_id,
+            {&quot;reason&quot;: &quot;exfiltration_detected&quot;},
+        )
+        actions.append(action)
+
+        # 2. Revoke all credentials
+        action = await self._execute_action(
+            &quot;revoke_credentials&quot;,
+            agent_id,
+            {&quot;scope&quot;: &quot;all&quot;, &quot;reason&quot;: &quot;exfiltration_detected&quot;},
+        )
+        actions.append(action)
+
+        # 3. Suspend all agents in the delegation chain
+        trace_id = alert.get(&quot;trace_id&quot;, &quot;&quot;)
+        action = await self._execute_action(
+            &quot;cascade_suspend&quot;,
+            trace_id,
+            {&quot;reason&quot;: &quot;exfiltration_detected&quot;},
+        )
+        actions.append(action)
+
+        # 4. Preserve forensic evidence
+        action = await self._execute_action(
+            &quot;forensic_snapshot&quot;,
+            session_id,
+            {&quot;include_context_window&quot;: True},
+        )
+        actions.append(action)
+
+        return actions
+
+    async def _respond_injection(
+        self, agent_id: str, session_id: str, alert: dict
+    ) -&gt; list[ResponseAction]:
+        &quot;&quot;&quot;Context quarantine and enhanced monitoring.&quot;&quot;&quot;
+        actions = []
+
+        action = await self._execute_action(
+            &quot;quarantine_context&quot;,
+            session_id,
+            {&quot;reinitialize_from&quot;: &quot;last_clean_checkpoint&quot;},
+        )
+        actions.append(action)
+
+        action = await self._execute_action(
+            &quot;elevate_monitoring&quot;,
+            agent_id,
+            {&quot;level&quot;: &quot;maximum&quot;, &quot;duration_hours&quot;: 24},
+        )
+        actions.append(action)
+
+        return actions
+
+    async def _respond_anomaly(
+        self, agent_id: str, session_id: str, alert: dict
+    ) -&gt; list[ResponseAction]:
+        &quot;&quot;&quot;Restrict tools and increase monitoring.&quot;&quot;&quot;
+        actions = []
+
+        action = await self._execute_action(
+            &quot;restrict_tools&quot;,
+            agent_id,
+            {
+                &quot;deny_list&quot;: [
+                    &quot;execute_shell&quot;, &quot;http_request&quot;,
+                    &quot;api_call_external&quot;,
+                ],
+                &quot;duration_hours&quot;: 4,
+            },
+        )
+        actions.append(action)
+
+        action = await self._execute_action(
+            &quot;elevate_monitoring&quot;,
+            agent_id,
+            {&quot;level&quot;: &quot;enhanced&quot;, &quot;duration_hours&quot;: 48},
+        )
+        actions.append(action)
+
+        return actions
+
+    async def _respond_generic(
+        self, agent_id: str, session_id: str, alert: dict
+    ) -&gt; list[ResponseAction]:
+        &quot;&quot;&quot;Default response — log and monitor.&quot;&quot;&quot;
+        action = await self._execute_action(
+            &quot;elevate_monitoring&quot;,
+            agent_id,
+            {&quot;level&quot;: &quot;enhanced&quot;, &quot;duration_hours&quot;: 12},
+        )
+        return [action]
+
+    async def _execute_action(
+        self, action: str, target: str, parameters: dict
+    ) -&gt; ResponseAction:
+        &quot;&quot;&quot;Execute a containment action via the agent control API.&quot;&quot;&quot;
+        response_action = ResponseAction(
+            action=action, target=target, parameters=parameters
+        )
+        try:
+            # In production, this calls the agent control API
+            logger.info(
+                &quot;Executing: %s on %s with %s&quot;,
+                action, target, json.dumps(parameters),
+            )
+            response_action.executed = True
+            response_action.result = &quot;success&quot;
+        except Exception as e:
+            response_action.result = f&quot;failed: {e}&quot;
+            logger.error(&quot;Action failed: %s — %s&quot;, action, e)
+        return response_action
+
+    async def _route_to_analyst(self, alert: dict):
+        &quot;&quot;&quot;Send low-confidence alerts to the human analyst queue.&quot;&quot;&quot;
+        logger.info(
+            &quot;Routing alert %s (severity=%s) to analyst queue&quot;,
+            alert.get(&quot;alert_id&quot;),
+            alert.get(&quot;severity&quot;),
+        )</code></pre></div>
+<h3 id="putting-it-all-together">Putting It All Together<a class="headerlink" href="#putting-it-all-together">&para;</a></h3>
+<p>To deploy the Agent SOC:</p>
+<ol><li><strong>Deploy the telemetry pipeline</strong> — Start the OpenTelemetry Collector with the configuration above. Ensure all agents in your fleet are instrumented with the <code>AgentSecurityLogger</code> from Section 15.1. </li><li><strong>Initialize behavioral baselines</strong> — Run the <code>AgentAnomalyDetector.build_profile()</code> against at least 30 days of historical telemetry for each agent in your fleet. </li><li><strong>Start the detection engine</strong> — Deploy <code>AgentSOCDetectionEngine</code> as a Kafka consumer group. Scale horizontally by adding consumer instances; Kafka partitioning ensures each event is processed exactly once. </li><li><strong>Configure the dashboard</strong> — Import the Grafana dashboard JSON into your Grafana instance. Connect it to your Elasticsearch data source. </li><li><strong>Enable response automation</strong> — Deploy <code>AgentSOCResponseAutomator</code> with conservative confidence thresholds initially. Monitor the action log for false positives and adjust thresholds over a two-week burn-in period. </li><li><strong>Conduct a tabletop exercise</strong> — Before going live, run a simulated agent compromise through the entire pipeline. Verify that telemetry flows correctly, detections fire, the dashboard updates, and automated responses execute as expected.</li></ol>
+<blockquote><p><strong>Key Takeaway</strong>
+An Agent Security Operations Center is not a single tool—it is an integrated pipeline spanning telemetry ingestion, real-time detection, visual monitoring, and automated response. Build it incrementally: start with structured logging and manual analysis, then layer in automated detection, dashboards, and response automation as your operational maturity grows. The SOC is only as good as the telemetry it consumes—invest in instrumentation before investing in dashboards.</p></blockquote>
+<hr>
+<h2 id="summary-2">Summary<a class="headerlink" href="#summary-2">&para;</a></h2>
+<p>This chapter established the operational security foundation for running AI agent systems in production. We began by identifying why traditional APM tools are insufficient for agent observability, then built a structured telemetry pipeline with distributed tracing across agent delegation chains. The detection engineering section provided concrete implementations for prompt injection detection, behavioral anomaly detection, exfiltration monitoring, and meta-detection of evasion techniques. We developed incident response playbooks tailored to the unique challenges of agent compromises—including containment strategies that account for cascading delegation and context contamination. Finally, the lab synthesized these components into a functional Agent SOC with real-time detection, dashboards, and automated response.</p>
+<p>The observability and response capabilities from this chapter complete the defensive triad: <strong>prevention</strong> (Chapters 10–14), <strong>detection</strong> (this chapter), and <strong>response</strong> (this chapter). In the next chapter, we turn to the governance and compliance frameworks that ensure these technical controls align with organizational policy and regulatory requirements.</p>
+<h1 id="part-vi-strategy-and-the-future" class="part-heading">PART VI: STRATEGY AND THE FUTURE<a class="headerlink" href="#part-vi-strategy-and-the-future">&para;</a></h1>
+<hr>
+<p><em>The preceding parts of this book have armed you with the technical knowledge to understand, attack, and defend AI agent systems. But technology alone does not secure an organization. The final part of The Siege Protocol shifts from the tactical to the strategic—from individual vulnerabilities and countermeasures to the organizational programs, policies, and forward-looking strategies that will determine whether enterprises thrive or fall in the age of autonomous AI.</em></p>
+<p><em>Chapter 16 provides a comprehensive blueprint for building an AI agent security program from the ground up—covering organizational readiness, policy frameworks, security architecture patterns, and the metrics that prove your program's value to executive leadership. Chapter 17 then looks beyond the horizon, exploring the emerging agent architectures, evolving threats, next-generation defenses, and career paths that will define the next decade of AI agent security.</em></p>
+<p><em>The siege is not a single battle. It is a campaign. These chapters equip you to wage it.</em></p>
+<hr>
+
+<div class="chapter-nav"><a href="chapter-14.html">← Chapter 14: Identity, Authentication, an</a><a href="chapter-16.html">Chapter 16: Building an AI Agent Securit →</a></div>
+</main>
+<script>
+window.toggleSidebar=function(){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}};
+window.copyCode=function(b){var c=b.parentElement.querySelector('code');if(!c)return;navigator.clipboard.writeText(c.textContent).then(function(){var o=b.textContent;b.textContent='✓ Copied';b.style.color='var(--accent-green)';setTimeout(function(){b.textContent=o;b.style.color='';},2000);});};
+document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=1024){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s)s.classList.remove('open');if(o)o.classList.remove('active');}});});
+</script>
+</body>
+</html>

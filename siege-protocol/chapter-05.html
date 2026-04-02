@@ -1,0 +1,1673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 5: Vector Database Security — The Persistence Layer — The Siege Protocol</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-hover: #30363d;
+    --border: #30363d;
+    --border-muted: #21262d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #656d76;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-cyan: #39d2c0;
+    --code-bg: #161b22;
+    --sidebar-width: 300px;
+    --header-height: 60px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    color: var(--text-primary); background: var(--bg-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ─── SCROLL INDICATOR ─── */
+  .scroll-indicator {
+    position: fixed; top: var(--header-height); left: 0; right: 0;
+    height: 3px; background: transparent; z-index: 101;
+  }
+  .scroll-indicator .bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    width: 0%; transition: width 0.1s;
+  }
+
+  /* ─── HEADER ─── */
+  .site-header {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--header-height);
+    display: flex; align-items: center; padding: 0 1.5rem;
+    z-index: 100; border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: rgba(22, 27, 34, 0.88);
+  }
+  .hamburger {
+    display: none; background: none; border: none;
+    color: var(--text-primary); font-size: 1.4rem;
+    cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem;
+    border-radius: 6px; transition: background 0.15s;
+  }
+  .hamburger:hover { background: var(--bg-tertiary); }
+  .site-header .logo {
+    font-size: 1rem; font-weight: 700; color: var(--text-primary);
+    display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
+  }
+  .site-header .logo .icon { font-size: 1.25rem; }
+  .site-header .badge {
+    background: var(--accent-green); color: #000;
+    font-size: 0.65rem; font-weight: 600; padding: 2px 8px;
+    border-radius: 12px; margin-left: 0.5rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .header-nav {
+    margin-left: auto; display: flex; gap: 6px; align-items: center;
+  }
+  .header-nav button {
+    background: none; border: 1px solid var(--border);
+    color: var(--text-secondary); cursor: pointer;
+    padding: 4px 12px; border-radius: 6px;
+    font-size: 0.78rem; font-family: inherit; transition: all 0.15s;
+  }
+  .header-nav button:hover {
+    color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--text-muted);
+  }
+  .header-nav button:disabled { opacity: 0.3; cursor: default; background: none; }
+  .header-nav .chapter-label {
+    color: var(--text-muted); font-size: 0.75rem;
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; padding: 0 6px;
+  }
+
+  /* ─── SIDEBAR ─── */
+  .sidebar {
+    position: fixed; top: var(--header-height); left: 0; bottom: 0;
+    width: var(--sidebar-width); background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 1.25rem 0 3rem;
+    z-index: 50; transition: transform 0.3s ease;
+  }
+  .sidebar-title {
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--text-muted);
+    padding: 0 1.25rem; margin-bottom: 0.75rem;
+  }
+  .sidebar a {
+    display: block; color: var(--text-secondary); text-decoration: none;
+    font-size: 0.8125rem; line-height: 1.4;
+    border-left: 2px solid transparent; transition: all 0.15s ease;
+  }
+  .sidebar a:hover {
+    color: var(--text-primary); background: var(--bg-tertiary);
+    border-left-color: var(--accent-blue); text-decoration: none;
+  }
+  .sidebar a.active {
+    color: var(--accent-blue); border-left-color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.05);
+  }
+  .sidebar-part {
+    font-weight: 700; color: var(--accent-green) !important;
+    font-size: 0.78rem !important; padding: 0.6rem 1.25rem 0.35rem;
+    margin-top: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .sidebar-part:first-child { margin-top: 0; }
+  .sidebar-chapter {
+    font-weight: 600; color: var(--text-primary) !important;
+    padding: 0.3rem 1.25rem 0.3rem 1.75rem;
+  }
+  .sidebar-appendix {
+    font-weight: 600; color: var(--accent-orange) !important;
+    padding: 0.3rem 1.25rem 0.3rem 1.75rem; margin-top: 0.15rem;
+  }
+  .sidebar-appendices {
+    font-weight: 700; color: var(--accent-orange) !important;
+    font-size: 0.78rem !important; padding: 0.6rem 1.25rem 0.35rem;
+    margin-top: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .sidebar-section {
+    padding: 0.2rem 1.25rem 0.2rem 2.5rem;
+    font-size: 0.78rem !important; color: var(--text-muted) !important;
+  }
+  .sidebar-section:hover { color: var(--text-secondary) !important; }
+  .sidebar-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: 40;
+  }
+
+  /* ─── HERO ─── */
+  .hero {
+    text-align: center; padding: 80px 2rem 50px;
+    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 30% 20%, rgba(88,166,255,0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 80%, rgba(63,185,80,0.04) 0%, transparent 50%);
+    pointer-events: none;
+  }
+  .hero .shield { font-size: 4rem; display: block; margin-bottom: 1rem; filter: drop-shadow(0 0 20px rgba(88,166,255,0.3)); }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.25rem) !important; font-weight: 800 !important;
+    letter-spacing: 3px; color: var(--text-primary) !important;
+    margin: 0 0 0.4rem !important; border: none !important; padding: 0 !important;
+    text-align: center;
+  }
+  .hero .subtitle {
+    font-size: clamp(0.95rem, 2vw, 1.15rem); color: var(--text-secondary);
+    max-width: 600px; margin: 0 auto 1.25rem; line-height: 1.5;
+  }
+  .hero .author { font-size: 1rem; color: var(--accent-blue); font-weight: 500; }
+  .hero .meta {
+    margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted);
+    display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap;
+  }
+  .hero .meta span { display: flex; align-items: center; gap: 0.3rem; }
+
+  /* ─── MAIN ─── */
+  .main {
+    margin-left: var(--sidebar-width); margin-top: var(--header-height);
+    padding: 2.5rem 3rem 6rem; max-width: calc(var(--sidebar-width) + 860px);
+  }
+
+  /* ─── TYPOGRAPHY ─── */
+  h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border); color: var(--text-primary); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 3rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border-muted); color: var(--text-primary); }
+  h3 { font-size: 1.2rem; font-weight: 600; margin: 2rem 0 0.6rem; color: var(--text-primary); }
+  h4 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; color: var(--text-secondary); }
+  h5, h6 { font-size: 0.9rem; font-weight: 600; margin: 1.25rem 0 0.4rem; color: var(--text-secondary); }
+
+  .part-heading {
+    font-size: 1.75rem !important; text-align: center;
+    color: var(--accent-green) !important;
+    padding: 2rem 0 1rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .part-heading::after {
+    content: ''; display: block; width: 80px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
+    margin: 0.75rem auto 0; border-radius: 1px;
+  }
+  .chapter-heading {
+    font-size: 1.6rem !important; color: var(--accent-blue) !important;
+    padding-bottom: 0.5rem !important; margin-top: 3.5rem !important;
+    border-bottom: 1px solid rgba(88,166,255,0.2) !important;
+  }
+  .appendix-heading {
+    font-size: 1.4rem !important; color: var(--accent-orange) !important;
+    padding-bottom: 0.5rem !important; margin-top: 3rem !important;
+    border-bottom: 1px dashed rgba(210,153,34,0.3) !important;
+  }
+  .appendices-heading {
+    font-size: 1.5rem !important; text-align: center;
+    color: var(--accent-orange) !important;
+    padding: 1.5rem 0 0.75rem !important; margin-top: 4rem !important;
+    border-bottom: none !important; border-top: 1px solid var(--border);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .appendices-heading::after {
+    content: ''; display: block; width: 60px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-orange), var(--accent-purple));
+    margin: 0.6rem auto 0; border-radius: 1px;
+  }
+
+  .headerlink {
+    color: var(--accent-blue); opacity: 0; margin-left: 0.3rem;
+    font-size: 0.8em; transition: opacity 0.15s; text-decoration: none;
+  }
+  h1:hover .headerlink, h2:hover .headerlink,
+  h3:hover .headerlink, h4:hover .headerlink { opacity: 0.5; }
+  .headerlink:hover { opacity: 1 !important; text-decoration: none; }
+
+  .reading-time {
+    font-size: 0.7rem; font-weight: 400; color: var(--text-muted);
+    background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px;
+    margin-left: 0.5rem; vertical-align: middle; letter-spacing: 0; text-transform: none;
+  }
+
+  p { margin: 0.75rem 0; }
+  strong { color: var(--text-primary); }
+  em { color: var(--text-secondary); }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border-muted); margin: 2.5rem 0; }
+
+  ul, ol { padding-left: 1.5rem; margin: 0.6rem 0; }
+  li { margin: 0.3rem 0; line-height: 1.6; }
+  li::marker { color: var(--text-muted); }
+
+  blockquote {
+    margin: 1.25rem 0; padding: 0.75rem 1rem;
+    border-left: 3px solid var(--accent-blue);
+    background: rgba(88,166,255,0.05);
+    border-radius: 0 6px 6px 0; color: var(--text-secondary);
+  }
+  blockquote p { margin: 0.3rem 0; }
+  blockquote strong { color: var(--text-primary); }
+
+  code {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.875em; background: var(--bg-tertiary);
+    padding: 0.15em 0.4em; border-radius: 4px; color: var(--accent-cyan);
+  }
+  .code-block {
+    position: relative; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
+  }
+  .code-block pre {
+    background: var(--code-bg); padding: 1rem 1.25rem;
+    overflow-x: auto; margin: 0; line-height: 1.5; border-radius: 8px;
+  }
+  .code-block pre code {
+    background: none; padding: 0; color: var(--text-primary);
+    font-size: 0.8125rem; display: block; white-space: pre;
+  }
+  .code-lang {
+    position: absolute; top: 0; right: 72px;
+    padding: 2px 10px; font-size: 0.65rem; color: var(--text-muted);
+    background: rgba(0,0,0,0.3); border-radius: 0 0 4px 4px;
+    text-transform: uppercase; letter-spacing: 0.5px; font-family: "SF Mono", monospace;
+  }
+  .copy-btn {
+    position: absolute; top: 6px; right: 8px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    color: var(--text-muted); padding: 3px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 0.7rem; font-family: inherit;
+    transition: all 0.15s; z-index: 2;
+  }
+  .copy-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  .table-wrap {
+    overflow-x: auto; margin: 1.25rem 0;
+    border-radius: 8px; border: 1px solid var(--border);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  thead th {
+    background: var(--bg-tertiary); color: var(--text-primary);
+    font-weight: 600; text-align: left; padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border); font-size: 0.8125rem;
+  }
+  tbody td {
+    padding: 0.5rem 0.75rem; border: 1px solid var(--border-muted);
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+  tbody tr:hover { background: var(--bg-tertiary); }
+
+  .chapter-nav-bottom {
+    display: flex; justify-content: space-between; align-items: stretch;
+    gap: 1rem; margin: 3rem 0 1rem; padding: 1.25rem 0 0;
+    border-top: 1px solid var(--border-muted);
+  }
+  .chapter-nav-bottom a {
+    display: flex; flex-direction: column; gap: 0.2rem;
+    padding: 0.75rem 1rem; border: 1px solid var(--border);
+    border-radius: 8px; text-decoration: none; transition: all 0.15s;
+    min-width: 0; max-width: 48%;
+  }
+  .chapter-nav-bottom a:hover {
+    background: var(--bg-tertiary); border-color: var(--accent-blue); text-decoration: none;
+  }
+  .chapter-nav-bottom .nav-label {
+    font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .chapter-nav-bottom .nav-title {
+    font-size: 0.85rem; color: var(--accent-blue); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chapter-nav-bottom .nav-next { margin-left: auto; text-align: right; }
+
+  #back-to-top {
+    position: fixed; bottom: 2rem; right: 2rem;
+    width: 40px; height: 40px; background: var(--bg-secondary);
+    border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-secondary); font-size: 1.1rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: all 0.2s; z-index: 90;
+  }
+  #back-to-top.visible { opacity: 1; pointer-events: auto; }
+  #back-to-top:hover { background: var(--bg-tertiary); color: var(--accent-blue); border-color: var(--accent-blue); }
+
+  .doc-footer {
+    margin-top: 4rem; padding: 1.5rem 0;
+    border-top: 1px solid var(--border-muted);
+    text-align: center; color: var(--text-muted); font-size: 0.8125rem;
+  }
+
+  @media (max-width: 1024px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay.open { display: block; }
+    .hamburger { display: block; }
+    .main { margin-left: 0; padding: 2rem 1.5rem 4rem; max-width: 100%; }
+    .hero { padding: 60px 1.5rem 40px; }
+  }
+  @media (max-width: 640px) {
+    .main { padding: 1.5rem 1rem 3rem; }
+    h1 { font-size: 1.5rem; } h2 { font-size: 1.25rem; }
+    .part-heading { font-size: 1.3rem !important; }
+    .chapter-heading { font-size: 1.2rem !important; }
+    pre { font-size: 0.75rem; padding: 0.75rem; }
+    table { font-size: 0.8rem; }
+    thead th, tbody td { padding: 0.4rem 0.5rem; }
+    .chapter-nav-bottom { flex-direction: column; }
+    .chapter-nav-bottom a { max-width: 100%; }
+    .header-nav .chapter-label { display: none; }
+    .hero .shield { font-size: 3rem; }
+    .hero .meta { flex-direction: column; gap: 0.5rem; }
+  }
+  @media print {
+    body { background: #fff; color: #1a1a1a; }
+    .site-header, .sidebar, .sidebar-overlay, #back-to-top,
+    .scroll-indicator, .copy-btn, .code-lang, .hamburger,
+    .header-nav { display: none !important; }
+    .main { margin-left: 0; max-width: 100%; padding: 1rem; }
+    .hero { background: #fff; border-bottom: 2px solid #000; padding: 2rem 1rem; }
+    .hero h1 { color: #000 !important; }
+    h1, h2, h3, h4 { color: #000; }
+    a { color: #0066cc; }
+    code { background: #f3f3f3; color: #333; }
+    .code-block pre { background: #f5f5f5; border-color: #ccc; }
+    .code-block pre code { color: #1a1a1a; }
+    blockquote { border-left-color: #666; background: #f9f9f9; color: #333; }
+    thead th { background: #eee; color: #000; border-color: #999; }
+    tbody td { border-color: #ddd; }
+    .part-heading { color: #000 !important; }
+    .chapter-heading { color: #000 !important; }
+    .chapter-nav-bottom, .headerlink, .reading-time { display: none; }
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  .toc { display: none; }
+  ::selection { background: rgba(88,166,255,0.3); }
+</style>
+<style>
+.sidebar{position:fixed;top:0;left:0;width:280px;height:100vh;background:#161b22;border-right:1px solid #30363d;overflow-y:auto;z-index:100;padding:16px 0;transition:transform 0.3s;}
+.sidebar-header{padding:16px 20px;border-bottom:1px solid #30363d;}
+.sidebar-header h3{margin:0;font-size:1rem;color:#e6edf3;}
+.sidebar-links{padding:8px 0;}
+.sidebar-links a{display:block;padding:8px 20px;color:#8b949e;text-decoration:none;font-size:0.85rem;border-left:2px solid transparent;transition:all 0.2s;}
+.sidebar-links a:hover{color:#58a6ff;background:#1c2128;border-left-color:#58a6ff;}
+.sidebar-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99;}
+.sidebar-overlay.active{display:block;}
+.doc-header{position:fixed;top:0;left:280px;right:0;height:48px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;padding:0 20px;gap:16px;z-index:98;}
+.hamburger{display:none;background:none;border:none;color:#e6edf3;font-size:1.4rem;cursor:pointer;}
+.header-title{color:#e6edf3;font-weight:600;font-size:0.95rem;}
+.main{margin-left:280px;margin-top:48px;padding:40px;max-width:900px;}
+.chapter-nav{display:flex;justify-content:space-between;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #30363d;}
+.chapter-nav a{color:#58a6ff;text-decoration:none;font-size:0.9rem;}
+.chapter-nav a:hover{text-decoration:underline;}
+@media(max-width:1024px){.sidebar{transform:translateX(-100%);}.sidebar.open{transform:translateX(0);}.doc-header{left:0;}.hamburger{display:block;}.main{margin-left:0;}}
+</style>
+</head>
+<body>
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+<nav id="sidebar" class="sidebar">
+<div class="sidebar-header"><h3>📖 The Siege Protocol</h3></div>
+<div class="sidebar-links">
+<a href="index.html">📚 Table of Contents</a>
+<a href="chapter-01.html">Chapter 1: The Paradigm Shift — Why Traditional…</a>
+<a href="chapter-02.html">Chapter 2: Anatomy of an AI Agent — Attack Surf…</a>
+<a href="chapter-03.html">Chapter 3: RAG Pipeline Security — The Ingestio…</a>
+<a href="chapter-05.html">Chapter 5: Vector Database Security — The Persi…</a>
+<a href="chapter-06.html">Chapter 6: Multi-Agent Architecture Security — …</a>
+<a href="chapter-07.html">Chapter 7: Agent Tool Use Security — When AI To…</a>
+<a href="chapter-09.html">Chapter 9: The CLI Agent Revolution — A New Cla…</a>
+<a href="chapter-10.html">Chapter 10: Securing the Developer Workstation …</a>
+<a href="chapter-11.html">Chapter 11: CI/CD Pipeline Security in the Agen…</a>
+<a href="chapter-12.html">Chapter 12: Prompt Injection — The Definitive D…</a>
+<a href="chapter-13.html">Chapter 13: Data Exfiltration and Privacy in Ag…</a>
+<a href="chapter-14.html">Chapter 14: Identity, Authentication, and Autho…</a>
+<a href="chapter-15.html">Chapter 15: Observability, Monitoring, and Inci…</a>
+<a href="chapter-16.html">Chapter 16: Building an AI Agent Security Program</a>
+<a href="chapter-17.html">Chapter 17: The Future — What Comes After CLI A…</a>
+<a href="appendix-a.html">Appendix A: Tool and Framework Reference</a>
+<a href="appendix-b.html">Appendix B: Threat Model Templates</a>
+<a href="appendix-c.html">Appendix C: Security Checklists</a>
+<a href="appendix-d.html">Appendix D: Regulatory and Compliance Mapping</a>
+<a href="appendix-e.html">Appendix E: Lab Environment Setup Guide</a>
+</div></nav>
+
+<header class="doc-header">
+<button class="hamburger" onclick="toggleSidebar()">☰</button>
+<span class="header-title">The Siege Protocol</span>
+<a href="index.html" style="color:var(--text-secondary);text-decoration:none;font-size:0.85rem;">📚 TOC</a>
+</header>
+<main class="main">
+<h2 id="chapter-5-vector-database-security-the-persistence-layer" class="chapter-heading">Chapter 5: Vector Database Security — The Persistence Layer <span class="reading-time">⏱ ~25 min read</span><a class="headerlink" href="#chapter-5-vector-database-security-the-persistence-layer">&para;</a></h2>
+<p><em>"Your vectors remember everything. The question is who else can access those memories."</em></p>
+<p>Vector databases have become the backbone of modern AI systems. Every retrieval-augmented generation (RAG) pipeline, every semantic search engine, and every recommendation system depends on a persistence layer that stores high-dimensional embeddings alongside their associated metadata. Yet the security posture of these systems remains dangerously immature. Unlike relational databases, which have benefited from decades of hardening, vector databases are often deployed with default configurations, minimal access controls, and no encryption—exposed surfaces waiting to be exploited.</p>
+<p>This chapter dissects the security landscape of vector databases. We begin with a comprehensive threat model, move into the emerging science of embedding inversion attacks, cover operational hardening across the major platforms, and conclude with a hands-on penetration testing lab.</p>
+<hr>
+<h3 id="51-vector-database-threat-model">5.1 Vector Database Threat Model<a class="headerlink" href="#51-vector-database-threat-model">&para;</a></h3>
+<p>The first step in securing any system is understanding what can go wrong. Vector databases introduce a unique combination of traditional database risks and novel AI-specific attack surfaces. A proper threat model must address authentication and authorization, multi-tenancy isolation, backup and recovery integrity, and encryption across all states of data.</p>
+<h4 id="511-authentication-and-authorization-failures">5.1.1 Authentication and Authorization Failures<a class="headerlink" href="#511-authentication-and-authorization-failures">&para;</a></h4>
+<p>Most vector databases were designed for developer convenience, not enterprise security. Early versions of Chroma shipped with no authentication at all. Weaviate's default configuration exposes an unauthenticated HTTP endpoint. Pinecone relies on API keys that are frequently hardcoded into application source code.</p>
+<p>The authentication threat surface includes:</p>
+<ul><li><strong>Missing authentication</strong>: Services exposed on internal networks without any credential requirement</li><li><strong>Weak API key management</strong>: Static keys shared across teams, committed to repositories, or embedded in client-side code</li><li><strong>No key rotation</strong>: API keys that remain valid indefinitely with no rotation policy</li><li><strong>Overly permissive service accounts</strong>: A single key grants full read/write/admin access</li></ul>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># INSECURE: API key hardcoded in application code
+import pinecone
+
+pinecone.init(
+    api_key=&quot;sk-proj-abc123def456&quot;,  # Hardcoded secret
+    environment=&quot;us-west1-gcp&quot;
+)
+
+# SECURE: Key loaded from secrets manager with scoped permissions
+import os
+from azure.keyvault.secrets import SecretClient
+
+vault_client = SecretClient(
+    vault_url=os.environ[&quot;AZURE_VAULT_URL&quot;],
+    credential=DefaultAzureCredential()
+)
+api_key = vault_client.get_secret(&quot;pinecone-read-only-key&quot;).value
+
+pinecone.init(api_key=api_key, environment=&quot;us-west1-gcp&quot;)</code></pre></div>
+<p>Authorization failures are equally prevalent. Most vector database platforms implement coarse-grained access controls—if they implement any at all. The typical failure pattern involves a single API key that grants both read and write access to every namespace in an index. There is no concept of row-level security, no attribute-based access control, and no audit trail of who queried what.</p>
+<h4 id="512-multi-tenancy-risks">5.1.2 Multi-Tenancy Risks<a class="headerlink" href="#512-multi-tenancy-risks">&para;</a></h4>
+<p>Multi-tenancy in vector databases is often implemented through namespaces, collections, or metadata filtering—none of which were designed as security boundaries.</p>
+<p>Consider a SaaS platform that stores customer embeddings in a shared Pinecone index using namespaces:</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Tenant A&#x27;s data
+index.upsert(vectors=tenant_a_vectors, namespace=&quot;tenant-a&quot;)
+
+# Tenant B&#x27;s data
+index.upsert(vectors=tenant_b_vectors, namespace=&quot;tenant-b&quot;)
+
+# VULNERABILITY: Nothing prevents Tenant A&#x27;s compromised key
+# from querying Tenant B&#x27;s namespace
+results = index.query(
+    vector=attack_vector,
+    namespace=&quot;tenant-b&quot;,  # Cross-tenant access
+    top_k=100
+)</code></pre></div>
+<p>The risks in multi-tenant vector database deployments include:</p>
+<div class="table-wrap"><table><thead><tr><th>Risk Category</th><th>Description</th><th>Impact</th></tr></thead><tbody><tr><td><strong>Namespace traversal</strong></td><td>Namespaces are logical, not security boundaries</td><td>Full cross-tenant data access</td></tr><tr><td><strong>Metadata leakage</strong></td><td>Filter expressions can enumerate tenant metadata</td><td>Customer data enumeration</td></tr><tr><td><strong>Embedding proximity</strong></td><td>Similar tenants share embedding neighborhoods</td><td>Indirect information leakage</td></tr><tr><td><strong>Resource exhaustion</strong></td><td>One tenant's queries degrade others' performance</td><td>Denial of service</td></tr><tr><td><strong>Index poisoning</strong></td><td>Malicious vectors injected into shared index</td><td>Result manipulation across tenants</td></tr></tbody></table></div>
+<p>A secure multi-tenancy architecture requires dedicated indices per tenant, separate API keys with namespace-level restrictions, and network-level isolation where possible.</p>
+<h4 id="513-backup-recovery-and-data-lifecycle">5.1.3 Backup, Recovery, and Data Lifecycle<a class="headerlink" href="#513-backup-recovery-and-data-lifecycle">&para;</a></h4>
+<p>Vector databases rarely receive the same backup and recovery discipline applied to transactional databases. This creates several risks:</p>
+<ul><li><strong>Unencrypted backups</strong>: Snapshots stored in object storage without encryption, exposing raw embeddings and metadata</li><li><strong>No point-in-time recovery</strong>: Inability to roll back after an index poisoning attack</li><li><strong>Orphaned data</strong>: Deleted records that persist in backups indefinitely, violating data retention policies</li><li><strong>Backup credential exposure</strong>: Backup processes using long-lived credentials with excessive permissions</li></ul>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Example: Weaviate backup configuration with security controls
+backup:
+  provider: s3
+  s3:
+    bucket: &quot;weaviate-backups-prod&quot;
+    region: &quot;us-east-1&quot;
+    sse: &quot;aws:kms&quot;              # Server-side encryption with KMS
+    kms_key_id: &quot;arn:aws:kms:us-east-1:123456:key/backup-key&quot;
+  schedule: &quot;0 2 * * *&quot;         # Daily at 2 AM
+  retention:
+    days: 30                    # Automatic deletion after 30 days
+    compliance_hold: false
+  verification:
+    enabled: true               # Verify backup integrity
+    sample_queries: 10          # Run 10 sample queries against restored backup</code></pre></div>
+<h4 id="514-encryption-at-rest-and-in-transit">5.1.4 Encryption at Rest and in Transit<a class="headerlink" href="#514-encryption-at-rest-and-in-transit">&para;</a></h4>
+<p>Encryption for vector databases must cover three states:</p>
+<ol><li><strong>In transit</strong>: TLS 1.3 for all client-server and inter-node communication</li><li><strong>At rest</strong>: AES-256 encryption of index files, metadata stores, and write-ahead logs</li><li><strong>In use</strong>: Protection of embeddings during query processing (emerging area)</li></ol>
+<p>Many deployments fail at the basics. Self-hosted Chroma instances frequently run over unencrypted HTTP. Weaviate clusters communicate between nodes without mutual TLS. Pgvector inherits PostgreSQL's encryption capabilities but requires explicit configuration that is often skipped.</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Verify TLS configuration for a Weaviate instance
+openssl s_client -connect weaviate.internal:8080 -tls1_3 2&gt;/dev/null | \
+  openssl x509 -noout -subject -dates -issuer
+
+# Check for unencrypted Chroma endpoints
+nmap -sV -p 8000 chroma.internal --script ssl-enum-ciphers
+# If no TLS detected, the endpoint is transmitting embeddings in cleartext</code></pre></div>
+<blockquote><p><strong>Key Takeaway — Vector Database Threat Model</strong></p><p>Vector databases combine traditional database vulnerabilities (weak auth, missing encryption, poor backup hygiene) with AI-specific risks (cross-tenant embedding leakage, namespace traversal, index poisoning). Your threat model must address both categories. Treat namespaces as organizational tools, never as security boundaries.</p></blockquote>
+<hr>
+<h3 id="52-embedding-inversion-and-data-extraction">5.2 Embedding Inversion and Data Extraction<a class="headerlink" href="#52-embedding-inversion-and-data-extraction">&para;</a></h3>
+<p>Embeddings were once considered safe because they are "just numbers"—high-dimensional vectors with no obvious human-readable content. This assumption is dangerously wrong. A growing body of research demonstrates that embeddings can be inverted to reconstruct the original text, reveal membership in training datasets, and expose personally identifiable information encoded in the vector space.</p>
+<h4 id="521-text-reconstruction-from-embeddings">5.2.1 Text Reconstruction from Embeddings<a class="headerlink" href="#521-text-reconstruction-from-embeddings">&para;</a></h4>
+<p>Embedding inversion attacks train a decoder model to map vectors back to their source text. The attacker needs access to the embedding model (or a close approximation) and a corpus of text-embedding pairs to train the inverter.</p>
+<p>The seminal work by Morris et al. (2023) demonstrated that sentence embeddings from popular models could be inverted with surprising fidelity. Their Vec2Text approach achieved BLEU scores exceeding 90% on many benchmark datasets—meaning the reconstructed text was nearly identical to the original.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import torch
+import torch.nn as nn
+from transformers import AutoTokenizer, AutoModel
+
+class EmbeddingInverter(nn.Module):
+    &quot;&quot;&quot;
+    Demonstration: Train a decoder to reconstruct text from embeddings.
+    This illustrates the attack vector — NOT a tool for malicious use.
+    &quot;&quot;&quot;
+    def __init__(self, embedding_dim=768, vocab_size=30522, max_seq_len=128):
+        super().__init__()
+        self.projection = nn.Linear(embedding_dim, 512)
+        self.decoder = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(d_model=512, nhead=8, batch_first=True),
+            num_layers=6
+        )
+        self.output_head = nn.Linear(512, vocab_size)
+        self.position_encoding = nn.Embedding(max_seq_len, 512)
+
+    def forward(self, embedding, target_ids=None):
+        memory = self.projection(embedding).unsqueeze(1)
+        positions = torch.arange(
+            target_ids.size(1), device=embedding.device
+        )
+        tgt = self.position_encoding(positions).unsqueeze(0).expand(
+            embedding.size(0), -1, -1
+        )
+        decoded = self.decoder(tgt, memory.expand(-1, tgt.size(1), -1))
+        return self.output_head(decoded)
+
+
+def evaluate_inversion_risk(model_name: str, sample_texts: list[str]) -&gt; dict:
+    &quot;&quot;&quot;Assess how vulnerable an embedding model is to inversion.&quot;&quot;&quot;
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+
+    embeddings = []
+    for text in sample_texts:
+        inputs = tokenizer(text, return_tensors=&quot;pt&quot;, truncation=True)
+        with torch.no_grad():
+            output = model(**inputs)
+            embedding = output.last_hidden_state[:, 0, :]
+            embeddings.append(embedding)
+
+    # Measure embedding information density
+    stacked = torch.cat(embeddings, dim=0)
+    singular_values = torch.linalg.svdvals(stacked)
+    effective_rank = (
+        singular_values.sum() ** 2 / (singular_values ** 2).sum()
+    ).item()
+
+    return {
+        &quot;model&quot;: model_name,
+        &quot;embedding_dim&quot;: stacked.shape[1],
+        &quot;effective_rank&quot;: round(effective_rank, 2),
+        &quot;inversion_risk&quot;: &quot;HIGH&quot; if effective_rank &gt; 100 else &quot;MEDIUM&quot;,
+        &quot;recommendation&quot;: (
+            &quot;Apply dimensionality reduction or noise injection&quot;
+            if effective_rank &gt; 100
+            else &quot;Monitor for inversion attempts&quot;
+        ),
+    }</code></pre></div>
+<p>The effectiveness of inversion attacks depends on several factors:</p>
+<ul><li><strong>Embedding dimensionality</strong>: Higher dimensions preserve more information and are easier to invert</li><li><strong>Model architecture</strong>: Contrastive models (e.g., text-embedding-ada-002) retain more invertible information than classification-tuned models</li><li><strong>Text length</strong>: Short texts (under 50 tokens) are significantly easier to reconstruct</li><li><strong>Vocabulary domain</strong>: Specialized domains with limited vocabulary are more vulnerable</li></ul>
+<h4 id="522-membership-inference-attacks">5.2.2 Membership Inference Attacks<a class="headerlink" href="#522-membership-inference-attacks">&para;</a></h4>
+<p>Membership inference attacks determine whether a specific piece of text was used to generate embeddings stored in the database. This is a privacy violation even without reconstructing the text itself—knowing that a medical record or legal document exists in a system reveals sensitive information.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>import numpy as np
+from scipy.spatial.distance import cosine
+
+def membership_inference_attack(
+    target_text: str,
+    embedding_model,
+    vector_db_client,
+    collection_name: str,
+    threshold: float = 0.05
+) -&gt; dict:
+    &quot;&quot;&quot;
+    Determine if a specific text has been embedded and stored.
+    Uses distance-based analysis to infer membership.
+    &quot;&quot;&quot;
+    # Generate embedding for the target text
+    target_embedding = embedding_model.encode(target_text)
+
+    # Query the vector database for nearest neighbors
+    results = vector_db_client.query(
+        collection_name=collection_name,
+        query_vector=target_embedding.tolist(),
+        top_k=5,
+        include_distances=True
+    )
+
+    if not results or not results[&quot;distances&quot;]:
+        return {&quot;is_member&quot;: False, &quot;confidence&quot;: 0.0}
+
+    min_distance = min(results[&quot;distances&quot;][0])
+
+    # A near-zero distance strongly indicates membership
+    is_member = min_distance &lt; threshold
+
+    # Generate confidence score based on distance distribution
+    distances = np.array(results[&quot;distances&quot;][0])
+    gap_ratio = distances[1] / max(distances[0], 1e-10) if len(distances) &gt; 1 else float(&quot;inf&quot;)
+
+    return {
+        &quot;is_member&quot;: is_member,
+        &quot;min_distance&quot;: round(float(min_distance), 6),
+        &quot;confidence&quot;: round(min(gap_ratio / 10.0, 1.0), 3),
+        &quot;distance_distribution&quot;: {
+            &quot;mean&quot;: round(float(distances.mean()), 4),
+            &quot;std&quot;: round(float(distances.std()), 4),
+        },
+    }</code></pre></div>
+<h4 id="523-model-extraction-via-query-access">5.2.3 Model Extraction via Query Access<a class="headerlink" href="#523-model-extraction-via-query-access">&para;</a></h4>
+<p>An attacker with query access to a vector database can extract a functional copy of the embedding model by submitting crafted inputs and observing the returned vectors. This is known as a model stealing or model extraction attack.</p>
+<p>The attack proceeds in stages:</p>
+<ol><li><strong>Probing</strong>: Submit diverse text inputs and collect the returned embeddings</li><li><strong>Training</strong>: Use the input-output pairs to train a surrogate model</li><li><strong>Refinement</strong>: Use active learning to identify regions of the embedding space where the surrogate diverges from the target</li></ol>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>class ModelExtractionDetector:
+    &quot;&quot;&quot;Detect potential model extraction attempts via query pattern analysis.&quot;&quot;&quot;
+
+    def __init__(self, window_size: int = 1000, alert_threshold: float = 0.8):
+        self.query_log: list[dict] = []
+        self.window_size = window_size
+        self.alert_threshold = alert_threshold
+
+    def log_query(self, client_id: str, query_vector: list[float],
+                  metadata: dict = None):
+        self.query_log.append({
+            &quot;client_id&quot;: client_id,
+            &quot;vector&quot;: np.array(query_vector),
+            &quot;timestamp&quot;: metadata.get(&quot;timestamp&quot;) if metadata else None,
+        })
+
+    def analyze_extraction_risk(self, client_id: str) -&gt; dict:
+        &quot;&quot;&quot;Analyze query patterns for signs of model extraction.&quot;&quot;&quot;
+        client_queries = [
+            q for q in self.query_log[-self.window_size:]
+            if q[&quot;client_id&quot;] == client_id
+        ]
+
+        if len(client_queries) &lt; 50:
+            return {&quot;risk&quot;: &quot;LOW&quot;, &quot;reason&quot;: &quot;Insufficient query volume&quot;}
+
+        vectors = np.array([q[&quot;vector&quot;] for q in client_queries])
+
+        # Indicator 1: Systematic coverage of the embedding space
+        coverage = self._compute_space_coverage(vectors)
+
+        # Indicator 2: Unusual query rate (burst patterns)
+        query_rate = len(client_queries) / max(
+            (client_queries[-1][&quot;timestamp&quot;] -
+             client_queries[0][&quot;timestamp&quot;]).total_seconds(), 1
+        )
+
+        # Indicator 3: Low semantic coherence (random-looking queries)
+        coherence = self._compute_pairwise_similarity(vectors)
+
+        risk_score = (
+            0.4 * coverage +
+            0.3 * min(query_rate / 100, 1.0) +
+            0.3 * (1 - coherence)
+        )
+
+        return {
+            &quot;risk&quot;: &quot;HIGH&quot; if risk_score &gt; self.alert_threshold else &quot;MEDIUM&quot;
+                    if risk_score &gt; 0.5 else &quot;LOW&quot;,
+            &quot;risk_score&quot;: round(risk_score, 3),
+            &quot;indicators&quot;: {
+                &quot;space_coverage&quot;: round(coverage, 3),
+                &quot;query_rate_per_sec&quot;: round(query_rate, 2),
+                &quot;semantic_coherence&quot;: round(coherence, 3),
+            },
+        }
+
+    @staticmethod
+    def _compute_space_coverage(vectors: np.ndarray) -&gt; float:
+        singular_values = np.linalg.svd(vectors - vectors.mean(axis=0),
+                                         compute_uv=False)
+        energy = np.cumsum(singular_values ** 2) / (singular_values ** 2).sum()
+        return float(np.searchsorted(energy, 0.95) / len(singular_values))
+
+    @staticmethod
+    def _compute_pairwise_similarity(vectors: np.ndarray,
+                                      sample_size: int = 100) -&gt; float:
+        indices = np.random.choice(len(vectors), min(sample_size, len(vectors)),
+                                    replace=False)
+        sampled = vectors[indices]
+        norms = sampled / np.linalg.norm(sampled, axis=1, keepdims=True)
+        similarities = norms @ norms.T
+        mask = np.triu(np.ones_like(similarities, dtype=bool), k=1)
+        return float(similarities[mask].mean())</code></pre></div>
+<h4 id="524-pii-leakage-in-embedding-space">5.2.4 PII Leakage in Embedding Space<a class="headerlink" href="#524-pii-leakage-in-embedding-space">&para;</a></h4>
+<p>Embeddings encode semantic meaning—including personally identifiable information. Names, addresses, social security numbers, and medical conditions embedded alongside document text become queryable through similarity search. An attacker who discovers that the embedding space clusters PII-bearing documents can craft targeted queries to extract sensitive records.</p>
+<p>Mitigations for PII in embedding space include:</p>
+<ul><li><strong>Pre-embedding PII scrubbing</strong>: Remove or redact PII before generating embeddings</li><li><strong>Differential privacy</strong>: Add calibrated noise to embeddings (ε-differential privacy)</li><li><strong>Dimensionality reduction</strong>: Project embeddings to lower dimensions, destroying fine-grained PII signals</li><li><strong>Access-tier separation</strong>: Store PII-bearing embeddings in isolated, more heavily controlled collections</li></ul>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>def apply_differential_privacy(
+    embedding: np.ndarray, epsilon: float = 1.0, sensitivity: float = 1.0
+) -&gt; np.ndarray:
+    &quot;&quot;&quot;
+    Apply the Laplace mechanism to an embedding vector.
+    Lower epsilon = stronger privacy, more noise.
+    &quot;&quot;&quot;
+    scale = sensitivity / epsilon
+    noise = np.random.laplace(loc=0.0, scale=scale, size=embedding.shape)
+    noisy_embedding = embedding + noise
+    # Re-normalize to maintain unit sphere property
+    noisy_embedding = noisy_embedding / np.linalg.norm(noisy_embedding)
+    return noisy_embedding</code></pre></div>
+<blockquote><p><strong>Key Takeaway — Embedding Inversion and Data Extraction</strong></p><p>Embeddings are not anonymous. They can be inverted to reconstruct source text, probed to determine membership, and exploited to extract the underlying model. Treat stored embeddings with the same sensitivity classification as the original data they encode. Apply differential privacy, PII scrubbing, and query monitoring as layered defenses.</p></blockquote>
+<hr>
+<h3 id="53-operational-security-for-vector-databases">5.3 Operational Security for Vector Databases<a class="headerlink" href="#53-operational-security-for-vector-databases">&para;</a></h3>
+<p>Securing a vector database in production requires platform-specific hardening, continuous monitoring, granular access control, and compliance with data protection regulations. This section provides concrete guidance for the four most widely deployed vector database platforms: Pinecone, Weaviate, Chroma, and pgvector.</p>
+<h4 id="531-hardening-pinecone">5.3.1 Hardening Pinecone<a class="headerlink" href="#531-hardening-pinecone">&para;</a></h4>
+<p>Pinecone is a fully managed service, which limits infrastructure-level hardening but shifts responsibility to API security, network controls, and organizational policies.</p>
+<p><strong>API Key Management</strong></p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Pinecone key rotation strategy using a secrets manager
+import pinecone
+from datetime import datetime, timedelta
+import boto3
+
+class PineconeKeyRotator:
+    &quot;&quot;&quot;Automated API key rotation for Pinecone deployments.&quot;&quot;&quot;
+
+    def __init__(self, secrets_manager_client, secret_name: str):
+        self.sm = secrets_manager_client
+        self.secret_name = secret_name
+        self.rotation_interval = timedelta(days=30)
+
+    def get_active_key(self) -&gt; str:
+        response = self.sm.get_secret_value(SecretId=self.secret_name)
+        secret = json.loads(response[&quot;SecretString&quot;])
+        return secret[&quot;active_key&quot;]
+
+    def rotate_key(self):
+        &quot;&quot;&quot;
+        Rotation procedure:
+        1. Generate new key via Pinecone console/API
+        2. Store new key as pending in secrets manager
+        3. Update all consumers to use new key
+        4. Verify new key works
+        5. Revoke old key
+        6. Promote pending key to active
+        &quot;&quot;&quot;
+        current = self.get_active_key()
+        new_key = self._request_new_pinecone_key()
+
+        self.sm.update_secret(
+            SecretId=self.secret_name,
+            SecretString=json.dumps({
+                &quot;active_key&quot;: current,
+                &quot;pending_key&quot;: new_key,
+                &quot;rotation_started&quot;: datetime.utcnow().isoformat(),
+            })
+        )
+        return new_key
+
+    def _request_new_pinecone_key(self) -&gt; str:
+        # Implementation depends on Pinecone&#x27;s key management API
+        raise NotImplementedError(&quot;Integrate with Pinecone org API&quot;)</code></pre></div>
+<p><strong>Network Security</strong></p>
+<ul><li>Restrict Pinecone access to specific IP ranges using the project's network policy</li><li>Use AWS PrivateLink or GCP Private Service Connect for private connectivity</li><li>Implement a proxy layer that enforces additional authentication and rate limiting</li></ul>
+<p><strong>Namespace Isolation</strong></p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Enforce namespace isolation at the application layer
+class SecureNamespaceProxy:
+    &quot;&quot;&quot;Application-layer enforcement of tenant namespace isolation.&quot;&quot;&quot;
+
+    def __init__(self, index, tenant_registry: dict):
+        self.index = index
+        self.tenant_registry = tenant_registry
+
+    def query(self, tenant_id: str, vector: list, top_k: int = 10,
+              **kwargs) -&gt; dict:
+        allowed_namespaces = self.tenant_registry.get(tenant_id, [])
+        namespace = kwargs.get(&quot;namespace&quot;, &quot;&quot;)
+
+        if namespace not in allowed_namespaces:
+            raise PermissionError(
+                f&quot;Tenant {tenant_id} not authorized for namespace {namespace}&quot;
+            )
+
+        results = self.index.query(
+            vector=vector, top_k=top_k, namespace=namespace,
+            **{k: v for k, v in kwargs.items() if k != &quot;namespace&quot;}
+        )
+
+        # Audit log every query
+        self._audit_log(tenant_id, namespace, top_k)
+        return results
+
+    def _audit_log(self, tenant_id: str, namespace: str, top_k: int):
+        log_entry = {
+            &quot;event&quot;: &quot;vector_query&quot;,
+            &quot;tenant_id&quot;: tenant_id,
+            &quot;namespace&quot;: namespace,
+            &quot;top_k&quot;: top_k,
+            &quot;timestamp&quot;: datetime.utcnow().isoformat(),
+        }
+        # Send to SIEM / audit log pipeline
+        logger.info(json.dumps(log_entry))</code></pre></div>
+<h4 id="532-hardening-weaviate">5.3.2 Hardening Weaviate<a class="headerlink" href="#532-hardening-weaviate">&para;</a></h4>
+<p>Weaviate supports self-hosted and cloud deployments, requiring attention to both application and infrastructure security.</p>
+<p><strong>Authentication and Authorization</strong></p>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># weaviate.conf.yaml — Production security configuration
+authentication:
+  anonymous_access:
+    enabled: false                    # CRITICAL: Disable anonymous access
+  oidc:
+    enabled: true
+    issuer: &quot;https://auth.company.com/realms/prod&quot;
+    client_id: &quot;weaviate-prod&quot;
+    username_claim: &quot;preferred_username&quot;
+    groups_claim: &quot;groups&quot;
+  api_key:
+    enabled: true
+    allowed_keys:
+      - &quot;readonly-service-key&quot;
+      - &quot;readwrite-pipeline-key&quot;
+    users:
+      - &quot;readonly-service&quot;
+      - &quot;readwrite-pipeline&quot;
+
+authorization:
+  admin_list:
+    enabled: true
+    users:
+      - &quot;admin@company.com&quot;
+    read_only_users:
+      - &quot;readonly-service&quot;
+      - &quot;analyst@company.com&quot;</code></pre></div>
+<p><strong>Inter-Node TLS for Clustered Deployments</strong></p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Generate certificates for Weaviate cluster nodes
+# Step 1: Create a CA
+openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
+  -keyout ca-key.pem -out ca-cert.pem \
+  -subj &quot;/CN=Weaviate Internal CA&quot;
+
+# Step 2: Generate node certificates signed by the CA
+for NODE in weaviate-node-{0,1,2}; do
+  openssl req -newkey rsa:4096 -nodes \
+    -keyout &quot;${NODE}-key.pem&quot; -out &quot;${NODE}-csr.pem&quot; \
+    -subj &quot;/CN=${NODE}.weaviate.svc.cluster.local&quot;
+
+  openssl x509 -req -in &quot;${NODE}-csr.pem&quot; \
+    -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial \
+    -out &quot;${NODE}-cert.pem&quot; -days 365 \
+    -extfile &lt;(echo &quot;subjectAltName=DNS:${NODE}.weaviate.svc.cluster.local&quot;)
+done</code></pre></div>
+<h4 id="533-hardening-chroma">5.3.3 Hardening Chroma<a class="headerlink" href="#533-hardening-chroma">&para;</a></h4>
+<p>Chroma's simplicity is both its strength and its security weakness. Out-of-the-box deployments require significant hardening.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Chroma server with authentication and TLS
+# chromadb_secure_config.py
+
+import chromadb
+from chromadb.config import Settings
+
+# Production Chroma configuration
+settings = Settings(
+    chroma_server_authn_provider=&quot;chromadb.auth.token_authn.TokenAuthenticationServerProvider&quot;,
+    chroma_server_authn_credentials=&quot;strong-random-token-min-32-chars&quot;,
+    chroma_server_authn_credentials_provider=&quot;chromadb.auth.token_authn.TokenAuthClientCredentialsProvider&quot;,
+
+    # Enable TLS
+    chroma_server_ssl_certfile=&quot;/etc/chroma/tls/server.crt&quot;,
+    chroma_server_ssl_keyfile=&quot;/etc/chroma/tls/server.key&quot;,
+
+    # Restrict CORS
+    chroma_server_cors_allow_origins=[&quot;https://app.company.com&quot;],
+
+    # Persistence
+    is_persistent=True,
+    persist_directory=&quot;/var/lib/chroma/data&quot;,
+    anonymized_telemetry=False,
+)
+
+# Client connection with authentication
+secure_client = chromadb.HttpClient(
+    host=&quot;chroma.internal.company.com&quot;,
+    port=8443,
+    ssl=True,
+    headers={
+        &quot;Authorization&quot;: &quot;Bearer strong-random-token-min-32-chars&quot;
+    }
+)</code></pre></div>
+<h4 id="534-hardening-pgvector">5.3.4 Hardening pgvector<a class="headerlink" href="#534-hardening-pgvector">&para;</a></h4>
+<p>Pgvector inherits PostgreSQL's mature security model, making it the most hardened option out of the box—but only if PostgreSQL is properly configured.</p>
+<div class="code-block"><span class="code-lang">sql</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>-- PostgreSQL + pgvector security hardening
+
+-- 1. Create dedicated roles with minimal privileges
+CREATE ROLE vector_reader WITH LOGIN PASSWORD &#x27;rotated-secret&#x27;;
+CREATE ROLE vector_writer WITH LOGIN PASSWORD &#x27;rotated-secret&#x27;;
+CREATE ROLE vector_admin  WITH LOGIN PASSWORD &#x27;rotated-secret&#x27;;
+
+-- 2. Grant granular permissions
+GRANT USAGE ON SCHEMA embeddings TO vector_reader, vector_writer;
+GRANT SELECT ON ALL TABLES IN SCHEMA embeddings TO vector_reader;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA embeddings TO vector_writer;
+GRANT ALL PRIVILEGES ON SCHEMA embeddings TO vector_admin;
+
+-- 3. Row-level security for multi-tenancy
+ALTER TABLE embeddings.documents ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON embeddings.documents
+    FOR ALL
+    USING (tenant_id = current_setting(&#x27;app.current_tenant&#x27;)::uuid);
+
+-- 4. Audit logging for vector operations
+CREATE TABLE embeddings.audit_log (
+    id          BIGSERIAL PRIMARY KEY,
+    operation   TEXT NOT NULL,
+    table_name  TEXT NOT NULL,
+    tenant_id   UUID,
+    query_vector_hash TEXT,
+    result_count INTEGER,
+    executed_by TEXT DEFAULT current_user,
+    executed_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 5. Create a function to log similarity searches
+CREATE OR REPLACE FUNCTION embeddings.audited_similarity_search(
+    query_vec   vector(1536),
+    tenant_uuid UUID,
+    k           INTEGER DEFAULT 10
+)
+RETURNS TABLE(id UUID, content TEXT, distance FLOAT) AS $$
+BEGIN
+    -- Set tenant context for RLS
+    PERFORM set_config(&#x27;app.current_tenant&#x27;, tenant_uuid::text, true);
+
+    -- Log the query
+    INSERT INTO embeddings.audit_log (operation, table_name, tenant_id, result_count)
+    VALUES (&#x27;similarity_search&#x27;, &#x27;documents&#x27;, tenant_uuid, k);
+
+    -- Execute the search with RLS enforced
+    RETURN QUERY
+    SELECT d.id, d.content,
+           (d.embedding &lt;=&gt; query_vec)::float AS distance
+    FROM embeddings.documents d
+    ORDER BY d.embedding &lt;=&gt; query_vec
+    LIMIT k;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;</code></pre></div>
+<h4 id="535-monitoring-and-alerting">5.3.5 Monitoring and Alerting<a class="headerlink" href="#535-monitoring-and-alerting">&para;</a></h4>
+<p>Effective monitoring requires tracking both traditional database metrics and AI-specific indicators:</p>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Prometheus alerting rules for vector database security
+groups:
+  - name: vector_db_security
+    rules:
+      - alert: HighQueryRateFromSingleClient
+        expr: |
+          rate(vectordb_queries_total{job=&quot;vectordb&quot;}[5m]) &gt; 100
+          and on(client_id)
+          count by(client_id)(vectordb_queries_total) == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;Potential model extraction: {{ $labels.client_id }}&quot;
+          description: &quot;Client {{ $labels.client_id }} is querying at {{ $value }}/s&quot;
+
+      - alert: CrossNamespaceAccessAttempt
+        expr: vectordb_namespace_access_denied_total &gt; 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: &quot;Cross-namespace access attempt detected&quot;
+
+      - alert: UnusualQueryPatterns
+        expr: vectordb_query_coherence_score &lt; 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;Low query coherence may indicate extraction attack&quot;
+
+      - alert: BulkDataExfiltration
+        expr: |
+          sum(rate(vectordb_results_returned_total[10m])) by (client_id) &gt; 1000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: &quot;Bulk data extraction detected from {{ $labels.client_id }}&quot;</code></pre></div>
+<h4 id="536-gdpr-and-data-protection-compliance">5.3.6 GDPR and Data Protection Compliance<a class="headerlink" href="#536-gdpr-and-data-protection-compliance">&para;</a></h4>
+<p>Vector databases present unique GDPR challenges because embeddings derived from personal data are themselves personal data under the regulation.</p>
+<p>Compliance requirements include:</p>
+<div class="table-wrap"><table><thead><tr><th>GDPR Right</th><th>Vector Database Implementation</th></tr></thead><tbody><tr><td><strong>Right to access</strong></td><td>Must be able to identify all embeddings derived from a data subject's records</td></tr><tr><td><strong>Right to erasure</strong></td><td>Must delete embeddings, not just source documents—re-indexing may be required</td></tr><tr><td><strong>Right to rectification</strong></td><td>Updating source data requires regenerating and replacing embeddings</td></tr><tr><td><strong>Data minimization</strong></td><td>Store only embeddings necessary for the stated purpose</td></tr><tr><td><strong>Purpose limitation</strong></td><td>Embeddings generated for search must not be repurposed for profiling</td></tr><tr><td><strong>Data portability</strong></td><td>Provide embeddings in a standard, machine-readable format</td></tr></tbody></table></div>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code>class GDPRCompliantVectorStore:
+    &quot;&quot;&quot;Wrapper enforcing GDPR data subject rights on a vector database.&quot;&quot;&quot;
+
+    def __init__(self, vector_client, metadata_db):
+        self.vectors = vector_client
+        self.metadata = metadata_db
+
+    def handle_erasure_request(self, data_subject_id: str) -&gt; dict:
+        &quot;&quot;&quot;Process a GDPR Article 17 erasure request.&quot;&quot;&quot;
+        # Find all embeddings linked to this data subject
+        records = self.metadata.find({
+            &quot;data_subject_id&quot;: data_subject_id
+        })
+
+        deleted_ids = []
+        for record in records:
+            # Delete from vector database
+            self.vectors.delete(ids=[record[&quot;vector_id&quot;]])
+            # Delete metadata
+            self.metadata.delete(record[&quot;_id&quot;])
+            deleted_ids.append(record[&quot;vector_id&quot;])
+
+        # Audit trail (retained for compliance, not for data subject)
+        self._log_erasure(data_subject_id, deleted_ids)
+
+        return {
+            &quot;status&quot;: &quot;completed&quot;,
+            &quot;vectors_deleted&quot;: len(deleted_ids),
+            &quot;data_subject_id&quot;: data_subject_id,
+            &quot;timestamp&quot;: datetime.utcnow().isoformat(),
+        }
+
+    def _log_erasure(self, data_subject_id: str, vector_ids: list):
+        &quot;&quot;&quot;Maintain erasure audit trail as required by GDPR Article 30.&quot;&quot;&quot;
+        self.metadata.insert({
+            &quot;event&quot;: &quot;erasure_completed&quot;,
+            &quot;data_subject_id_hash&quot;: hashlib.sha256(
+                data_subject_id.encode()
+            ).hexdigest(),
+            &quot;vectors_deleted_count&quot;: len(vector_ids),
+            &quot;timestamp&quot;: datetime.utcnow().isoformat(),
+        })</code></pre></div>
+<blockquote><p><strong>Key Takeaway — Operational Security</strong></p><p>Each vector database platform has distinct security characteristics. Pinecone requires API key discipline and application-layer namespace enforcement. Weaviate needs OIDC configuration and inter-node TLS. Chroma demands authentication enablement from day one. Pgvector benefits from PostgreSQL's mature RLS and role system. All platforms require purpose-built monitoring for AI-specific attack patterns and GDPR-compliant data lifecycle management.</p></blockquote>
+<hr>
+<h3 id="54-lab-vector-database-penetration-testing">5.4 Lab: Vector Database Penetration Testing<a class="headerlink" href="#54-lab-vector-database-penetration-testing">&para;</a></h3>
+<p>This lab provides a structured methodology for testing the security of vector database deployments. You will enumerate attack surfaces, attempt cross-tenant data extraction, validate access controls, and build a monitoring dashboard to detect the attacks you have just learned.</p>
+<p><strong>Lab Prerequisites:</strong></p>
+<ul><li>Docker and Docker Compose installed</li><li>Python 3.11+ with <code>chromadb</code>, <code>weaviate-client</code>, <code>psycopg2</code>, <code>numpy</code>, and <code>sentence-transformers</code></li><li>A local test environment (never test against production systems without authorization)</li></ul>
+<h4 id="541-lab-setup-deploying-a-vulnerable-vector-database">5.4.1 Lab Setup: Deploying a Vulnerable Vector Database<a class="headerlink" href="#541-lab-setup-deploying-a-vulnerable-vector-database">&para;</a></h4>
+<p>Begin by deploying an intentionally misconfigured Chroma instance that mirrors common production mistakes.</p>
+<div class="code-block"><span class="code-lang">yaml</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># docker-compose.lab.yaml
+version: &quot;3.9&quot;
+services:
+  chroma-vulnerable:
+    image: chromadb/chroma:latest
+    ports:
+      - &quot;8000:8000&quot;
+    environment:
+      # Intentionally insecure configuration for lab use
+      - ANONYMIZED_TELEMETRY=false
+      - ALLOW_RESET=true          # Allows database reset via API
+    # No authentication configured
+    # No TLS configured
+    # No volume encryption
+
+  pgvector-vulnerable:
+    image: pgvector/pgvector:pg16
+    ports:
+      - &quot;5432:5432&quot;
+    environment:
+      POSTGRES_PASSWORD: &quot;password123&quot;   # Weak password
+      POSTGRES_DB: &quot;vectors&quot;
+    # No SSL configured
+    # Default pg_hba.conf allows all connections
+
+  weaviate-vulnerable:
+    image: cr.weaviate.io/semitechnologies/weaviate:latest
+    ports:
+      - &quot;8080:8080&quot;
+      - &quot;50051:50051&quot;
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: &quot;true&quot;  # No auth
+      PERSISTENCE_DATA_PATH: &quot;/var/lib/weaviate&quot;
+      DEFAULT_VECTORIZER_MODULE: &quot;none&quot;
+      CLUSTER_HOSTNAME: &quot;node1&quot;</code></pre></div>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Launch the vulnerable lab environment
+docker compose -f docker-compose.lab.yaml up -d
+
+# Seed test data simulating a multi-tenant deployment
+python seed_lab_data.py</code></pre></div>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># seed_lab_data.py — Populate lab databases with multi-tenant test data
+import chromadb
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer(&quot;all-MiniLM-L6-v2&quot;)
+client = chromadb.HttpClient(host=&quot;localhost&quot;, port=8000)
+
+# Create collections simulating different tenants
+tenants = {
+    &quot;acme-corp&quot;: [
+        &quot;ACME Q4 revenue reached $4.2M with 15% growth&quot;,
+        &quot;Employee SSN records stored in vault-7 system&quot;,
+        &quot;CEO email: john.smith@acme-corp.com, phone: 555-0142&quot;,
+        &quot;Merger discussions with GlobalTech are confidential&quot;,
+        &quot;AWS account 123456789012 credentials in parameter store&quot;,
+    ],
+    &quot;globex-inc&quot;: [
+        &quot;Globex patent filing for quantum computing chip design&quot;,
+        &quot;Customer database contains 2.3M PII records&quot;,
+        &quot;Board meeting notes: acquisition target is ACME Corp&quot;,
+        &quot;Infrastructure runs on GCP project globex-prod-7291&quot;,
+        &quot;API keys rotated quarterly, next rotation: March 2026&quot;,
+    ],
+    &quot;initech-llc&quot;: [
+        &quot;Initech TPS report automation using GPT-4 embeddings&quot;,
+        &quot;Employee performance reviews stored in collection HR-2026&quot;,
+        &quot;Office lease renewal at 123 Main St expires June 2026&quot;,
+        &quot;IT budget allocation: $2.1M for cloud infrastructure&quot;,
+        &quot;Vendor contract with Globex for data processing services&quot;,
+    ],
+}
+
+for tenant_name, documents in tenants.items():
+    collection = client.get_or_create_collection(
+        name=tenant_name,
+        metadata={&quot;tenant&quot;: tenant_name}
+    )
+    embeddings = model.encode(documents).tolist()
+    collection.add(
+        ids=[f&quot;{tenant_name}-doc-{i}&quot; for i in range(len(documents))],
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=[{&quot;tenant&quot;: tenant_name, &quot;sensitivity&quot;: &quot;high&quot;}] * len(documents)
+    )
+    print(f&quot;Seeded {len(documents)} documents for {tenant_name}&quot;)</code></pre></div>
+<h4 id="542-exercise-1-enumerating-attack-surfaces">5.4.2 Exercise 1: Enumerating Attack Surfaces<a class="headerlink" href="#542-exercise-1-enumerating-attack-surfaces">&para;</a></h4>
+<p>The first phase of any penetration test is reconnaissance. Discover what the vector database exposes.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># exercise_01_enumeration.py
+import requests
+import json
+
+CHROMA_URL = &quot;http://localhost:8000&quot;
+
+def enumerate_chroma_surface(base_url: str) -&gt; dict:
+    &quot;&quot;&quot;Enumerate all accessible endpoints and data on a Chroma instance.&quot;&quot;&quot;
+    findings = {&quot;endpoints&quot;: [], &quot;collections&quot;: [], &quot;vulnerabilities&quot;: []}
+
+    # 1. Check for unauthenticated access
+    health = requests.get(f&quot;{base_url}/api/v1/heartbeat&quot;)
+    if health.status_code == 200:
+        findings[&quot;vulnerabilities&quot;].append({
+            &quot;severity&quot;: &quot;CRITICAL&quot;,
+            &quot;finding&quot;: &quot;Unauthenticated access to Chroma API&quot;,
+            &quot;evidence&quot;: f&quot;Heartbeat response: {health.json()}&quot;,
+        })
+
+    # 2. Enumerate all collections (tenant namespaces)
+    collections_resp = requests.get(f&quot;{base_url}/api/v1/collections&quot;)
+    if collections_resp.status_code == 200:
+        collections = collections_resp.json()
+        findings[&quot;collections&quot;] = [
+            {&quot;name&quot;: c[&quot;name&quot;], &quot;id&quot;: c[&quot;id&quot;], &quot;metadata&quot;: c.get(&quot;metadata&quot;)}
+            for c in collections
+        ]
+        findings[&quot;vulnerabilities&quot;].append({
+            &quot;severity&quot;: &quot;HIGH&quot;,
+            &quot;finding&quot;: f&quot;All {len(collections)} collections enumerable without auth&quot;,
+            &quot;evidence&quot;: [c[&quot;name&quot;] for c in collections],
+        })
+
+    # 3. Check if database reset is enabled
+    # (Don&#x27;t actually reset — just check the endpoint)
+    reset_check = requests.post(f&quot;{base_url}/api/v1/reset&quot;,
+                                 headers={&quot;X-Dry-Run&quot;: &quot;true&quot;})
+    if reset_check.status_code != 403:
+        findings[&quot;vulnerabilities&quot;].append({
+            &quot;severity&quot;: &quot;CRITICAL&quot;,
+            &quot;finding&quot;: &quot;Database reset endpoint is accessible&quot;,
+            &quot;evidence&quot;: &quot;ALLOW_RESET is enabled — full data destruction possible&quot;,
+        })
+
+    # 4. Attempt to read documents from each collection
+    for collection in findings[&quot;collections&quot;]:
+        col_id = collection[&quot;id&quot;]
+        peek_resp = requests.get(
+            f&quot;{base_url}/api/v1/collections/{col_id}&quot;,
+        )
+        get_resp = requests.post(
+            f&quot;{base_url}/api/v1/collections/{col_id}/get&quot;,
+            json={&quot;limit&quot;: 100, &quot;include&quot;: [&quot;documents&quot;, &quot;metadatas&quot;, &quot;embeddings&quot;]},
+        )
+        if get_resp.status_code == 200:
+            data = get_resp.json()
+            doc_count = len(data.get(&quot;ids&quot;, []))
+            findings[&quot;vulnerabilities&quot;].append({
+                &quot;severity&quot;: &quot;CRITICAL&quot;,
+                &quot;finding&quot;: f&quot;Full data extraction from collection &#x27;{collection[&#x27;name&#x27;]}&#x27;&quot;,
+                &quot;evidence&quot;: f&quot;Retrieved {doc_count} documents with embeddings and metadata&quot;,
+                &quot;sample&quot;: data.get(&quot;documents&quot;, [])[:2],
+            })
+
+    return findings
+
+
+if __name__ == &quot;__main__&quot;:
+    results = enumerate_chroma_surface(CHROMA_URL)
+    print(json.dumps(results, indent=2))
+    print(f&quot;\nTotal vulnerabilities found: {len(results[&#x27;vulnerabilities&#x27;])}&quot;)</code></pre></div>
+<h4 id="543-exercise-2-cross-tenant-data-extraction">5.4.3 Exercise 2: Cross-Tenant Data Extraction<a class="headerlink" href="#543-exercise-2-cross-tenant-data-extraction">&para;</a></h4>
+<p>With collections enumerated, attempt to extract data across tenant boundaries.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># exercise_02_cross_tenant.py
+import chromadb
+from sentence_transformers import SentenceTransformer
+import json
+
+model = SentenceTransformer(&quot;all-MiniLM-L6-v2&quot;)
+client = chromadb.HttpClient(host=&quot;localhost&quot;, port=8000)
+
+def cross_tenant_extraction(
+    attacker_tenant: str,
+    target_tenant: str,
+    probe_queries: list[str]
+) -&gt; dict:
+    &quot;&quot;&quot;
+    Simulate an attacker with access to their own tenant
+    attempting to read another tenant&#x27;s data.
+    &quot;&quot;&quot;
+    findings = {
+        &quot;attacker&quot;: attacker_tenant,
+        &quot;target&quot;: target_tenant,
+        &quot;extracted_data&quot;: [],
+    }
+
+    # Attack 1: Direct collection access (no namespace isolation)
+    try:
+        target_collection = client.get_collection(name=target_tenant)
+        all_data = target_collection.get(
+            include=[&quot;documents&quot;, &quot;metadatas&quot;, &quot;embeddings&quot;]
+        )
+        findings[&quot;extracted_data&quot;].append({
+            &quot;method&quot;: &quot;direct_collection_access&quot;,
+            &quot;severity&quot;: &quot;CRITICAL&quot;,
+            &quot;documents_extracted&quot;: len(all_data[&quot;ids&quot;]),
+            &quot;sample_documents&quot;: all_data[&quot;documents&quot;][:3],
+        })
+    except Exception as e:
+        findings[&quot;extracted_data&quot;].append({
+            &quot;method&quot;: &quot;direct_collection_access&quot;,
+            &quot;blocked&quot;: True,
+            &quot;error&quot;: str(e),
+        })
+
+    # Attack 2: Semantic similarity probing
+    target_collection = client.get_collection(name=target_tenant)
+    for query in probe_queries:
+        query_embedding = model.encode(query).tolist()
+        results = target_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=5,
+            include=[&quot;documents&quot;, &quot;distances&quot;, &quot;metadatas&quot;]
+        )
+        if results[&quot;documents&quot;][0]:
+            findings[&quot;extracted_data&quot;].append({
+                &quot;method&quot;: &quot;similarity_probe&quot;,
+                &quot;query&quot;: query,
+                &quot;results&quot;: [
+                    {&quot;document&quot;: doc, &quot;distance&quot;: dist}
+                    for doc, dist in zip(
+                        results[&quot;documents&quot;][0],
+                        results[&quot;distances&quot;][0]
+                    )
+                ],
+            })
+
+    return findings
+
+
+if __name__ == &quot;__main__&quot;:
+    # Attacker is initech-llc, targeting acme-corp
+    results = cross_tenant_extraction(
+        attacker_tenant=&quot;initech-llc&quot;,
+        target_tenant=&quot;acme-corp&quot;,
+        probe_queries=[
+            &quot;revenue and financial performance&quot;,
+            &quot;employee personal information SSN&quot;,
+            &quot;merger acquisition confidential&quot;,
+            &quot;AWS credentials and account numbers&quot;,
+            &quot;CEO contact information email phone&quot;,
+        ]
+    )
+    print(json.dumps(results, indent=2))
+    total = sum(
+        1 for e in results[&quot;extracted_data&quot;]
+        if not e.get(&quot;blocked&quot;, False)
+    )
+    print(f&quot;\nSuccessful extraction methods: {total}&quot;)</code></pre></div>
+<h4 id="544-exercise-3-implementing-and-testing-access-controls">5.4.4 Exercise 3: Implementing and Testing Access Controls<a class="headerlink" href="#544-exercise-3-implementing-and-testing-access-controls">&para;</a></h4>
+<p>Now remediate the vulnerabilities you discovered by implementing proper access controls, then verify they work.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># exercise_03_access_controls.py
+import hashlib
+import hmac
+import time
+import json
+from functools import wraps
+from typing import Callable
+
+class VectorDBAccessController:
+    &quot;&quot;&quot;
+    Application-layer access control for vector databases
+    that lack native RBAC.
+    &quot;&quot;&quot;
+
+    def __init__(self):
+        self.policies: dict[str, dict] = {}
+        self.audit_log: list[dict] = []
+
+    def register_tenant(self, tenant_id: str, api_key: str,
+                         allowed_collections: list[str],
+                         permissions: list[str]):
+        &quot;&quot;&quot;Register a tenant with specific collection access.&quot;&quot;&quot;
+        self.policies[api_key] = {
+            &quot;tenant_id&quot;: tenant_id,
+            &quot;allowed_collections&quot;: set(allowed_collections),
+            &quot;permissions&quot;: set(permissions),
+            &quot;created_at&quot;: time.time(),
+        }
+
+    def authorize(self, api_key: str, collection: str,
+                  operation: str) -&gt; bool:
+        &quot;&quot;&quot;Check if the API key is authorized for this operation.&quot;&quot;&quot;
+        policy = self.policies.get(api_key)
+        if not policy:
+            self._log(&quot;DENIED&quot;, &quot;unknown&quot;, collection, operation,
+                      &quot;Invalid API key&quot;)
+            return False
+
+        tenant_id = policy[&quot;tenant_id&quot;]
+
+        if collection not in policy[&quot;allowed_collections&quot;]:
+            self._log(&quot;DENIED&quot;, tenant_id, collection, operation,
+                      &quot;Collection not in allowed list&quot;)
+            return False
+
+        if operation not in policy[&quot;permissions&quot;]:
+            self._log(&quot;DENIED&quot;, tenant_id, collection, operation,
+                      &quot;Operation not permitted&quot;)
+            return False
+
+        self._log(&quot;ALLOWED&quot;, tenant_id, collection, operation)
+        return True
+
+    def enforce(self, api_key: str, collection: str, operation: str):
+        &quot;&quot;&quot;Decorator-style enforcement that raises on denial.&quot;&quot;&quot;
+        if not self.authorize(api_key, collection, operation):
+            raise PermissionError(
+                f&quot;Access denied: {operation} on {collection}&quot;
+            )
+
+    def _log(self, decision: str, tenant_id: str, collection: str,
+             operation: str, reason: str = &quot;&quot;):
+        entry = {
+            &quot;timestamp&quot;: time.time(),
+            &quot;decision&quot;: decision,
+            &quot;tenant_id&quot;: tenant_id,
+            &quot;collection&quot;: collection,
+            &quot;operation&quot;: operation,
+            &quot;reason&quot;: reason,
+        }
+        self.audit_log.append(entry)
+
+    def get_security_report(self) -&gt; dict:
+        &quot;&quot;&quot;Generate a security summary from the audit log.&quot;&quot;&quot;
+        denied = [e for e in self.audit_log if e[&quot;decision&quot;] == &quot;DENIED&quot;]
+        return {
+            &quot;total_requests&quot;: len(self.audit_log),
+            &quot;denied_requests&quot;: len(denied),
+            &quot;denial_rate&quot;: round(len(denied) / max(len(self.audit_log), 1), 3),
+            &quot;cross_tenant_attempts&quot;: [
+                e for e in denied if &quot;Collection not in allowed&quot; in e.get(&quot;reason&quot;, &quot;&quot;)
+            ],
+            &quot;invalid_key_attempts&quot;: [
+                e for e in denied if &quot;Invalid API key&quot; in e.get(&quot;reason&quot;, &quot;&quot;)
+            ],
+        }
+
+
+def test_access_controls():
+    &quot;&quot;&quot;Verify that access controls properly prevent cross-tenant access.&quot;&quot;&quot;
+    controller = VectorDBAccessController()
+
+    # Register tenants with scoped access
+    controller.register_tenant(
+        tenant_id=&quot;acme-corp&quot;,
+        api_key=&quot;acme-key-001&quot;,
+        allowed_collections=[&quot;acme-corp&quot;],
+        permissions=[&quot;query&quot;, &quot;insert&quot;],
+    )
+    controller.register_tenant(
+        tenant_id=&quot;globex-inc&quot;,
+        api_key=&quot;globex-key-001&quot;,
+        allowed_collections=[&quot;globex-inc&quot;],
+        permissions=[&quot;query&quot;],
+    )
+
+    # Test 1: Legitimate access — should succeed
+    assert controller.authorize(&quot;acme-key-001&quot;, &quot;acme-corp&quot;, &quot;query&quot;)
+    print(&quot;✅ Test 1 PASSED: Legitimate query authorized&quot;)
+
+    # Test 2: Cross-tenant access — should fail
+    assert not controller.authorize(&quot;acme-key-001&quot;, &quot;globex-inc&quot;, &quot;query&quot;)
+    print(&quot;✅ Test 2 PASSED: Cross-tenant query denied&quot;)
+
+    # Test 3: Invalid API key — should fail
+    assert not controller.authorize(&quot;fake-key&quot;, &quot;acme-corp&quot;, &quot;query&quot;)
+    print(&quot;✅ Test 3 PASSED: Invalid key denied&quot;)
+
+    # Test 4: Unauthorized operation — should fail
+    assert not controller.authorize(&quot;globex-key-001&quot;, &quot;globex-inc&quot;, &quot;insert&quot;)
+    print(&quot;✅ Test 4 PASSED: Unauthorized operation denied&quot;)
+
+    # Test 5: Enforcement raises exception
+    try:
+        controller.enforce(&quot;acme-key-001&quot;, &quot;globex-inc&quot;, &quot;query&quot;)
+        print(&quot;❌ Test 5 FAILED: Should have raised PermissionError&quot;)
+    except PermissionError:
+        print(&quot;✅ Test 5 PASSED: Enforcement raised PermissionError&quot;)
+
+    # Security report
+    report = controller.get_security_report()
+    print(f&quot;\n📊 Security Report:&quot;)
+    print(f&quot;   Total requests: {report[&#x27;total_requests&#x27;]}&quot;)
+    print(f&quot;   Denied: {report[&#x27;denied_requests&#x27;]}&quot;)
+    print(f&quot;   Cross-tenant attempts: {len(report[&#x27;cross_tenant_attempts&#x27;])}&quot;)
+    print(f&quot;   Invalid key attempts: {len(report[&#x27;invalid_key_attempts&#x27;])}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    test_access_controls()</code></pre></div>
+<h4 id="545-exercise-4-building-a-security-monitoring-dashboard">5.4.5 Exercise 4: Building a Security Monitoring Dashboard<a class="headerlink" href="#545-exercise-4-building-a-security-monitoring-dashboard">&para;</a></h4>
+<p>The final exercise brings together detection capabilities into a real-time monitoring system.</p>
+<div class="code-block"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># exercise_04_monitoring_dashboard.py
+import time
+import json
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+@dataclass
+class SecurityEvent:
+    timestamp: float
+    event_type: str
+    client_id: str
+    collection: str
+    severity: str
+    details: dict = field(default_factory=dict)
+
+class VectorDBSecurityMonitor:
+    &quot;&quot;&quot;Real-time security monitoring for vector database deployments.&quot;&quot;&quot;
+
+    def __init__(self, alert_callback=None):
+        self.events: list[SecurityEvent] = []
+        self.client_profiles: dict[str, dict] = defaultdict(
+            lambda: {&quot;query_count&quot;: 0, &quot;collections_accessed&quot;: set(),
+                     &quot;first_seen&quot;: None, &quot;last_seen&quot;: None}
+        )
+        self.alert_callback = alert_callback or self._default_alert
+        self.thresholds = {
+            &quot;max_query_rate&quot;: 50,        # queries per minute
+            &quot;max_collections&quot;: 2,         # collections per client
+            &quot;min_coherence&quot;: 0.3,         # minimum query similarity
+            &quot;max_results_per_minute&quot;: 500, # results returned per minute
+        }
+
+    def record_query(self, client_id: str, collection: str,
+                     query_vector: list[float], results_count: int):
+        &quot;&quot;&quot;Record a query event and check for anomalies.&quot;&quot;&quot;
+        now = time.time()
+        profile = self.client_profiles[client_id]
+        profile[&quot;query_count&quot;] += 1
+        profile[&quot;collections_accessed&quot;].add(collection)
+        profile[&quot;last_seen&quot;] = now
+        if not profile[&quot;first_seen&quot;]:
+            profile[&quot;first_seen&quot;] = now
+
+        # Check 1: Query rate
+        recent = [e for e in self.events
+                  if e.client_id == client_id and now - e.timestamp &lt; 60]
+        if len(recent) &gt; self.thresholds[&quot;max_query_rate&quot;]:
+            self._raise_alert(SecurityEvent(
+                timestamp=now, event_type=&quot;HIGH_QUERY_RATE&quot;,
+                client_id=client_id, collection=collection,
+                severity=&quot;WARNING&quot;,
+                details={&quot;rate&quot;: len(recent), &quot;threshold&quot;: self.thresholds[&quot;max_query_rate&quot;]},
+            ))
+
+        # Check 2: Cross-collection access
+        if len(profile[&quot;collections_accessed&quot;]) &gt; self.thresholds[&quot;max_collections&quot;]:
+            self._raise_alert(SecurityEvent(
+                timestamp=now, event_type=&quot;CROSS_COLLECTION_ACCESS&quot;,
+                client_id=client_id, collection=collection,
+                severity=&quot;CRITICAL&quot;,
+                details={&quot;collections&quot;: list(profile[&quot;collections_accessed&quot;])},
+            ))
+
+        # Check 3: Bulk extraction
+        if results_count &gt; self.thresholds[&quot;max_results_per_minute&quot;]:
+            self._raise_alert(SecurityEvent(
+                timestamp=now, event_type=&quot;BULK_EXTRACTION&quot;,
+                client_id=client_id, collection=collection,
+                severity=&quot;CRITICAL&quot;,
+                details={&quot;results_count&quot;: results_count},
+            ))
+
+        self.events.append(SecurityEvent(
+            timestamp=now, event_type=&quot;QUERY&quot;,
+            client_id=client_id, collection=collection,
+            severity=&quot;INFO&quot;,
+            details={&quot;results_count&quot;: results_count},
+        ))
+
+    def get_dashboard_data(self) -&gt; dict:
+        &quot;&quot;&quot;Generate dashboard summary data.&quot;&quot;&quot;
+        now = time.time()
+        last_hour = [e for e in self.events if now - e.timestamp &lt; 3600]
+        alerts = [e for e in last_hour if e.severity in (&quot;WARNING&quot;, &quot;CRITICAL&quot;)]
+
+        return {
+            &quot;timestamp&quot;: datetime.utcnow().isoformat(),
+            &quot;summary&quot;: {
+                &quot;total_queries_1h&quot;: len(last_hour),
+                &quot;active_clients&quot;: len({e.client_id for e in last_hour}),
+                &quot;alerts_1h&quot;: len(alerts),
+                &quot;critical_alerts&quot;: len(
+                    [a for a in alerts if a.severity == &quot;CRITICAL&quot;]
+                ),
+            },
+            &quot;top_clients&quot;: sorted(
+                [
+                    {&quot;client&quot;: cid, &quot;queries&quot;: p[&quot;query_count&quot;],
+                     &quot;collections&quot;: len(p[&quot;collections_accessed&quot;])}
+                    for cid, p in self.client_profiles.items()
+                ],
+                key=lambda x: x[&quot;queries&quot;], reverse=True
+            )[:10],
+            &quot;recent_alerts&quot;: [
+                {&quot;time&quot;: datetime.fromtimestamp(a.timestamp).isoformat(),
+                 &quot;type&quot;: a.event_type, &quot;client&quot;: a.client_id,
+                 &quot;severity&quot;: a.severity, &quot;details&quot;: a.details}
+                for a in alerts[-20:]
+            ],
+        }
+
+    def _raise_alert(self, event: SecurityEvent):
+        self.events.append(event)
+        self.alert_callback(event)
+
+    @staticmethod
+    def _default_alert(event: SecurityEvent):
+        icon = &quot;🔴&quot; if event.severity == &quot;CRITICAL&quot; else &quot;��&quot;
+        print(
+            f&quot;{icon} [{event.severity}] {event.event_type} — &quot;
+            f&quot;Client: {event.client_id}, Collection: {event.collection}&quot;
+        )
+        print(f&quot;   Details: {json.dumps(event.details)}&quot;)
+
+
+def simulate_attack_scenario():
+    &quot;&quot;&quot;Simulate normal traffic followed by an extraction attack.&quot;&quot;&quot;
+    monitor = VectorDBSecurityMonitor()
+    print(&quot;=&quot; * 60)
+    print(&quot;VECTOR DATABASE SECURITY MONITOR — SIMULATION&quot;)
+    print(&quot;=&quot; * 60)
+
+    # Phase 1: Normal traffic
+    print(&quot;\n📗 Phase 1: Normal traffic (legitimate queries)&quot;)
+    for i in range(10):
+        monitor.record_query(
+            client_id=&quot;app-service-01&quot;,
+            collection=&quot;acme-corp&quot;,
+            query_vector=[0.1] * 384,
+            results_count=5,
+        )
+        time.sleep(0.01)
+
+    # Phase 2: Reconnaissance
+    print(&quot;\n📙 Phase 2: Attacker enumerating collections&quot;)
+    for collection in [&quot;acme-corp&quot;, &quot;globex-inc&quot;, &quot;initech-llc&quot;]:
+        monitor.record_query(
+            client_id=&quot;suspicious-client&quot;,
+            collection=collection,
+            query_vector=[0.5] * 384,
+            results_count=10,
+        )
+        time.sleep(0.01)
+
+    # Phase 3: Extraction attempt
+    print(&quot;\n📕 Phase 3: Bulk extraction attack&quot;)
+    for i in range(60):
+        monitor.record_query(
+            client_id=&quot;suspicious-client&quot;,
+            collection=&quot;acme-corp&quot;,
+            query_vector=[float(i) / 60] * 384,
+            results_count=100,
+        )
+        time.sleep(0.01)
+
+    # Dashboard output
+    dashboard = monitor.get_dashboard_data()
+    print(&quot;\n&quot; + &quot;=&quot; * 60)
+    print(&quot;DASHBOARD SUMMARY&quot;)
+    print(&quot;=&quot; * 60)
+    print(json.dumps(dashboard[&quot;summary&quot;], indent=2))
+    print(f&quot;\nRecent alerts: {len(dashboard[&#x27;recent_alerts&#x27;])}&quot;)
+    for alert in dashboard[&quot;recent_alerts&quot;][-5:]:
+        print(f&quot;  [{alert[&#x27;severity&#x27;]}] {alert[&#x27;type&#x27;]} — {alert[&#x27;client&#x27;]}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    simulate_attack_scenario()</code></pre></div>
+<h4 id="546-lab-cleanup-and-reporting">5.4.6 Lab Cleanup and Reporting<a class="headerlink" href="#546-lab-cleanup-and-reporting">&para;</a></h4>
+<p>After completing the exercises, tear down the lab environment and compile your findings.</p>
+<div class="code-block"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">⧉ Copy</button><pre><code># Stop and remove lab containers
+docker compose -f docker-compose.lab.yaml down -v
+
+# Verify no lab containers remain
+docker ps -a | grep -E &quot;(chroma|pgvector|weaviate)-vulnerable&quot;</code></pre></div>
+<p><strong>Lab Report Template:</strong></p>
+<div class="table-wrap"><table><thead><tr><th>Finding</th><th>Severity</th><th>CVSS</th><th>Remediation</th></tr></thead><tbody><tr><td>Unauthenticated Chroma API access</td><td>Critical</td><td>9.8</td><td>Enable token authentication provider</td></tr><tr><td>Cross-collection data extraction</td><td>Critical</td><td>9.1</td><td>Implement application-layer tenant isolation</td></tr><tr><td>Database reset endpoint exposed</td><td>Critical</td><td>9.0</td><td>Set <code>ALLOW_RESET=false</code> in production</td></tr><tr><td>No TLS encryption</td><td>High</td><td>8.1</td><td>Configure TLS certificates for all endpoints</td></tr><tr><td>Weak pgvector password</td><td>High</td><td>7.5</td><td>Use secrets manager with rotation policy</td></tr><tr><td>No query rate limiting</td><td>Medium</td><td>5.3</td><td>Deploy API gateway with rate limits</td></tr><tr><td>Missing audit logging</td><td>Medium</td><td>4.8</td><td>Implement audit log for all data operations</td></tr></tbody></table></div>
+<blockquote><p><strong>Key Takeaway — Penetration Testing Vector Databases</strong></p><p>Vector databases are frequently deployed with critical misconfigurations: no authentication, no tenant isolation, no encryption, and no monitoring. A methodical penetration test reveals these gaps before attackers do. The remediation pattern is consistent across platforms: enable authentication, enforce tenant isolation at the application layer, encrypt all data paths, and deploy anomaly detection tuned for AI-specific attack patterns like model extraction and embedding inversion.</p></blockquote>
+<hr>
+<p><strong>Chapter Summary</strong></p>
+<p>Vector databases are the memory layer of modern AI systems, and their security posture must match the sensitivity of the data they store. This chapter covered the full spectrum of vector database security: from threat modeling through embedding inversion science to platform-specific hardening and hands-on penetration testing.</p>
+<p>The critical lessons are:</p>
+<ol><li><strong>Embeddings are not anonymous</strong> — they can be inverted, probed, and exploited to reconstruct sensitive data</li><li><strong>Namespaces are not security boundaries</strong> — multi-tenancy requires dedicated indices, separate credentials, and application-layer enforcement</li><li><strong>Default configurations are insecure</strong> — every major vector database ships with settings that would fail a basic security audit</li><li><strong>Monitoring must be AI-aware</strong> — traditional database monitoring misses model extraction, embedding inversion, and semantic probing attacks</li></ol>
+<p>In the next chapter, we turn from the persistence layer to the network layer, examining how agents communicate and the attack surfaces created by tool-calling protocols and inter-agent messaging.</p>
+<h1 id="part-iii-the-multi-agent-era-securing-orchestrated-ai-systems-2025" class="part-heading">PART III: THE MULTI-AGENT ERA — SECURING ORCHESTRATED AI SYSTEMS (2025)<a class="headerlink" href="#part-iii-the-multi-agent-era-securing-orchestrated-ai-systems-2025">&para;</a></h1>
+<hr>
+
+<div class="chapter-nav"><a href="chapter-03.html">← Chapter 3: RAG Pipeline Security — The I</a><a href="chapter-06.html">Chapter 6: Multi-Agent Architecture Secu →</a></div>
+</main>
+<script>
+window.toggleSidebar=function(){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}};
+window.copyCode=function(b){var c=b.parentElement.querySelector('code');if(!c)return;navigator.clipboard.writeText(c.textContent).then(function(){var o=b.textContent;b.textContent='✓ Copied';b.style.color='var(--accent-green)';setTimeout(function(){b.textContent=o;b.style.color='';},2000);});};
+document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=1024){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s)s.classList.remove('open');if(o)o.classList.remove('active');}});});
+</script>
+</body>
+</html>
