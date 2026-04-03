@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 6: The Orchestrator CLI — The Brain</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-orange: #d29922;
+  --accent-red: #f85149;
+  --accent-purple: #bc8cff;
+  --code-bg: #161b22;
+  --sidebar-width: 300px;
+  --header-height: 60px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 16px; line-height: 1.7;
+  color: var(--text-primary); background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+.main { margin-left: var(--sidebar-width); padding: 5rem 3rem 4rem; max-width: 52rem; }
+h1 { font-size: 1.75rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.75rem; color: var(--accent-blue); }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+p { margin: 0.75rem 0; }
+a { color: var(--accent-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; position: relative; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 3px solid var(--accent-blue); margin: 1rem 0; padding: 0.5rem 1rem; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 0 8px 8px 0; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--bg-secondary); }
+.reading-time { color: var(--text-secondary); font-size: 0.8rem; font-weight: normal; }
+.part-heading { font-size: 1.75rem; text-align: center; color: var(--accent-green); padding: 2rem 0 1rem; margin-top: 4rem; border-top: 1px solid var(--border); letter-spacing: 1px; text-transform: uppercase; border-bottom: none; }
+.copy-btn { position: absolute; top: 8px; right: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary); padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+.copy-btn:hover { color: var(--text-primary); background: var(--bg-hover, var(--border)); }
+
+/* Sidebar */
+.sidebar { position: fixed; top: var(--header-height); left: 0; bottom: 0; width: var(--sidebar-width); background: var(--bg-secondary); border-right: 1px solid var(--border); overflow-y: auto; padding: 1.25rem 0 3rem; z-index: 50; }
+.sidebar-title { padding: 0 1rem 0.75rem; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; }
+.sidebar a { display: block; padding: 4px 1rem; font-size: 0.82rem; color: var(--text-secondary); text-decoration: none; border-left: 2px solid transparent; }
+.sidebar a:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.sidebar a.active { color: var(--accent-blue); border-left-color: var(--accent-blue); background: rgba(88,166,255,0.08); }
+.sidebar-part { font-weight: 700; color: var(--accent-green) !important; text-transform: uppercase; font-size: 0.72rem !important; letter-spacing: 0.5px; margin-top: 1rem; padding-top: 0.75rem !important; border-top: 1px solid var(--border); }
+.sidebar-chapter { font-weight: 600; color: var(--text-primary) !important; }
+
+/* Header */
+.site-header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-height); display: flex; align-items: center; padding: 0 1.5rem; z-index: 100; border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: rgba(22,27,34,0.88); }
+.hamburger { display: none; background: none; border: none; color: var(--text-primary); font-size: 1.4rem; cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem; }
+.header-nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.header-nav button { background: none; border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; }
+.header-nav button:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.header-nav button:disabled { opacity: 0.3; cursor: default; }
+
+/* Mobile */
+@media(max-width:1024px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .hamburger { display: block; }
+  .main { margin-left: 0; padding: 5rem 1.5rem 3rem; }
+  .sidebar-overlay.active { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 49; }
+}
+@media(max-width:640px) {
+  body { font-size: 15px; }
+  .main { padding: 4.5rem 1rem 2rem; }
+  h1 { font-size: 1.4rem; }
+  pre { font-size: 0.82rem; }
+}
+</style>
+</head>
+<body>
+
+
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<main class="main">
+<h1 id="chapter-6-the-orchestrator-cli-the-brain">Chapter 6: The Orchestrator CLI — The Brain</h1>
+<h2 id="coordinator_mode-intent-analysis-task-dags-and-the-art-of-not-doing-the-work-yourself">COORDINATOR_MODE, Intent Analysis, Task DAGs, and the Art of Not Doing the Work Yourself</h2>
+<hr />
+<p>Eight musicians warming up independently are not an orchestra. Eight specialist CLIs running in isolation are not a system. The difference is a conductor — a component whose entire job is to decide what happens next, who does it, and how the results fit together.</p>
+<p>The Orchestrator CLI is that conductor. It receives human prompts, decomposes them into concrete tasks, dispatches those tasks to the right specialists, manages dependencies and parallel execution, handles failures, and synthesizes the results into a coherent response. It never writes a line of code. It never runs a test. It never reads a source file. This restriction is not a limitation — it is the most important architectural decision in the entire system.</p>
+<p>Think about what happens when a CTO tries to also be the lead developer. They read every pull request, make implementation decisions at the code level, and become the bottleneck for every feature. The organization slows to the speed of one person's attention. Now imagine a CTO who sets direction, allocates resources, resolves conflicts between teams, and lets teams execute independently. The organization moves at the speed of its teams — parallel, specialized, and fast. The Orchestrator CLI is the second CTO.</p>
+<p>This chapter builds the Orchestrator from three components: the Intent Analysis Engine (understanding what the human wants), the Task DAG Engine (organizing the work), and the Dispatch Protocol (getting the work done). We will also cover the subtleties that separate a working Orchestrator from a production Orchestrator: conflict resolution between specialists, failure cascade management, concurrency control, and the debate pattern that produces higher-confidence results than any single specialist. By the end, you will have a working Orchestrator that turns a single human prompt into coordinated multi-specialist execution.</p>
+<hr />
+<h2 id="61-why-the-orchestrator-must-be-restricted">6.1 Why the Orchestrator Must Be Restricted</h2>
+<p>Consider what happens without restriction. A coordinator with file-read access will read files to "understand the codebase" before delegating. Its context window fills with source code. It starts making implementation decisions that belong to specialists. It becomes a bottleneck — reading, analyzing, then delegating work it already half-decided. The specialist receives a task colored by the coordinator's incomplete analysis and produces work that satisfies the coordinator's biased framing rather than the actual requirement.</p>
+<p>This is the <strong>god-orchestrator anti-pattern</strong> — the most common failure mode in multi-agent systems. The coordinator tries to be omniscient. It reads everything, understands everything, micromanages everything. In doing so, it reproduces the single-context bottleneck that the multi-agent architecture was designed to eliminate.</p>
+<p>The anti-pattern is seductive because it feels productive. The coordinator reads <code>server.js</code> and thinks "Now I understand the codebase, I can delegate more precisely." But that understanding cost 3,000 tokens of context, and the Coder specialist is going to read the same file anyway. Worse, the coordinator's "understanding" is shallow — it skimmed the file, not traced the data flow — and it will now write task descriptions that reflect its shallow analysis. The specialist, constrained by the coordinator's framing, produces work that is technically correct but architecturally misguided. The coordinator has not helped. It has introduced a bias.</p>
+<p>The pattern gets catastrophic at scale. A coordinator managing 15 tasks across 6 specialists that also reads every relevant file will consume 80,000-120,000 tokens of context before issuing a single delegation. Each subsequent LLM call now processes all that context. At $15 per million input tokens for Opus, a bloated coordinator costs 10-20x more than a lean one. And the quality is worse — LLMs attend less precisely to earlier content as context grows. The instructions from turn 1 fade as the context fills with source code the coordinator should never have read.</p>
+<p>Claude Code's COORDINATOR_MODE solves this by enforcing restriction at the tool level, making it structurally impossible for the coordinator to fall into this trap:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1">// coordinator/coordinatorMode.ts (from td_claudecode source)</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">isCoordinatorMode</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">feature</span><span class="p">(</span><span class="s1">&#39;COORDINATOR_MODE&#39;</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">isEnvTruthy</span><span class="p">(</span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">CLAUDE_CODE_COORDINATOR_MODE</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>When <code>COORDINATOR_MODE</code> is active, the main agent's tool set is restricted to exactly these:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AgentTool</code></td>
+<td>Spawn and dispatch specialist workers</td>
+</tr>
+<tr>
+<td><code>SendMessage</code></td>
+<td>Continue communication with running workers</td>
+</tr>
+<tr>
+<td><code>TaskStopTool</code></td>
+<td>Kill a running worker</td>
+</tr>
+<tr>
+<td><code>SyntheticOutput</code></td>
+<td>Generate structured output without tool execution</td>
+</tr>
+<tr>
+<td><code>TeamCreate</code></td>
+<td>Create a team of workers</td>
+</tr>
+<tr>
+<td><code>TeamDelete</code></td>
+<td>Disband a team</td>
+</tr>
+</tbody>
+</table>
+<p>That is the complete list. No <code>file_read</code>. No <code>file_write</code>. No <code>bash</code>. No <code>grep</code>. No <code>glob</code>. No filesystem access whatsoever. Workers get the full 40+ tool set. Workers cannot spawn their own agents — no <code>AgentTool</code> access, no recursive delegation. The hierarchy is structurally enforced: coordinator delegates down, workers execute and report up.</p>
+<p>This is not just a convention — it is an architectural invariant enforced by the runtime. Even if the LLM behind the Orchestrator hallucinates a <code>file_read</code> tool call, the tool registry rejects it. The coordinator cannot cheat its way into reading files, just as a process running in a Linux namespace cannot access files outside its mount. The restriction is at the boundary, not in the prompt.</p>
+<p><strong>The separation in practice:</strong></p>
+<ul>
+<li><strong>Coordinator</strong>: Operates on abstractions — task descriptions, dependency graphs, completion status, error summaries. A coordinator managing 12 tasks consumes ~5,000 tokens of metadata.</li>
+<li><strong>Workers</strong>: Operate on concrete artifacts — files, processes, test outputs. A worker executing one task uses its full 200K token context for that single concern.</li>
+</ul>
+<p>This separation keeps the coordinator's context clean. Without it, a coordinator that also reads source files consumes 50,000 tokens before delegating anything — and every subsequent turn pays the cost of that bloated context.</p>
+<h3 id="enabling-coordinator_mode">Enabling COORDINATOR_MODE</h3>
+<p>For the TypeScript fork path, activate via environment variable:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="nv">CLAUDE_CODE_COORDINATOR_MODE</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>claude
+</code></pre></div>
+
+<p>For the Rust path, implement the restriction in your tool registry:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1">// clis/orchestrator/src/tools/mod.rs</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">orchestrator_tools</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">Tool</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">AgentTool</span><span class="p">::</span><span class="n">new</span><span class="p">()),</span>
+<span class="w">        </span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SendMessageTool</span><span class="p">::</span><span class="n">new</span><span class="p">()),</span>
+<span class="w">        </span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TaskStopTool</span><span class="p">::</span><span class="n">new</span><span class="p">()),</span>
+<span class="w">        </span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SyntheticOutputTool</span><span class="p">::</span><span class="n">new</span><span class="p">()),</span>
+<span class="w">        </span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TaskCreateTool</span><span class="p">::</span><span class="n">new</span><span class="p">()),</span>
+<span class="w">        </span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TaskListTool</span><span class="p">::</span><span class="n">new</span><span class="p">()),</span>
+<span class="w">        </span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TaskUpdateTool</span><span class="p">::</span><span class="n">new</span><span class="p">()),</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+<span class="c1">// No file_read, file_write, bash, grep, or glob.</span>
+<span class="c1">// The compiler enforces what the policy requires.</span>
+</code></pre></div>
+
+<hr />
+<h2 id="62-the-intent-analysis-engine">6.2 The Intent Analysis Engine</h2>
+<p>When a human says "Build me a REST API with JWT auth and PostgreSQL," the Orchestrator must decompose this into concrete, assignable tasks. This decomposition is the hardest part of orchestration — it requires understanding the problem domain well enough to enumerate implicit requirements that the user did not specify: error handling, input validation, logging, migration scripts, environment configuration.</p>
+<p>The challenge is that human prompts are deliberately ambiguous. "Build me a REST API" does not specify whether you want Express or Fastify, PostgreSQL with raw SQL or Prisma ORM, JWT with HS256 or RS256, or whether you need rate limiting, CORS configuration, health endpoints, or Swagger documentation. A single-agent system resolves these ambiguities by reading existing code and making educated guesses. A multi-agent system must resolve them upfront — because once the Orchestrator dispatches tasks to six specialists in parallel, changing a fundamental decision (like ORM choice) means throwing away work.</p>
+<p>This is why intent analysis is a separate engine, not just a prompt instruction. It must produce a complete task specification before any specialist starts working.</p>
+<h3 id="heuristic-first-llm-second">Heuristic-First, LLM-Second</h3>
+<p>The intent analysis engine uses a two-stage approach: fast heuristic matching for common patterns, falling back to LLM analysis for novel requests. This dual-stage design matters for responsiveness. A user who types "fix the login bug" expects the Orchestrator to start working immediately, not spend 3 seconds analyzing the prompt with an LLM call. The heuristic stage gives that instant responsiveness for the 60-70% of prompts that match well-understood patterns.</p>
+<p><strong>Stage 1: Keyword and Pattern Matching (zero latency)</strong></p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1">// clis/orchestrator/src/intent/mod.rs</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">Intent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Build</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">components</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Component</span><span class="o">&gt;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Fix</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">target</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Review</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">scope</span><span class="p">:</span><span class="w"> </span><span class="nc">ReviewScope</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Audit</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">focus</span><span class="p">:</span><span class="w"> </span><span class="nc">AuditFocus</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Research</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">topic</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Deploy</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">environment</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Refactor</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">target</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">goal</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Custom</span><span class="p">(</span><span class="nb">String</span><span class="p">),</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">classify_intent</span><span class="p">(</span><span class="n">prompt</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Intent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">lower</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">prompt</span><span class="p">.</span><span class="n">to_lowercase</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Build/create patterns</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">contains_any</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lower</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="p">[</span><span class="s">&quot;build&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;create&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;implement&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;new&quot;</span><span class="p">])</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">components</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">extract_components</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lower</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Build</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">components</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// Fix/debug patterns</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">contains_any</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lower</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="p">[</span><span class="s">&quot;fix&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;bug&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;error&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;broken&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;crash&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fail&quot;</span><span class="p">])</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Fix</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">target</span><span class="p">:</span><span class="w"> </span><span class="nc">extract_target</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lower</span><span class="p">),</span>
+<span class="w">            </span><span class="n">error</span><span class="p">:</span><span class="w"> </span><span class="nc">extract_error_context</span><span class="p">(</span><span class="n">prompt</span><span class="p">),</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// Security audit patterns</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">contains_any</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lower</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="p">[</span><span class="s">&quot;audit&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;security&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;vulnerability&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;owasp&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cve&quot;</span><span class="p">])</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Audit</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">focus</span><span class="p">:</span><span class="w"> </span><span class="nc">classify_audit_focus</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lower</span><span class="p">),</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// ... more patterns</span>
+
+<span class="w">    </span><span class="n">Intent</span><span class="p">::</span><span class="n">Custom</span><span class="p">(</span><span class="n">prompt</span><span class="p">.</span><span class="n">to_string</span><span class="p">())</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This matches the pattern from DApp's <code>intent-analyzer.js</code>, which performs prompt analysis for worker allocation. The heuristic stage resolves 60-70% of prompts with zero LLM calls and zero latency. Notice the pattern: each match extracts structured information from the free-text prompt. <code>extract_components</code> might identify "REST API," "JWT auth," and "PostgreSQL" as three separate components. <code>extract_error_context</code> might pull a stack trace from the prompt. The heuristic is not just a router — it is a parser that converts natural language into structured intent.</p>
+<p>The heuristic approach also handles compound prompts — "fix the auth bug and then add rate limiting" — by detecting conjunctions and splitting into multiple intents:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">classify_intents</span><span class="p">(</span><span class="n">prompt</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Intent</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">segments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">split_compound_prompt</span><span class="p">(</span><span class="n">prompt</span><span class="p">);</span>
+<span class="w">    </span><span class="n">segments</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">s</span><span class="o">|</span><span class="w"> </span><span class="n">classify_intent</span><span class="p">(</span><span class="n">s</span><span class="p">)).</span><span class="n">collect</span><span class="p">()</span>
+<span class="p">}</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">split_compound_prompt</span><span class="p">(</span><span class="n">prompt</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="kt">str</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Split on: &quot;and then&quot;, &quot;also&quot;, &quot;after that&quot;, &quot;;&quot;, numbered lists</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">connectors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;and then&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;then also&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;after that&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;also&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;; &quot;</span><span class="p">];</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">segments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="n">prompt</span><span class="p">];</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">conn</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="n">connectors</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">segments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">segments</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">flat_map</span><span class="p">(</span><span class="o">|</span><span class="n">s</span><span class="o">|</span><span class="w"> </span><span class="n">s</span><span class="p">.</span><span class="n">splitn</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="n">conn</span><span class="p">))</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">segments</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Stage 2: LLM-Assisted Decomposition (for complex/ambiguous prompts)</strong></p>
+<p>When the heuristic stage produces <code>Intent::Custom</code>, the Orchestrator uses its LLM to analyze the prompt. But critically, it does not ask the LLM to produce code or read files — it asks for a structured task decomposition:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="gu">## Task Decomposition Prompt (injected into Orchestrator&#39;s CLAUDE.md)</span>
+
+When you receive a prompt that does not match a standard pattern, decompose it:
+
+<span class="k">1.</span> Identify the TOP-LEVEL GOAL (one sentence)
+<span class="k">2.</span> List IMPLICIT REQUIREMENTS the user did not state but the goal requires
+<span class="k">3.</span> Decompose into CONCRETE TASKS, each with:
+<span class="w">   </span><span class="k">-</span><span class="w"> </span>task_id: unique identifier
+<span class="w">   </span><span class="k">-</span><span class="w"> </span>description: what to do (specific enough for a specialist)
+<span class="w">   </span><span class="k">-</span><span class="w"> </span>assigned_cli: which specialist handles this
+<span class="w">   </span><span class="k">-</span><span class="w"> </span>depends_on: list of task_ids that must complete first
+<span class="w">   </span><span class="k">-</span><span class="w"> </span>estimated_effort: low/medium/high
+<span class="k">4.</span> Output as JSON matching the TaskGraph schema
+</code></pre></div>
+
+<h3 id="a-worked-example">A Worked Example</h3>
+<p>Consider the prompt: "Build me a REST API with JWT auth and PostgreSQL."</p>
+<p><strong>Stage 1 (heuristic)</strong> identifies this as <code>Intent::Build</code> with components: <code>["REST API", "JWT auth", "PostgreSQL"]</code>.</p>
+<p><strong>Stage 2 (LLM decomposition)</strong> expands these three components into the full task graph that a practitioner would mentally construct:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;goal&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Production REST API with JWT authentication and PostgreSQL storage&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;implicit_requirements&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">&quot;Database migrations (not just raw CREATE TABLE)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;Password hashing (bcrypt/argon2, not plaintext)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;Token refresh mechanism (not just access tokens)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;Environment configuration (.env, not hardcoded credentials)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;Error handling middleware (structured JSON errors, not stack traces)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;Input validation (reject malformed requests at the boundary)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;Health check endpoint (for load balancer probes)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;CORS configuration (for browser clients)&quot;</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;tasks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Create PostgreSQL schema migration: users table with id, email, password_hash, role, timestamps&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;coder&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T2&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Set up environment configuration: .env template, config loader, connection pool&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;coder&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T3&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Implement JWT auth: register, login, token refresh, middleware&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;coder&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;T1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;T2&quot;</span><span class="p">]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T4&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Build CRUD API routes with input validation&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;coder&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;T1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;T2&quot;</span><span class="p">]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T5&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Add error handling middleware and health endpoint&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;coder&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;T2&quot;</span><span class="p">]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T6&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Write integration tests for all endpoints&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;coder&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;T3&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;T4&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;T5&quot;</span><span class="p">]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T7&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Security audit: JWT algorithm, password storage, SQL injection, CORS&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;security&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;T3&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;T4&quot;</span><span class="p">]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T8&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Run lint, type check, build, test suite&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;validator&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;T6&quot;</span><span class="p">]},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;T9&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Generate API documentation from routes&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;documenter&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depends_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;T4&quot;</span><span class="p">]}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Notice how T1 and T2 have no dependencies — they can run in parallel (Wave 1). T3, T4, and T5 depend on T1/T2 — they form Wave 2. T6, T7, and T9 form Wave 3. T8 is Wave 4. This natural layering emerges from dependency analysis, and it is what makes multi-CLI execution faster than sequential single-agent work.</p>
+<hr />
+<h2 id="63-the-task-dag-engine">6.3 The Task DAG Engine</h2>
+<p>A task list is sequential. A task DAG (Directed Acyclic Graph) is parallel. The difference is why multi-CLI systems outperform single-agent systems on complex tasks.</p>
+<p>When a single Claude Code agent handles "build a REST API," it works sequentially: schema, then config, then auth, then routes, then tests, then audit. Nine steps, one after another. Even if steps 1 and 2 are independent, the agent does them sequentially because it is a single process with a single context. Total wall time: the sum of all steps.</p>
+<p>With a Task DAG, the Orchestrator identifies that steps 1 and 2 are independent and dispatches them in parallel. Steps 3, 4, and 5 become eligible as soon as their dependencies complete — and since they are independent of each other, they also run in parallel. The critical path through the DAG (the longest chain of sequential dependencies) determines total wall time, not the sum of all steps. For the REST API example, the critical path is T1 → T3 → T6 → T8 — four sequential stages instead of nine. The other tasks execute in parallel alongside the critical path, consuming no additional wall time.</p>
+<p>This is not a theoretical speedup. In practice, a 9-task REST API build that takes 8-12 minutes with a single agent completes in 4-6 minutes with a well-structured DAG. The speedup is bounded by the critical path length, not the total number of tasks.</p>
+<h3 id="the-data-structure">The Data Structure</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1">// clis/orchestrator/src/tasks/dag.rs</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">collections</span><span class="p">::{</span><span class="n">HashMap</span><span class="p">,</span><span class="w"> </span><span class="n">HashSet</span><span class="p">,</span><span class="w"> </span><span class="n">VecDeque</span><span class="p">};</span>
+
+<span class="cp">#[derive(Debug, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Task</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">description</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">assigned_cli</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">depends_on</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">status</span><span class="p">:</span><span class="w"> </span><span class="nc">TaskStatus</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">result</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">TaskResult</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">priority</span><span class="p">:</span><span class="w"> </span><span class="nc">Priority</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Clone, PartialEq)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">TaskStatus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pending</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Ready</span><span class="p">,</span><span class="w">       </span><span class="c1">// All dependencies satisfied</span>
+<span class="w">    </span><span class="n">Running</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Completed</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Failed</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">error</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">retries</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Blocked</span><span class="p">,</span><span class="w">     </span><span class="c1">// Dependency failed</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">TaskDAG</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">tasks</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">Task</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">dependents</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="c1">// task_id → tasks that depend on it</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">TaskDAG</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Returns all tasks whose dependencies are satisfied and status is Ready</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">ready_tasks</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="n">Task</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">values</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Ready</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Mark a task as completed and promote its dependents to Ready</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">complete_task</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">task_id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span><span class="w"> </span><span class="n">result</span><span class="p">:</span><span class="w"> </span><span class="nc">TaskResult</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">task</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">get_mut</span><span class="p">(</span><span class="n">task_id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">task</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Completed</span><span class="p">;</span>
+<span class="w">            </span><span class="n">task</span><span class="p">.</span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">result</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Check if any dependents are now unblocked</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">deps</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">dependents</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">task_id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="n">dep_id</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">all_dependencies_met</span><span class="p">(</span><span class="n">dep_id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">dep</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">get_mut</span><span class="p">(</span><span class="n">dep_id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="n">dep</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Ready</span><span class="p">;</span>
+<span class="w">                    </span><span class="p">}</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Mark a task as failed and cascade failure to dependents</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">fail_task</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">task_id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">task</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">get_mut</span><span class="p">(</span><span class="n">task_id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">task</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Failed</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">error</span><span class="p">,</span><span class="w"> </span><span class="n">retries</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Cascade: block all downstream tasks</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">cascade_block</span><span class="p">(</span><span class="n">task_id</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">all_dependencies_met</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">task_id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">task_id</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">depends_on</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">                </span><span class="p">.</span><span class="n">all</span><span class="p">(</span><span class="o">|</span><span class="n">dep</span><span class="o">|</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">dep</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">d</span><span class="o">|</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Completed</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="kc">false</span><span class="p">)))</span>
+<span class="w">            </span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="wave-scheduling">Wave Scheduling</h3>
+<p>The DAG enables wave scheduling — executing independent tasks in parallel waves. A "wave" is a set of tasks that can all execute simultaneously because none of them depend on each other. When all tasks in a wave complete, the next wave becomes eligible.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Wave 1 (parallel):  [Schema Design]  [Environment Config]  [CI Setup]
+                          ↓                    ↓
+Wave 2 (parallel):  [API Routes]      [Docker Config]
+                          ↓
+Wave 3 (parallel):  [Auth Middleware]  [RBAC Logic]
+                          ↓                ↓
+Wave 4 (sequential): [Integration Tests]
+                          ↓
+Wave 5 (sequential): [Security Audit]
+</code></pre></div>
+
+<p>The Orchestrator dispatches all Wave 1 tasks simultaneously. As each completes, it promotes Wave 2 tasks to Ready status. Independent tasks within the same wave run in parallel — the Coder builds API routes while DevOps configures Docker.</p>
+<p>The wave scheduler does not compute waves upfront. Instead, it dynamically discovers the next batch by checking which tasks have all dependencies satisfied. This handles the common case where tasks within a wave complete at different speeds — a fast task in Wave 2 that has all its Wave 1 dependencies met starts immediately, without waiting for slower Wave 1 tasks that do not affect it.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1">// clis/orchestrator/src/tasks/scheduler.rs</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">WaveScheduler</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dag</span><span class="p">:</span><span class="w"> </span><span class="nc">TaskDAG</span><span class="p">,</span>
+<span class="w">    </span><span class="n">max_concurrent</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="n">running</span><span class="p">:</span><span class="w"> </span><span class="nc">HashSet</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">WaveScheduler</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">next_dispatch_batch</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="n">Task</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ready</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">dag</span><span class="p">.</span><span class="n">ready_tasks</span><span class="p">();</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">capacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">max_concurrent</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">running</span><span class="p">.</span><span class="n">len</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Dispatch up to capacity, prioritizing higher-priority tasks</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">batch</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="n">Task</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ready</span><span class="p">.</span><span class="n">into_iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">take</span><span class="p">(</span><span class="n">capacity</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
+<span class="w">        </span><span class="n">batch</span><span class="p">.</span><span class="n">sort_by_key</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">cmp</span><span class="p">::</span><span class="n">Reverse</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">priority</span><span class="p">.</span><span class="n">clone</span><span class="p">()));</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">task</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="n">batch</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="bp">self</span><span class="p">.</span><span class="n">running</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">task</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">clone</span><span class="p">());</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">batch</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="dag-validation-and-cycle-detection">DAG Validation and Cycle Detection</h3>
+<p>A critical property of the task DAG is that it must be acyclic. If Task A depends on Task B, and Task B depends on Task A, neither can ever start. This is a deadlock — and it is particularly insidious in LLM-generated task graphs because the LLM can introduce circular dependencies without realizing it.</p>
+<p>The Orchestrator must validate the DAG before executing it:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">TaskDAG</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Validate the DAG: check for cycles, orphan dependencies, and unreachable tasks</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">DagError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Topological sort detects cycles</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">in_degree</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;&amp;</span><span class="kt">str</span><span class="p">,</span><span class="w"> </span><span class="kt">usize</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">HashMap</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">task</span><span class="p">)</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">in_degree</span><span class="p">.</span><span class="n">entry</span><span class="p">(</span><span class="n">id</span><span class="p">.</span><span class="n">as_str</span><span class="p">()).</span><span class="n">or_insert</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="n">dep</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="n">task</span><span class="p">.</span><span class="n">depends_on</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="o">*</span><span class="n">in_degree</span><span class="p">.</span><span class="n">entry</span><span class="p">(</span><span class="n">dep</span><span class="p">.</span><span class="n">as_str</span><span class="p">()).</span><span class="n">or_insert</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">                </span><span class="c1">// Validate dependency exists</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">contains_key</span><span class="p">(</span><span class="n">dep</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">DagError</span><span class="p">::</span><span class="n">OrphanDependency</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="n">task</span><span class="p">:</span><span class="w"> </span><span class="nc">id</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                        </span><span class="n">missing_dep</span><span class="p">:</span><span class="w"> </span><span class="nc">dep</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                    </span><span class="p">});</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Kahn&#39;s algorithm for topological sort</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">queue</span><span class="p">:</span><span class="w"> </span><span class="nc">VecDeque</span><span class="o">&lt;&amp;</span><span class="kt">str</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in_degree</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="o">|</span><span class="p">(</span><span class="n">_</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">deg</span><span class="p">)</span><span class="o">|</span><span class="w"> </span><span class="n">deg</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="p">(</span><span class="o">&amp;</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">_</span><span class="p">)</span><span class="o">|</span><span class="w"> </span><span class="n">id</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">sorted_count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="k">while</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">node</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">queue</span><span class="p">.</span><span class="n">pop_front</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">sorted_count</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">deps</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">dependents</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">node</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">for</span><span class="w"> </span><span class="n">dep</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">deg</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in_degree</span><span class="p">.</span><span class="n">get_mut</span><span class="p">(</span><span class="n">dep</span><span class="p">.</span><span class="n">as_str</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="o">*</span><span class="n">deg</span><span class="w"> </span><span class="o">-=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">                        </span><span class="k">if</span><span class="w"> </span><span class="o">*</span><span class="n">deg</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                            </span><span class="n">queue</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">dep</span><span class="p">.</span><span class="n">as_str</span><span class="p">());</span>
+<span class="w">                        </span><span class="p">}</span>
+<span class="w">                    </span><span class="p">}</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">sorted_count</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">tasks</span><span class="p">.</span><span class="n">len</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">DagError</span><span class="p">::</span><span class="n">CycleDetected</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This validation catches three classes of errors: circular dependencies (cycles), references to non-existent tasks (orphan dependencies), and tasks that can never execute because their dependency chain contains a cycle. Run this validation immediately after constructing the DAG from LLM output — before dispatching any tasks.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>---
+
+## 6.4 The Dispatch Protocol
+
+With the intent analyzed and the task DAG built and validated, the Orchestrator dispatches work to specialists. The dispatch protocol defines how tasks are sent, how results are collected, and how failures are handled.
+
+### The Art of Writing Complete Dispatch Prompts
+
+The most common Orchestrator bug is not a code error — it is an incomplete dispatch prompt. When the Orchestrator sends a specialist a task description that says &quot;implement the auth module,&quot; the specialist has to make dozens of decisions that the Orchestrator should have made: which auth strategy? which library? what token format? where do the files go? what patterns do the existing routes follow? The specialist answers these questions by reading the codebase — spending time and tokens on discovery that the Orchestrator could have resolved upfront.
+
+A well-written dispatch prompt is a complete specification. It tells the specialist exactly what to produce, where to put it, what format to follow, and what constraints to respect. The specialist&#39;s job is execution, not design. Design is the Orchestrator&#39;s job.
+
+Compare these two dispatch prompts:
+
+**Bad (underspecified):**
+</code></pre></div>
+
+<p>"Implement JWT authentication for the API."</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>**Good (self-contained):**
+</code></pre></div>
+
+<p>"Create JWT authentication at src/auth/ with these files:
+- src/auth/middleware.ts: Express middleware, verify RS256 JWT from Authorization: Bearer header
+- src/auth/service.ts: register(email, password) → user, login(email, password) → {accessToken, refreshToken}
+- src/auth/routes.ts: POST /auth/register, POST /auth/login, POST /auth/refresh
+- Use bcrypt (cost=12) for passwords. Access tokens expire in 15m, refresh tokens in 7d.
+- Tokens signed with RS256 using key from process.env.JWT_PRIVATE_KEY
+- All errors return {error: string, code: string} JSON, never stack traces.
+- Follow the existing route pattern in src/routes/health.ts for structure."</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>The second prompt eliminates ambiguity. The specialist produces exactly what the Orchestrator expects, on the first try, without needing to read existing code or ask clarifying questions. This is the synthesis responsibility: the Orchestrator thinks hard enough upfront to write complete specifications.
+
+### Dispatch via MCP
+
+Each specialist CLI runs as an MCP server (as established in Chapter 4). The Orchestrator dispatches tasks by calling tools on the appropriate specialist:
+</code></pre></div>
+
+<p>Orchestrator → Security CLI (MCP tools/call): sast_scan({"target": "src/auth/"})
+Security CLI → Orchestrator (MCP result): {"findings": [...], "status": "complete"}</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>For tasks that require LLM reasoning (not just tool execution), the Orchestrator uses the AgentTool to spawn a specialist with a self-contained prompt:
+
+```json
+{
+  &quot;tool&quot;: &quot;AgentTool&quot;,
+  &quot;input&quot;: {
+    &quot;agent&quot;: &quot;coder&quot;,
+    &quot;prompt&quot;: &quot;Create a PostgreSQL migration file at migrations/001_users.sql with columns: id (uuid, primary key), email (varchar 255, unique, not null), password_hash (varchar 255, not null), role (varchar 50, default &#39;user&#39;), created_at (timestamptz, default now()), updated_at (timestamptz, default now()). Include an index on email.&quot;
+  }
+}
+</code></pre></div>
+
+<p>Notice: the prompt is entirely self-contained. It includes exact file paths, column types, constraints, and default values. The specialist does not need to read files or ask questions — it has everything needed to execute. This is the synthesis responsibility from Section 6.1: the Orchestrator thinks hard enough to write complete specifications.</p>
+<h3 id="dispatch-with-context-from-previous-specialists">Dispatch with Context from Previous Specialists</h3>
+<p>When a task depends on the output of a previous task, the Orchestrator includes that output in the dispatch. This is the inter-wave handoff — the critical moment where results from one specialist become inputs for another.</p>
+<p>The Orchestrator does not simply forward the raw output from one specialist to the next. It curates the handoff: extracting the relevant parts, translating them into the terms the receiving specialist needs, and adding any context that the receiving specialist requires but the sending specialist did not produce.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AgentTool&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;security&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Audit the authentication module. The Coder CLI created these files:\n\n- src/auth/middleware.ts (JWT verification, RS256)\n- src/auth/rbac.ts (role-based access control)\n- src/models/user.ts (Prisma model with password_hash)\n\nFocus on: JWT algorithm confusion, token expiry, RBAC bypass, password storage.\nReport findings as JSON with severity, CWE, file, line, and remediation.&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The Orchestrator synthesizes the Coder's output into the Security CLI's input. Each specialist receives a complete, standalone brief.</p>
+<h3 id="result-collection-and-status-tracking">Result Collection and Status Tracking</h3>
+<p>When specialists complete tasks, the Orchestrator collects results through the MCP response channel. But collection is not passive — the Orchestrator actively monitors specialist progress and handles several states:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">SpecialistStatus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Running</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">progress</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">elapsed</span><span class="p">:</span><span class="w"> </span><span class="nc">Duration</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Completed</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">result</span><span class="p">:</span><span class="w"> </span><span class="nc">TaskResult</span><span class="p">,</span><span class="w"> </span><span class="n">tokens_used</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Failed</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">error</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">partial_output</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">TimedOut</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">last_activity</span><span class="p">:</span><span class="w"> </span><span class="nc">Duration</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">Stalled</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">no_tool_calls_for</span><span class="p">:</span><span class="w"> </span><span class="nc">Duration</span><span class="w"> </span><span class="p">},</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Stall detection</strong> is particularly important. A specialist that has not made a tool call in 60 seconds is likely stuck — the LLM is generating text without taking action, or it has entered a reasoning loop. The Orchestrator can either nudge the specialist with a SendMessage ("Please proceed with the implementation — avoid over-analyzing") or kill it and retry.</p>
+<p><strong>Timeout management</strong> prevents runaway specialists from blocking the entire DAG. Each task gets a timeout proportional to its estimated complexity: 2 minutes for simple tasks, 5 minutes for moderate, 10 minutes for complex. If a specialist exceeds its timeout, the Orchestrator kills it and applies the failure strategy.</p>
+<h3 id="failure-handling">Failure Handling</h3>
+<p>When a specialist fails, the Orchestrator has three strategies, chosen based on the failure type:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">FailureStrategy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Retry the same specialist with the same prompt (transient errors)</span>
+<span class="w">    </span><span class="n">Retry</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">max_attempts</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span><span class="w"> </span><span class="n">backoff_ms</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="w"> </span><span class="p">},</span>
+
+<span class="w">    </span><span class="sd">/// Retry with a modified prompt (add error context)</span>
+<span class="w">    </span><span class="n">RetryWithContext</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">error_message</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">},</span>
+
+<span class="w">    </span><span class="sd">/// Cascade failure (block downstream tasks, report to human)</span>
+<span class="w">    </span><span class="n">CascadeBlock</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">Orchestrator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">handle_failure</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">task</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Task</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">FailureStrategy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Transient errors: retry</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">error</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;rate_limit&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">error</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;overloaded&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">FailureStrategy</span><span class="p">::</span><span class="n">Retry</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">max_attempts</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">backoff_ms</span><span class="p">:</span><span class="w"> </span><span class="mi">5000</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Tool errors: retry with context</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">error</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;tool not found&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">error</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;permission denied&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">FailureStrategy</span><span class="p">::</span><span class="n">RetryWithContext</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">error_message</span><span class="p">:</span><span class="w"> </span><span class="nc">format</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;Previous attempt failed: {}. Adjust approach.&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">),</span>
+<span class="w">            </span><span class="p">};</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Fundamental failures: cascade</span>
+<span class="w">        </span><span class="n">FailureStrategy</span><span class="p">::</span><span class="n">CascadeBlock</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The cascade block strategy deserves special attention. When a task fails fatally (compilation error, permission denied, fundamental misunderstanding of the requirement), all tasks that depend on it are also blocked. The Orchestrator marks the entire downstream subgraph as <code>Blocked</code> and reports to the human with a clear explanation: which task failed, why, what downstream work is affected, and what options exist (retry with different approach, modify the requirement, or abandon the task).</p>
+<p>The worst thing an Orchestrator can do after a failure is continue dispatching tasks that depend on the failed output. This produces cascade waste — specialists doing work based on inputs that no longer exist, generating artifacts that will need to be thrown away.</p>
+<h3 id="dispatch-concurrency-limits">Dispatch Concurrency Limits</h3>
+<p>Not all tasks should run in parallel without limit. Each specialist CLIs consumes API tokens, and spawning 15 parallel specialists generates $50+ of API costs per minute. The Orchestrator uses a concurrency semaphore to limit parallel execution:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DispatchConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">max_concurrent_specialists</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w">  </span><span class="c1">// Default: 4</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">max_concurrent_per_cli</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w">      </span><span class="c1">// Default: 2</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">timeout_simple</span><span class="p">:</span><span class="w"> </span><span class="nc">Duration</span><span class="p">,</span><span class="w">           </span><span class="c1">// Default: 2 minutes</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">timeout_moderate</span><span class="p">:</span><span class="w"> </span><span class="nc">Duration</span><span class="p">,</span><span class="w">         </span><span class="c1">// Default: 5 minutes</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">timeout_complex</span><span class="p">:</span><span class="w"> </span><span class="nc">Duration</span><span class="p">,</span><span class="w">          </span><span class="c1">// Default: 10 minutes</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">stall_threshold</span><span class="p">:</span><span class="w"> </span><span class="nc">Duration</span><span class="p">,</span><span class="w">          </span><span class="c1">// Default: 60 seconds</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>max_concurrent_per_cli</code> limit prevents a single specialist type from monopolizing the dispatch slots. Without it, a DAG with 8 independent Coder tasks and 2 Security tasks might dispatch all 8 Coder tasks first, delaying Security work that could run in parallel.</p>
+<hr />
+<h2 id="65-conflict-resolution">6.5 Conflict Resolution</h2>
+<p>When specialists disagree, the Orchestrator must resolve the conflict. This is not an edge case — it is a routine occurrence in any multi-specialist system. The Security CLI will flag code that the Coder CLI just wrote. The Validator CLI will reject code that passes the Coder's own tests but fails the linter. The Planner CLI will recommend a redesign that invalidates work already completed by other specialists. These conflicts are features, not bugs — they are the mechanism by which multiple perspectives produce better results than a single perspective.</p>
+<p>The challenge is resolving conflicts efficiently. An Orchestrator that sends every Security finding back to the Coder generates unnecessary round trips. An Orchestrator that ignores MEDIUM findings ships insecure code. The resolution protocol must be calibrated: strict enough to prevent real problems, lenient enough to avoid grinding the pipeline to a halt.</p>
+<h3 id="the-protocol">The Protocol</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>1. Security CLI reports: CRITICAL finding in src/auth/middleware.ts:23 (CWE-347: JWT algorithm confusion)
+2. Orchestrator evaluates: CRITICAL severity = blocking. Cannot ship.
+3. Orchestrator dispatches to Coder: &quot;Fix the JWT algorithm confusion at src/auth/middleware.ts:23.
+   The Security CLI reports: &#39;Algorithm is not validated on verification. An attacker can
+   re-sign the token with HS256 using the public key as the HMAC secret.&#39;
+   Fix: Pin algorithm to RS256 in verify() call options.&quot;
+4. Coder fixes and reports completion.
+5. Orchestrator dispatches to Security: &quot;Re-audit src/auth/middleware.ts. Specifically verify
+   that the JWT algorithm confusion finding (CWE-347) at line 23 has been remediated.&quot;
+6. Security CLI re-audits and reports: finding resolved.
+7. Orchestrator proceeds.
+</code></pre></div>
+
+<h3 id="priority-rules">Priority Rules</h3>
+<p>The resolution hierarchy codifies organizational judgment. In real engineering organizations, these rules exist as cultural norms ("security always wins"). In a multi-CLI system, they must be explicit because the Orchestrator cannot intuit cultural norms — it follows rules.</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Resolution</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Security says CRITICAL, Coder says "done"</td>
+<td>Security wins. Coder must address.</td>
+<td>CRITICAL findings represent exploitable vulnerabilities. Shipping them is unacceptable regardless of schedule.</td>
+</tr>
+<tr>
+<td>Security says MEDIUM, Coder says "too complex to fix now"</td>
+<td>Orchestrator decides. May defer to backlog.</td>
+<td>MEDIUM findings are real but not immediately exploitable. The tradeoff between security and velocity is a judgment call.</td>
+</tr>
+<tr>
+<td>Validator says tests fail, Coder says tests are wrong</td>
+<td>QA CLI breaks the tie — reviews both the code and the test.</td>
+<td>Neither the code author nor the test suite can be trusted when they disagree. An independent arbiter (QA) examines both.</td>
+</tr>
+<tr>
+<td>Planner says "needs redesign", Coder already implemented</td>
+<td>Orchestrator evaluates scope. If redesign is &gt;50% rework, escalate to human.</td>
+<td>Redesigning completed work is expensive. The Orchestrator should not make this call unilaterally — it affects the human's time and budget.</td>
+</tr>
+<tr>
+<td>Two specialists produce conflicting code</td>
+<td>Orchestrator asks both to explain. Chooses based on the original requirement, not the specialist's preference.</td>
+<td>Specialists optimize for their domain. The original requirement is the tiebreaker.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="implementing-conflict-detection">Implementing Conflict Detection</h3>
+<p>The Orchestrator detects conflicts by comparing specialist outputs against expectations:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">ConflictType</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">SecurityBlock</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">finding_severity</span><span class="p">:</span><span class="w"> </span><span class="nc">Severity</span><span class="p">,</span>
+<span class="w">        </span><span class="n">cwe</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">affected_file</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">remediation</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="n">TestFailure</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">test_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">expected</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">actual</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">error_output</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="n">DesignConflict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">planner_recommendation</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">existing_implementation</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">rework_estimate</span><span class="p">:</span><span class="w"> </span><span class="nc">ReworkScope</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="n">MergeConflict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">specialist_a</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">specialist_b</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">ReworkScope</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Minor</span><span class="p">,</span><span class="w">    </span><span class="c1">// &lt; 20% of completed work</span>
+<span class="w">    </span><span class="n">Moderate</span><span class="p">,</span><span class="w"> </span><span class="c1">// 20-50%</span>
+<span class="w">    </span><span class="n">Major</span><span class="p">,</span><span class="w">    </span><span class="c1">// &gt; 50% — escalate to human</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">Orchestrator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">resolve_conflict</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">conflict</span><span class="p">:</span><span class="w"> </span><span class="nc">ConflictType</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Resolution</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">conflict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">ConflictType</span><span class="p">::</span><span class="n">SecurityBlock</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">finding_severity</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">match</span><span class="w"> </span><span class="n">finding_severity</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">Severity</span><span class="p">::</span><span class="n">Critical</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Severity</span><span class="p">::</span><span class="n">High</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Resolution</span><span class="p">::</span><span class="n">MustFix</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">Severity</span><span class="p">::</span><span class="n">Medium</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Resolution</span><span class="p">::</span><span class="n">DeferToBacklog</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">Severity</span><span class="p">::</span><span class="n">Low</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Severity</span><span class="p">::</span><span class="n">Info</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Resolution</span><span class="p">::</span><span class="n">Accept</span><span class="p">,</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">ConflictType</span><span class="p">::</span><span class="n">TestFailure</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Resolution</span><span class="p">::</span><span class="n">MustFix</span><span class="p">,</span>
+<span class="w">            </span><span class="n">ConflictType</span><span class="p">::</span><span class="n">DesignConflict</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">rework_estimate</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">match</span><span class="w"> </span><span class="n">rework_estimate</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">ReworkScope</span><span class="p">::</span><span class="n">Minor</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">ReworkScope</span><span class="p">::</span><span class="n">Moderate</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Resolution</span><span class="p">::</span><span class="n">MustFix</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">ReworkScope</span><span class="p">::</span><span class="n">Major</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Resolution</span><span class="p">::</span><span class="n">EscalateToHuman</span><span class="p">,</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">ConflictType</span><span class="p">::</span><span class="n">MergeConflict</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// Two specialists modified the same file</span>
+<span class="w">                </span><span class="c1">// This should not happen with proper worktree isolation</span>
+<span class="w">                </span><span class="n">Resolution</span><span class="p">::</span><span class="n">EscalateToHuman</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Merge conflicts are a special class. They should never occur if the Orchestrator properly isolates specialists using git worktrees (covered in Section 6.7). If they do occur, something is wrong with the isolation — the Orchestrator should not try to auto-resolve, but escalate to the human.</p>
+<hr />
+<h2 id="66-the-complete-orchestrator-claudemd">6.6 The Complete Orchestrator CLAUDE.md</h2>
+<p>Here is the full CLAUDE.md template for the Orchestrator CLI, incorporating every pattern from this chapter:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="gh"># OrchestratorCLI — Multi-Agent Project Manager</span>
+
+<span class="gu">## Identity</span>
+You are the Orchestrator — the brain of a multi-CLI agent system.
+You NEVER execute tasks directly. You decompose, delegate, monitor, and synthesize.
+You operate on ABSTRACTIONS (task descriptions, dependencies, status) — never on
+concrete artifacts (files, processes, test output).
+
+<span class="gu">## The Rule of Restriction</span>
+You have ONLY coordination tools: AgentTool, SendMessage, TaskStop, TaskCreate,
+TaskList, TaskUpdate, SyntheticOutput.
+You do NOT have: file_read, file_write, bash, grep, glob, or any filesystem tool.
+If you find yourself wanting to read a file, you are doing the wrong job.
+Delegate to the appropriate specialist instead.
+
+<span class="gu">## Four-Phase Workflow</span>
+For every task:
+
+<span class="gu">### Phase 1: ANALYZE</span>
+<span class="k">-</span><span class="w"> </span>Parse the human&#39;s prompt for intent, scope, and implicit requirements
+<span class="k">-</span><span class="w"> </span>Identify which specialists are needed
+<span class="k">-</span><span class="w"> </span>Estimate complexity (simple=1 specialist, moderate=2-4, complex=5+)
+
+<span class="gu">### Phase 2: DECOMPOSE</span>
+<span class="k">-</span><span class="w"> </span>Break into concrete subtasks with dependencies
+<span class="k">-</span><span class="w"> </span>Each subtask must specify: what, which CLI, depends_on, priority
+<span class="k">-</span><span class="w"> </span>Independent tasks should run in parallel (wave scheduling)
+<span class="k">-</span><span class="w"> </span>No subtask should require &gt;30 minutes of specialist work
+
+<span class="gu">### Phase 3: DISPATCH</span>
+<span class="k">-</span><span class="w"> </span>Send each subtask to the assigned specialist as a SELF-CONTAINED prompt
+<span class="k">-</span><span class="w"> </span>Include: exact file paths, specific requirements, expected output format
+<span class="k">-</span><span class="w"> </span>Never say &quot;based on earlier work&quot; — each dispatch is standalone
+<span class="k">-</span><span class="w"> </span>Monitor progress. Handle failures (retry transient, cascade fatal).
+
+<span class="gu">### Phase 4: SYNTHESIZE</span>
+<span class="k">-</span><span class="w"> </span>Collect all specialist results
+<span class="k">-</span><span class="w"> </span>Verify consistency (do the pieces fit together?)
+<span class="k">-</span><span class="w"> </span>Resolve conflicts (Security vs Coder: Security wins for CRITICAL/HIGH)
+<span class="k">-</span><span class="w"> </span>Present the final result to the human
+
+<span class="gu">## Available Specialists</span>
+<span class="k">-</span><span class="w"> </span><span class="gs">**coder**</span>: Writes production code. Test-first. Match existing patterns.
+<span class="k">-</span><span class="w"> </span><span class="gs">**security**</span>: Read-only security audit. Structured JSON findings with CWE.
+<span class="k">-</span><span class="w"> </span><span class="gs">**validator**</span>: Runs lint/typecheck/build/test. Reports SHIP or BLOCK.
+<span class="k">-</span><span class="w"> </span><span class="gs">**qa**</span>: Adversarial testing. Finds edge cases and failure modes.
+<span class="k">-</span><span class="w"> </span><span class="gs">**researcher**</span>: Multi-source information gathering. Cited facts only.
+<span class="k">-</span><span class="w"> </span><span class="gs">**planner**</span>: Architecture and task decomposition. Outputs task DAGs.
+<span class="k">-</span><span class="w"> </span><span class="gs">**documenter**</span>: Documentation generation. Reads code, writes docs.
+
+<span class="gu">## Conflict Resolution</span>
+<span class="k">1.</span> CRITICAL/HIGH security findings ALWAYS block. Coder must fix before proceeding.
+<span class="k">2.</span> Test failures ALWAYS block. Coder must fix before proceeding.
+<span class="k">3.</span> MEDIUM security findings: defer to backlog if Coder explains the tradeoff.
+<span class="k">4.</span> When specialists disagree on approach: return to the original human requirement.
+<span class="k">5.</span> When rework exceeds 50% of completed work: escalate to human for decision.
+
+<span class="gu">## Communication</span>
+<span class="k">-</span><span class="w"> </span>Report progress at natural milestones (Phase transitions, specialist completions)
+<span class="k">-</span><span class="w"> </span>Show the task graph to the human so they can see what is happening
+<span class="k">-</span><span class="w"> </span>When blocked (all specialists failed, or conflict cannot be resolved): explain
+  what happened, what was tried, and ask the human for direction
+</code></pre></div>
+
+<hr />
+<h2 id="67-orchestration-patterns-from-existing-projects">6.7 Orchestration Patterns from Existing Projects</h2>
+<p>The reader's existing projects provide proven orchestration patterns that should be incorporated. These are not theoretical designs — they are battle-tested implementations that have coordinated real multi-agent work.</p>
+<h3 id="from-dappswarmforge-the-6-phase-lifecycle">From DApp/SwarmForge: The 6-Phase Lifecycle</h3>
+<p>DApp's <code>orchestrator.js</code> implements a 6-phase lifecycle manager that has processed hundreds of multi-agent tasks:</p>
+<ol>
+<li><strong>Receive</strong> — Parse prompt, validate input</li>
+<li><strong>Analyze</strong> — Intent classification (from <code>intent-analyzer.js</code>)</li>
+<li><strong>Plan</strong> — Task DAG generation (from <code>task-dag.js</code>)</li>
+<li><strong>Execute</strong> — Parallel dispatch with semaphore-controlled concurrency (from <code>semaphore.js</code>)</li>
+<li><strong>Synthesize</strong> — Merge results, resolve conflicts</li>
+<li><strong>Deliver</strong> — Present final output, persist artifacts</li>
+</ol>
+<p>The key innovation in DApp is the semaphore: it limits parallel execution to N concurrent workers (configurable), preventing resource exhaustion when the DAG has many independent tasks. Without the semaphore, a DAG with 20 independent tasks would spawn 20 concurrent API calls, burning $3+ per second in API costs and likely hitting rate limits. The semaphore throttles to 4-6 concurrent workers — enough for meaningful parallelism, sustainable for API budgets.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1">// Adapted from DApp&#39;s semaphore.js pattern</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">ConcurrencySemaphore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">max_concurrent</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="n">active</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">AtomicUsize</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">ConcurrencySemaphore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">acquire</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">loop</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">active</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="n">Ordering</span><span class="p">::</span><span class="n">SeqCst</span><span class="p">);</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">max_concurrent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">active</span><span class="p">.</span><span class="n">compare_exchange</span><span class="p">(</span>
+<span class="w">                    </span><span class="n">current</span><span class="p">,</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">Ordering</span><span class="p">::</span><span class="n">SeqCst</span><span class="p">,</span><span class="w"> </span><span class="n">Ordering</span><span class="p">::</span><span class="n">SeqCst</span>
+<span class="w">                </span><span class="p">).</span><span class="n">is_ok</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">return</span><span class="p">;</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">tokio</span><span class="p">::</span><span class="n">time</span><span class="p">::</span><span class="n">sleep</span><span class="p">(</span><span class="n">Duration</span><span class="p">::</span><span class="n">from_millis</span><span class="p">(</span><span class="mi">100</span><span class="p">)).</span><span class="k">await</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">active</span><span class="p">.</span><span class="n">fetch_sub</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">Ordering</span><span class="p">::</span><span class="n">SeqCst</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="from-claudecode_team-the-debate-pattern">From claudecode_team: The Debate Pattern</h3>
+<p>The <code>claudecode_team</code> project implements a debate-and-synthesis pattern where multiple agents analyze the same problem independently, then debate their findings before a final synthesis. The supervisor's 4-phase workflow:</p>
+<ol>
+<li><strong>Plan</strong> — Decompose the question</li>
+<li><strong>Spawn</strong> — Multiple agents investigate independently</li>
+<li><strong>Debate</strong> — Agents see each other's findings and argue (2 rounds)</li>
+<li><strong>Synthesize</strong> — A synthesis agent merges the strongest arguments</li>
+</ol>
+<p>This pattern is valuable for security audits: have multiple security agents audit the same code independently, then debate their findings. Vulnerabilities found by multiple agents are higher confidence. Findings disputed in debate are re-examined. The synthesis produces a consensus report that is more thorough than any single agent's analysis.</p>
+<p>The debate pattern applies beyond security. For architectural decisions, have a Planner agent and a Coder agent independently assess the approach — the Planner optimizes for maintainability while the Coder optimizes for implementability. Their debate surfaces tradeoffs that neither would identify alone. For documentation, have a Documentation agent write docs and a QA agent review them — the QA agent finds gaps by trying to follow the docs as a novice would.</p>
+<p>The cost of debate is 2-3x the cost of a single-agent analysis (multiple agents + debate rounds + synthesis). Use it for high-stakes decisions where correctness matters more than speed: security audits, architecture reviews, and production deployment decisions. Do not use it for routine tasks like writing CRUD endpoints.</p>
+<h3 id="from-dapp-git-worktree-isolation">From DApp: Git Worktree Isolation</h3>
+<p>DApp's <code>worktree.js</code> provides per-worker git worktree isolation. Each worker operates in its own copy of the repository, preventing file conflicts when multiple specialists modify code simultaneously. When all workers complete, the Orchestrator merges the worktrees:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1"># Per-worker isolation</span>
+git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>.workers/coder-001<span class="w"> </span>-b<span class="w"> </span>worker/coder-001
+git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>.workers/security-001<span class="w"> </span>-b<span class="w"> </span>worker/security-001
+
+<span class="c1"># After completion: merge</span>
+git<span class="w"> </span>checkout<span class="w"> </span>main
+git<span class="w"> </span>merge<span class="w"> </span>worker/coder-001<span class="w"> </span>--no-ff<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;Merge coder results&quot;</span>
+git<span class="w"> </span>merge<span class="w"> </span>worker/security-001<span class="w"> </span>--no-ff<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;Merge security results&quot;</span>
+</code></pre></div>
+
+<p>This pattern eliminates the most dangerous failure mode in parallel multi-CLI execution: two specialists editing the same file simultaneously.</p>
+<p>The worktree approach has overhead — creating a worktree copies the working tree (though it shares the <code>.git</code> directory), and merging at the end can produce conflicts. For small projects this overhead is negligible. For large monorepos with thousands of files, worktree creation can take seconds. The Orchestrator should create worktrees lazily — only when dispatching a task that modifies files, not for read-only tasks like security audits.</p>
+<h3 id="from-multiclis-the-shared-blackboard-pattern">From MultiCLIs: The Shared Blackboard Pattern</h3>
+<p>The MultiCLIs project introduces a shared blackboard — a structured file that all specialists can read and the Orchestrator can write. The blackboard contains the current system state: which tasks are running, what has been completed, what decisions have been made, and what conflicts exist.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="gh"># Blackboard — Session 2024-12-15T10:30:00Z</span>
+
+<span class="gu">## Completed Tasks</span>
+<span class="k">-</span><span class="w"> </span>T1: Schema migration created (migrations/001_users.sql) ✓
+<span class="k">-</span><span class="w"> </span>T2: Environment config (.env.template, config.ts) ✓
+
+<span class="gu">## Running Tasks</span>
+<span class="k">-</span><span class="w"> </span>T3: JWT auth implementation (coder-001) — 45s elapsed
+<span class="k">-</span><span class="w"> </span>T4: API routes (coder-002) — 30s elapsed
+
+<span class="gu">## Decisions Made</span>
+<span class="k">-</span><span class="w"> </span>ORM: Prisma (chosen by Planner based on existing package.json)
+<span class="k">-</span><span class="w"> </span>Auth: RS256 JWT (chosen for key rotation support)
+<span class="k">-</span><span class="w"> </span>Database: PostgreSQL 15 (existing project dependency)
+
+<span class="gu">## Pending Conflicts</span>
+<span class="k">-</span><span class="w"> </span>None
+</code></pre></div>
+
+<p>The blackboard serves two purposes: it gives the Orchestrator a persistent view of system state (surviving context window compaction), and it gives specialists read-only access to decisions that affect their work. A specialist writing API routes can check the blackboard to confirm that Prisma was chosen as the ORM, without needing the Orchestrator to include that in every dispatch prompt.</p>
+<hr />
+<h2 id="68-testing-the-orchestrator">6.8 Testing the Orchestrator</h2>
+<p>Testing the Orchestrator is fundamentally different from testing a specialist CLI. A specialist's correctness depends on whether it produced the right output for a given input — write a test, check the result. The Orchestrator's correctness depends on whether it made the right decisions about decomposition, delegation, and conflict resolution — which requires testing behavior, not output.</p>
+<h3 id="unit-tests-intent-classification">Unit Tests: Intent Classification</h3>
+<p>Test that the intent analysis engine correctly classifies prompts:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="cp">#[cfg(test)]</span>
+<span class="k">mod</span><span class="w"> </span><span class="nn">tests</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">use</span><span class="w"> </span><span class="k">super</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+
+<span class="w">    </span><span class="cp">#[test]</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">test_build_intent</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">intent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">classify_intent</span><span class="p">(</span><span class="s">&quot;Build a REST API with JWT auth and PostgreSQL&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="fm">assert!</span><span class="p">(</span><span class="fm">matches!</span><span class="p">(</span><span class="n">intent</span><span class="p">,</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Build</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Build</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">components</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">intent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="fm">assert!</span><span class="p">(</span><span class="n">components</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">any</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">name</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;REST&quot;</span><span class="p">)));</span>
+<span class="w">            </span><span class="fm">assert!</span><span class="p">(</span><span class="n">components</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">any</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">name</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;JWT&quot;</span><span class="p">)));</span>
+<span class="w">            </span><span class="fm">assert!</span><span class="p">(</span><span class="n">components</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">any</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">name</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;PostgreSQL&quot;</span><span class="p">)));</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="cp">#[test]</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">test_fix_intent_with_error</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">intent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">classify_intent</span><span class="p">(</span><span class="s">&quot;fix the login bug: TypeError: Cannot read properties of undefined&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="fm">assert!</span><span class="p">(</span><span class="fm">matches!</span><span class="p">(</span><span class="n">intent</span><span class="p">,</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Fix</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Fix</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">error</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">intent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="fm">assert!</span><span class="p">(</span><span class="n">error</span><span class="p">.</span><span class="n">unwrap</span><span class="p">().</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;TypeError&quot;</span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="cp">#[test]</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">test_compound_prompt</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">intents</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">classify_intents</span><span class="p">(</span><span class="s">&quot;fix the auth bug and then add rate limiting&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="fm">assert_eq!</span><span class="p">(</span><span class="n">intents</span><span class="p">.</span><span class="n">len</span><span class="p">(),</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="w">        </span><span class="fm">assert!</span><span class="p">(</span><span class="fm">matches!</span><span class="p">(</span><span class="n">intents</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Fix</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">        </span><span class="fm">assert!</span><span class="p">(</span><span class="fm">matches!</span><span class="p">(</span><span class="n">intents</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span><span class="w"> </span><span class="n">Intent</span><span class="p">::</span><span class="n">Build</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="integration-tests-dispatch-scenarios">Integration Tests: Dispatch Scenarios</h3>
+<p>Before deploying the Orchestrator to production, verify it handles the core scenarios. These tests use mock specialists that simulate real behavior without making API calls:</p>
+<h3 id="test-1-simple-delegation">Test 1: Simple Delegation</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Prompt: &quot;Run a security audit on src/auth/&quot;
+Expected: Orchestrator delegates to Security CLI. Does NOT attempt to read files itself.
+</code></pre></div>
+
+<h3 id="test-2-multi-specialist-decomposition">Test 2: Multi-Specialist Decomposition</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Prompt: &quot;Build a REST API with JWT auth, PostgreSQL, and test coverage&quot;
+Expected: 8+ subtasks across Coder, Security, Validator, and possibly Planner.
+Independent tasks dispatched in parallel waves.
+</code></pre></div>
+
+<h3 id="test-3-conflict-resolution">Test 3: Conflict Resolution</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Prompt: &quot;Build a login endpoint&quot;
+After Coder completes → Security finds SQL injection → Coder must fix → Security re-audits.
+Expected: The cycle completes. Final result has no CRITICAL findings.
+</code></pre></div>
+
+<h3 id="test-4-failure-cascade">Test 4: Failure Cascade</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Scenario: Coder CLI crashes mid-task.
+Expected: Orchestrator detects failure. Downstream tasks blocked. Human notified.
+</code></pre></div>
+
+<h3 id="test-5-restriction-enforcement">Test 5: Restriction Enforcement</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Prompt: &quot;Read server.js and tell me what it does&quot;
+Expected: Orchestrator delegates to a specialist (Coder or Researcher).
+Does NOT attempt to use file_read (which it does not have).
+</code></pre></div>
+
+<h3 id="test-6-dag-cycle-detection">Test 6: DAG Cycle Detection</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Input: A task graph where T3 depends on T5, and T5 depends on T3.
+Expected: validate() returns Err(DagError::CycleDetected).
+No tasks are dispatched.
+</code></pre></div>
+
+<h3 id="test-7-stall-detection">Test 7: Stall Detection</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Scenario: Coder CLI generates 2000 tokens of text without a single tool call.
+Expected: Orchestrator detects stall after 60 seconds.
+Sends nudge via SendMessage. If still stalled after 30 more seconds, kills and retries.
+</code></pre></div>
+
+<p>If all seven tests pass, your Orchestrator correctly decomposes, delegates, resolves conflicts, handles failures, detects edge cases, and respects its tool restrictions.</p>
+<h3 id="performance-benchmarks">Performance Benchmarks</h3>
+<p>Establish baseline metrics for your Orchestrator to detect regressions:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Target</th>
+<th>How to Measure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Intent classification latency</td>
+<td>&lt;5ms (heuristic), &lt;3s (LLM)</td>
+<td>Instrument <code>classify_intent()</code></td>
+</tr>
+<tr>
+<td>DAG construction time</td>
+<td>&lt;100ms for 20 tasks</td>
+<td>Instrument <code>TaskDAG::new()</code></td>
+</tr>
+<tr>
+<td>Dispatch overhead per task</td>
+<td>&lt;50ms</td>
+<td>Time between task Ready and specialist spawn</td>
+</tr>
+<tr>
+<td>Conflict resolution round-trip</td>
+<td>&lt;30s total</td>
+<td>Time from Security finding to Coder fix to re-audit</td>
+</tr>
+<tr>
+<td>Total orchestration overhead</td>
+<td>&lt;15% of total execution time</td>
+<td>Orchestrator time / (Orchestrator + all specialist time)</td>
+</tr>
+</tbody>
+</table>
+<p>The last metric is the most important. If the Orchestrator spends 40% of wall time on coordination overhead, the multi-CLI system is slower than a single agent. Target 10-15% overhead — the Orchestrator should be the lightest process in the system.</p>
+<hr />
+<h2 id="69-the-orchestrator-as-a-non-engineering-coordinator">6.9 The Orchestrator as a Non-Engineering Coordinator</h2>
+<p>Everything in this chapter has used engineering examples — REST APIs, security audits, test suites. But the Orchestrator pattern applies far beyond software engineering.</p>
+<p>Consider a <strong>legal research Orchestrator</strong> that receives "Analyze this contract for liability risks." It dispatches to a Contract Analyst CLI (reads clauses, identifies obligations), a Case Law Researcher CLI (finds relevant precedents), a Jurisdiction CLI (checks state-specific regulations), and a Plain Language CLI (translates findings for non-lawyers). The Orchestrator manages the same concerns: task decomposition, dependency management, conflict resolution (the Case Law CLI finds a precedent that contradicts the Jurisdiction CLI's analysis), and synthesis.</p>
+<p>Consider a <strong>medical research Orchestrator</strong> that receives "What treatment options exist for this patient profile?" It dispatches to a Literature Review CLI, a Drug Interaction CLI, a Clinical Guidelines CLI, and a Patient History CLI. Conflict resolution becomes life-critical: when the Drug Interaction CLI flags a contraindication that the Clinical Guidelines CLI recommends, the Orchestrator must always defer to the safety-focused specialist.</p>
+<p>The architecture is the same. The CLAUDE.md templates change. The resolution priorities change. The domain knowledge changes. But the Orchestrator's core behavior — decompose, delegate, monitor, resolve, synthesize — remains constant. This is the power of the pattern: once you build one Orchestrator, you can build any Orchestrator by changing its specialist roster and its resolution rules.</p>
+<hr />
+<p><em>Chapter 6 Target Verification:</em>
+- [x] COORDINATOR_MODE from coordinatorMode.ts fully explained (dual-gated, restricted tool set)
+- [x] God-orchestrator anti-pattern explained and prevented
+- [x] Intent analysis engine (heuristic-first, LLM-second, from DApp intent-analyzer.js pattern)
+- [x] Task DAG engine with wave scheduling (parallel execution of independent tasks)
+- [x] Dispatch protocol: MCP tool calls with self-contained prompts
+- [x] Failure handling: retry, retry-with-context, cascade-block strategies
+- [x] Conflict resolution protocol (Security vs Coder, test failures, specialist disagreements)
+- [x] Complete Orchestrator CLAUDE.md template
+- [x] Orchestration patterns from DApp (6-phase, semaphore) and claudecode_team (debate)
+- [x] Git worktree isolation for parallel file modification safety
+- [x] 5 test scenarios for Orchestrator verification
+- [x] Custom tools listed: AgentTool, TaskCreate, SendMessage, SyntheticOutput, TaskStop</p>
+<div style="display:flex;justify-content:space-between;padding:2rem 0;margin-top:3rem;border-top:1px solid var(--border);"><a href="chapter-05.html" style="color:var(--accent-blue);text-decoration:none;">← CLAUDE.md — Programming Each CLI Identity</a><a href="chapter-07.html" style="color:var(--accent-blue);text-decoration:none;text-align:right;">The Research CLI — Knowledge Engine →</a></div>
+</main>
+<footer class="doc-footer" style="text-align:center;padding:2rem;color:var(--text-secondary);font-size:0.85rem;">
+  <p><a href="index.html" style="color:var(--accent-blue);">← Table of Contents</a></p>
+</footer>
+<a href="#" id="back-to-top" style="display:none;position:fixed;bottom:2rem;right:2rem;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;text-decoration:none;font-size:1.2rem;z-index:99;">↑</a>
+<script>
+(function(){
+var bar=document.querySelector('.scroll-indicator .bar');
+function updateBar(){var s=window.scrollY,h=document.documentElement.scrollHeight-window.innerHeight;if(bar)bar.style.width=h>0?(s/h*100)+'%':'0%';}
+var btt=document.getElementById('back-to-top');
+function updateBtt(){if(btt)btt.style.display=window.scrollY>400?'flex':'none';}
+window.toggleSidebar=function(){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}};
+window.copyCode=function(b){var c=b.parentElement.querySelector('code');if(!c)return;navigator.clipboard.writeText(c.textContent).then(function(){var o=b.textContent;b.textContent='\u2713 Copied';b.style.color='var(--accent-green)';setTimeout(function(){b.textContent=o;b.style.color='';},2000);});};
+document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=1024){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s)s.classList.remove('open');if(o)o.classList.remove('active');}});});
+var tk=false;window.addEventListener('scroll',function(){if(!tk){requestAnimationFrame(function(){updateBar();updateBtt();tk=false;});tk=true;}});
+updateBar();
+})();
+</script>
+</body>
+</html>

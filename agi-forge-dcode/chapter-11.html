@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 11: The Validator CLI — The Gatekeeper</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-orange: #d29922;
+  --accent-red: #f85149;
+  --accent-purple: #bc8cff;
+  --code-bg: #161b22;
+  --sidebar-width: 300px;
+  --header-height: 60px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 16px; line-height: 1.7;
+  color: var(--text-primary); background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+.main { margin-left: var(--sidebar-width); padding: 5rem 3rem 4rem; max-width: 52rem; }
+h1 { font-size: 1.75rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.75rem; color: var(--accent-blue); }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+p { margin: 0.75rem 0; }
+a { color: var(--accent-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; position: relative; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 3px solid var(--accent-blue); margin: 1rem 0; padding: 0.5rem 1rem; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 0 8px 8px 0; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--bg-secondary); }
+.reading-time { color: var(--text-secondary); font-size: 0.8rem; font-weight: normal; }
+.part-heading { font-size: 1.75rem; text-align: center; color: var(--accent-green); padding: 2rem 0 1rem; margin-top: 4rem; border-top: 1px solid var(--border); letter-spacing: 1px; text-transform: uppercase; border-bottom: none; }
+.copy-btn { position: absolute; top: 8px; right: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary); padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+.copy-btn:hover { color: var(--text-primary); background: var(--bg-hover, var(--border)); }
+
+/* Sidebar */
+.sidebar { position: fixed; top: var(--header-height); left: 0; bottom: 0; width: var(--sidebar-width); background: var(--bg-secondary); border-right: 1px solid var(--border); overflow-y: auto; padding: 1.25rem 0 3rem; z-index: 50; }
+.sidebar-title { padding: 0 1rem 0.75rem; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; }
+.sidebar a { display: block; padding: 4px 1rem; font-size: 0.82rem; color: var(--text-secondary); text-decoration: none; border-left: 2px solid transparent; }
+.sidebar a:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.sidebar a.active { color: var(--accent-blue); border-left-color: var(--accent-blue); background: rgba(88,166,255,0.08); }
+.sidebar-part { font-weight: 700; color: var(--accent-green) !important; text-transform: uppercase; font-size: 0.72rem !important; letter-spacing: 0.5px; margin-top: 1rem; padding-top: 0.75rem !important; border-top: 1px solid var(--border); }
+.sidebar-chapter { font-weight: 600; color: var(--text-primary) !important; }
+
+/* Header */
+.site-header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-height); display: flex; align-items: center; padding: 0 1.5rem; z-index: 100; border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: rgba(22,27,34,0.88); }
+.hamburger { display: none; background: none; border: none; color: var(--text-primary); font-size: 1.4rem; cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem; }
+.header-nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.header-nav button { background: none; border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; }
+.header-nav button:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.header-nav button:disabled { opacity: 0.3; cursor: default; }
+
+/* Mobile */
+@media(max-width:1024px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .hamburger { display: block; }
+  .main { margin-left: 0; padding: 5rem 1.5rem 3rem; }
+  .sidebar-overlay.active { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 49; }
+}
+@media(max-width:640px) {
+  body { font-size: 15px; }
+  .main { padding: 4.5rem 1rem 2rem; }
+  h1 { font-size: 1.4rem; }
+  pre { font-size: 0.82rem; }
+}
+</style>
+</head>
+<body>
+
+
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<main class="main">
+<h1 id="chapter-11-the-validator-cli-the-gatekeeper">Chapter 11: The Validator CLI — The Gatekeeper</h1>
+<h2 id="five-stage-pipeline-quality-gates-auto-retry-and-the-difference-between-testing-and-verification">Five-Stage Pipeline, Quality Gates, Auto-Retry, and the Difference Between Testing and Verification</h2>
+<hr />
+<p>Every CI/CD pipeline you have ever used is a Validator CLI. Jenkins, GitHub Actions, Azure Pipelines, CircleCI — they all answer the same question: <em>Is this code ready to ship?</em> They check syntax, run tests, verify types, measure coverage, and produce a binary verdict: green or red. But they are dumb. They run the same pipeline regardless of what changed. They report raw error output that humans must parse. They do not categorize failures, suggest fixes, or retry after correction. They are the gatekeeper with a clipboard, not a gatekeeper with a brain.</p>
+<p>The Validator CLI is what happens when you give the gatekeeper a brain. It runs the same five-stage pipeline (lint, type-check, build, test, performance), but it understands what failed, why it failed, which specialist should fix it, and whether a retry is worth attempting. When the Coder CLI writes code, the Validator CLI verifies it — not in the same context window where confirmation bias contaminates the judgment, but in a separate process with a separate system prompt that knows nothing about the Coder's intentions and cares only about what the tools report.</p>
+<p>This separation is not a nice-to-have. Claude Code's own source code encodes it behind the <code>VERIFICATION_AGENT</code> feature flag: when the main agent completes three or more tasks without a verification step, the system injects a nudge forcing a separate verifier to evaluate the work. Anthropic's engineers discovered what every QA team already knows — the person who writes the code should not be the person who signs off on it.</p>
+<p>This chapter builds the Validator CLI from four components: the five-stage validation pipeline with structured output parsing, the quality gate configuration system with configurable thresholds, the failure analysis engine that categorizes and routes failures to the right specialist, and the PostToolUse hooks that provide continuous validation during development rather than a single gate at the end.</p>
+<hr />
+<h2 id="111-why-verification-needs-its-own-context-window">11.1 Why Verification Needs Its Own Context Window</h2>
+<p>When Claude Code writes a function, it holds a mental model of that function's purpose: the inputs it expects, the transformations it applies, the output it produces. If you ask it to verify the function in the same turn, it verifies against its own mental model — not against the type system's constraints, not against the test suite's expectations, not against the edge cases the implementation never considered. This is not a Claude-specific flaw. It is a fundamental property of autoregressive language models: tokens generated later in a sequence are conditioned on tokens generated earlier. The verification is contaminated by the generation because they share context.</p>
+<p>The Validator CLI operates in a different process with a different context window. It receives a list of changed files from the Orchestrator and runs them through an automated pipeline. It does not know what the Coder intended. It does not know which approach the Coder considered and rejected. It knows only what the linter reports, what the type checker reports, what the test runner reports, and what the performance benchmarks measure. This is its strength: judgment uncontaminated by implementation decisions.</p>
+<p>There is a deeper reason for the separation. Generation and validation are fundamentally different cognitive modes. Generation is divergent — explore the solution space, consider alternatives, make creative leaps. Validation is convergent — apply known rules, check known constraints, reduce uncertainty to a binary outcome. Mixing these modes in a single context window creates interference. The model either becomes too conservative (validating while generating, producing timid code that avoids anything the validator might flag) or too permissive (generating while validating, rubber-stamping its own output because the generation context makes the code feel "obviously correct").</p>
+<p>The <code>VERIFICATION_AGENT</code> feature flag in Claude Code's source (<code>tools/TaskUpdateTool/TaskUpdateTool.ts</code>) encodes this insight architecturally. When the main agent completes three or more tasks and none of them was a verification step, the system refuses to let the agent self-certify:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1">// Structural verification nudge</span>
+<span class="c1">// Adapted from Claude Code&#39;s VERIFICATION_AGENT feature</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">check_verification_needed</span><span class="p">(</span>
+<span class="w">    </span><span class="n">tasks</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">Task</span><span class="p">],</span>
+<span class="w">    </span><span class="n">feature_flags</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">FeatureFlags</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="n">feature_flags</span><span class="p">.</span><span class="n">verification_agent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">completed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tasks</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Completed</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;&gt;</span><span class="p">();</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">completed</span><span class="p">.</span><span class="n">len</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">has_verification</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">completed</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">any</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">subject</span><span class="p">.</span><span class="n">to_lowercase</span><span class="p">().</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;verif&quot;</span><span class="p">));</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">has_verification</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nb">Some</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;You completed 3+ tasks without verification. \</span>
+<span class="s">         Spawn the Validator CLI before writing your summary. \</span>
+<span class="s">         You cannot self-assign PARTIAL — only the Validator issues a verdict.&quot;</span>
+<span class="w">        </span><span class="p">.</span><span class="n">to_string</span><span class="p">()</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The key insight: <em>"You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict."</em> This is not a suggestion. It is a structural constraint. The main agent literally cannot declare its own work complete without external verification. The Validator CLI formalizes this constraint as a first-class member of the multi-CLI fleet.</p>
+<hr />
+<h2 id="112-the-five-stage-validation-pipeline">11.2 The Five-Stage Validation Pipeline</h2>
+<p>The Validator runs five stages in sequence. Each stage gates the next — if lint fails, the pipeline does not waste time running the build. If the build fails, tests do not run. This fail-fast design minimizes wasted computation and provides the fastest possible feedback.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Stage 1: Lint        → Static analysis, code style, dead code
+Stage 2: Type-Check  → Type correctness, interface compliance
+Stage 3: Build       → Compilation, bundling, artifact generation
+Stage 4: Test        → Unit tests, integration tests, coverage
+Stage 5: Performance → Bundle size, benchmark regression, runtime profiling
+</code></pre></div>
+
+<p>Each stage produces a structured result — not raw console output, but a parsed data structure that the Validator evaluates against configured thresholds:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">StageResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">stage</span><span class="p">:</span><span class="w"> </span><span class="nc">ValidationStage</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">status</span><span class="p">:</span><span class="w"> </span><span class="nc">StageStatus</span><span class="p">,</span><span class="w">       </span><span class="c1">// Pass, Warn, Fail</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">duration_ms</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">error_count</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">warning_count</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">metrics</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="kt">f64</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">errors</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">StructuredError</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">suggestions</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">FixSuggestion</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">ValidationStage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Lint</span><span class="p">,</span>
+<span class="w">    </span><span class="n">TypeCheck</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Build</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Test</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Performance</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">StageStatus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pass</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Warn</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Fail</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Skipped</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">StructuredError</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">line</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">column</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">code</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">           </span><span class="c1">// ESLint rule, TS error code, etc.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">message</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">severity</span><span class="p">:</span><span class="w"> </span><span class="nc">ErrorSeverity</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">auto_fixable</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">fix_command</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span><span class="w">  </span><span class="c1">// &quot;eslint --fix&quot;, &quot;ruff --fix&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="stage-1-lint">Stage 1: Lint</h3>
+<p>Linting catches the problems that do not need a compiler to detect. Unused variables, unreachable code, missing imports, formatting violations. These are cheap to find, cheap to fix, and expensive to ignore — because they compound. A codebase that tolerates lint warnings today tolerates security vulnerabilities tomorrow. The Validator runs the project's configured linter and parses the structured output:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">run_lint</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">project_root</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Path</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">StageResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">quality_gates</span><span class="p">.</span><span class="n">lint</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Instant</span><span class="p">::</span><span class="n">now</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Detect language and run appropriate linter</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;package.json&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;npx&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span><span class="s">&quot;eslint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--format&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;json&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--max-warnings&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;0&quot;</span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;pyproject.toml&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;ruff&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span><span class="s">&quot;check&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--output-format&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;json&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--exit-zero&quot;</span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;Cargo.toml&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;cargo&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span><span class="s">&quot;clippy&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--message-format=json&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;-D&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;warnings&quot;</span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">StageResult</span><span class="p">::</span><span class="n">skipped</span><span class="p">(</span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">Lint</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">errors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_lint_output</span><span class="p">(</span><span class="o">&amp;</span><span class="n">output</span><span class="p">.</span><span class="n">stdout</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output</span><span class="p">.</span><span class="n">stderr</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">error_count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">errors</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">filter</span><span class="p">(</span><span class="o">|</span><span class="n">e</span><span class="o">|</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">severity</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">ErrorSeverity</span><span class="p">::</span><span class="n">Error</span><span class="p">).</span><span class="n">count</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">warning_count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">errors</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">filter</span><span class="p">(</span><span class="o">|</span><span class="n">e</span><span class="o">|</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">severity</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">ErrorSeverity</span><span class="p">::</span><span class="n">Warning</span><span class="p">).</span><span class="n">count</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">error_count</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">max_errors</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Fail</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">warning_count</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">warn_threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">warning_count</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">fail_threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Fail</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Warn</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Pass</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="n">StageResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">stage</span><span class="p">:</span><span class="w"> </span><span class="nc">ValidationStage</span><span class="p">::</span><span class="n">Lint</span><span class="p">,</span>
+<span class="w">        </span><span class="n">status</span><span class="p">,</span>
+<span class="w">        </span><span class="n">duration_ms</span><span class="p">:</span><span class="w"> </span><span class="nc">start</span><span class="p">.</span><span class="n">elapsed</span><span class="p">().</span><span class="n">as_millis</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="w">        </span><span class="n">error_count</span><span class="p">,</span>
+<span class="w">        </span><span class="n">warning_count</span><span class="p">,</span>
+<span class="w">        </span><span class="n">metrics</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="p">::</span><span class="n">from</span><span class="p">([</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;errors&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">error_count</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="p">),</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;warnings&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">warning_count</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="p">),</span>
+<span class="w">        </span><span class="p">]),</span>
+<span class="w">        </span><span class="n">errors</span><span class="p">,</span>
+<span class="w">        </span><span class="n">suggestions</span><span class="p">:</span><span class="w"> </span><span class="nc">generate_lint_suggestions</span><span class="p">(</span><span class="o">&amp;</span><span class="n">errors</span><span class="p">),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>--format json</code> (ESLint), <code>--output-format json</code> (Ruff), and <code>--message-format=json</code> (Clippy) flags are essential. Human-readable lint output is fine for humans. The Validator is not human. It needs structured data it can parse, categorize, and route. JSON output means the Validator can distinguish between a formatting warning (auto-fixable, route to <code>eslint --fix</code>) and a security lint error (<code>no-eval</code>, route to Security CLI for deeper analysis).</p>
+<h3 id="stage-2-type-check">Stage 2: Type-Check</h3>
+<p>Linting catches style violations. Type-checking catches broken contracts. When the Coder declares a function returns <code>Result&lt;User, Error&gt;</code> but the implementation can return a state where the <code>User</code> struct is partially initialized, the type checker catches it. When a trait changes in module A but module B still implements the old trait signature, the type checker catches it.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">run_type_check</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">project_root</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Path</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">StageResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Instant</span><span class="p">::</span><span class="n">now</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;tsconfig.json&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;npx&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span><span class="s">&quot;tsc&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--noEmit&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--pretty&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;false&quot;</span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;Cargo.toml&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Rust type checking is part of compilation</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;cargo&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span><span class="s">&quot;check&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--message-format=json&quot;</span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;pyproject.toml&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;pyright&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span><span class="s">&quot;--outputjson&quot;</span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">StageResult</span><span class="p">::</span><span class="n">skipped</span><span class="p">(</span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">TypeCheck</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">errors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_type_errors</span><span class="p">(</span><span class="o">&amp;</span><span class="n">output</span><span class="p">.</span><span class="n">stdout</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output</span><span class="p">.</span><span class="n">stderr</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">error_count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">errors</span><span class="p">.</span><span class="n">len</span><span class="p">();</span>
+
+<span class="w">    </span><span class="n">StageResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">stage</span><span class="p">:</span><span class="w"> </span><span class="nc">ValidationStage</span><span class="p">::</span><span class="n">TypeCheck</span><span class="p">,</span>
+<span class="w">        </span><span class="n">status</span><span class="p">:</span><span class="w"> </span><span class="nc">if</span><span class="w"> </span><span class="n">error_count</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Fail</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Pass</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="n">duration_ms</span><span class="p">:</span><span class="w"> </span><span class="nc">start</span><span class="p">.</span><span class="n">elapsed</span><span class="p">().</span><span class="n">as_millis</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="w">        </span><span class="n">error_count</span><span class="p">,</span>
+<span class="w">        </span><span class="n">warning_count</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">        </span><span class="n">metrics</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="p">::</span><span class="n">from</span><span class="p">([(</span><span class="s">&quot;type_errors&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">error_count</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="p">)]),</span>
+<span class="w">        </span><span class="n">errors</span><span class="p">,</span>
+<span class="w">        </span><span class="n">suggestions</span><span class="p">:</span><span class="w"> </span><span class="nc">generate_type_fix_suggestions</span><span class="p">(</span><span class="o">&amp;</span><span class="n">errors</span><span class="p">),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>--pretty false</code> flag (TypeScript) disables ANSI color codes and multi-line formatting that breaks parsing. Every tool in the pipeline follows the same principle: machine-readable output first, human-readable presentation later. The Validator's job is to produce structured data for the Orchestrator, not colorful terminal output for a developer.</p>
+<h3 id="stage-3-build">Stage 3: Build</h3>
+<p>Types check. Lint passes. But does the code compile into a runnable artifact? The build stage catches problems invisible to the first two stages: circular dependencies that manifest only at bundle time, missing assets referenced in import statements, environment variables assumed but not provided, and configuration errors that surface only during compilation.</p>
+<p>The Validator tracks not just build success but build <em>duration</em>. A build that took 30 seconds last week and takes 90 seconds today signals a problem — an unnecessary dependency, an unoptimized import, a missing tree-shaking configuration. Build time is a metric, not just a pass/fail boolean.</p>
+<h3 id="stage-4-test">Stage 4: Test</h3>
+<p>This is where the Validator earns its keep. Lint checks syntax. Types check contracts. Builds check compilation. Tests check <em>behavior</em>. The Validator runs the project's test suite with coverage tracking:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">run_tests</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">project_root</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Path</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">StageResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">quality_gates</span><span class="p">.</span><span class="n">test</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Instant</span><span class="p">::</span><span class="n">now</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;package.json&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;npx&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span>
+<span class="w">                </span><span class="s">&quot;jest&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--coverage&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="s">&quot;--coverageReporters=json-summary&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="s">&quot;--json&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--outputFile=test-results.json&quot;</span>
+<span class="w">            </span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;Cargo.toml&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;cargo&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span><span class="s">&quot;test&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--format=json&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;-Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;unstable-options&quot;</span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">project_root</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;pyproject.toml&quot;</span><span class="p">).</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;python3&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">args</span><span class="p">([</span>
+<span class="w">                </span><span class="s">&quot;-m&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;pytest&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="s">&quot;--json-report&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--json-report-file=test-results.json&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="s">&quot;--cov=src&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;--cov-report=json:coverage.json&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="s">&quot;-q&quot;</span>
+<span class="w">            </span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">current_dir</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">output</span><span class="p">().</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">StageResult</span><span class="p">::</span><span class="n">skipped</span><span class="p">(</span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">Test</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">test_results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_test_results</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">coverage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_coverage</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Check pass rate</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">pass_rate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">test_results</span><span class="p">.</span><span class="n">total</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="p">(</span><span class="n">test_results</span><span class="p">.</span><span class="n">passed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">test_results</span><span class="p">.</span><span class="n">total</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">100.0</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="mf">0.0</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="c1">// Check coverage regression</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">coverage_regression</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">baseline</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">load_baseline_coverage</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">baseline</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">coverage</span><span class="p">.</span><span class="n">lines</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="mf">0.0</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">test_results</span><span class="p">.</span><span class="n">failed</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Fail</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">coverage</span><span class="p">.</span><span class="n">lines</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">coverage_fail_threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Fail</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">coverage_regression</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">regression_threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Fail</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">coverage</span><span class="p">.</span><span class="n">lines</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">coverage_warn_threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Warn</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Pass</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="n">StageResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">stage</span><span class="p">:</span><span class="w"> </span><span class="nc">ValidationStage</span><span class="p">::</span><span class="n">Test</span><span class="p">,</span>
+<span class="w">        </span><span class="n">status</span><span class="p">,</span>
+<span class="w">        </span><span class="n">duration_ms</span><span class="p">:</span><span class="w"> </span><span class="nc">start</span><span class="p">.</span><span class="n">elapsed</span><span class="p">().</span><span class="n">as_millis</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="w">        </span><span class="n">error_count</span><span class="p">:</span><span class="w"> </span><span class="nc">test_results</span><span class="p">.</span><span class="n">failed</span><span class="p">,</span>
+<span class="w">        </span><span class="n">warning_count</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">        </span><span class="n">metrics</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="p">::</span><span class="n">from</span><span class="p">([</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;passed&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">test_results</span><span class="p">.</span><span class="n">passed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="p">),</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;failed&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">test_results</span><span class="p">.</span><span class="n">failed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="p">),</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;total&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">test_results</span><span class="p">.</span><span class="n">total</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="p">),</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;coverage_lines&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">coverage</span><span class="p">.</span><span class="n">lines</span><span class="p">),</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;coverage_branches&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">coverage</span><span class="p">.</span><span class="n">branches</span><span class="p">),</span>
+<span class="w">            </span><span class="p">(</span><span class="s">&quot;coverage_regression&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="n">coverage_regression</span><span class="p">),</span>
+<span class="w">        </span><span class="p">]),</span>
+<span class="w">        </span><span class="n">errors</span><span class="p">:</span><span class="w"> </span><span class="nc">test_results</span><span class="p">.</span><span class="n">failures</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">f</span><span class="o">|</span><span class="w"> </span><span class="n">StructuredError</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="nc">f</span><span class="p">.</span><span class="n">file</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">line</span><span class="p">:</span><span class="w"> </span><span class="nc">f</span><span class="p">.</span><span class="n">line</span><span class="p">,</span>
+<span class="w">            </span><span class="n">column</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">            </span><span class="n">code</span><span class="p">:</span><span class="w"> </span><span class="nc">f</span><span class="p">.</span><span class="n">test_name</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">message</span><span class="p">:</span><span class="w"> </span><span class="nc">f</span><span class="p">.</span><span class="n">failure_message</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">severity</span><span class="p">:</span><span class="w"> </span><span class="nc">ErrorSeverity</span><span class="p">::</span><span class="n">Error</span><span class="p">,</span>
+<span class="w">            </span><span class="n">auto_fixable</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+<span class="w">            </span><span class="n">fix_command</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">        </span><span class="p">}).</span><span class="n">collect</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">suggestions</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[],</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The Validator does not just check pass/fail. It tracks <em>coverage regression</em>. If yesterday's coverage was 87% and today's is 84%, something is wrong — either new code was added without tests, or existing tests were removed. Both demand attention. The Validator maintains a coverage baseline and flags any regression beyond the configured threshold.</p>
+<h3 id="stage-5-performance">Stage 5: Performance</h3>
+<p>The final stage catches the category of problems that the first four stages miss entirely: performance regressions. Code that is correct, well-typed, well-tested, and properly linted can still be catastrophically slow. A database query that returns in 50ms with 100 rows but takes 30 seconds with 10,000 rows. A React component that re-renders 47 times per keystroke. A binary that grew from 10MB to 50MB because someone pulled in an unnecessary dependency that brought in half the crate ecosystem.</p>
+<p>The performance stage compares current metrics against stored baselines: bundle size, benchmark execution times, and optionally Lighthouse scores for web projects. A 2% regression in one benchmark might be acceptable if it comes with a 15% improvement in another. The Validator applies configurable thresholds and treats performance as a spectrum — pass, warn, or fail — rather than a binary gate.</p>
+<hr />
+<h2 id="113-quality-gates-the-configuration-layer">11.3 Quality Gates — The Configuration Layer</h2>
+<p>The five stages are fixed. The thresholds are not. Every team, every project, every phase of development has different quality requirements. A greenfield prototype might accept 50% test coverage. A financial services application demands 95%. The Validator uses a configuration file that defines quality gates with three levels:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="cp">#[derive(Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">QualityGates</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">lint</span><span class="p">:</span><span class="w"> </span><span class="nc">LintGate</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">type_check</span><span class="p">:</span><span class="w"> </span><span class="nc">TypeCheckGate</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">build</span><span class="p">:</span><span class="w"> </span><span class="nc">BuildGate</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">test</span><span class="p">:</span><span class="w"> </span><span class="nc">TestGate</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">performance</span><span class="p">:</span><span class="w"> </span><span class="nc">PerformanceGate</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">gate_policy</span><span class="p">:</span><span class="w"> </span><span class="nc">GatePolicy</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">LintGate</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">enabled</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">max_errors</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w">        </span><span class="c1">// Any error count above this = fail</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">warn_threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w">    </span><span class="c1">// Warnings above this = warn</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">fail_threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w">    </span><span class="c1">// Warnings above this = fail</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">auto_fix</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w">           </span><span class="c1">// Attempt auto-fix before failing</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">TestGate</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">enabled</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">min_pass_rate</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w">          </span><span class="c1">// 100.0 = all tests must pass</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">coverage_warn_threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w"> </span><span class="c1">// &lt; this = warn (e.g., 80.0)</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">coverage_fail_threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w"> </span><span class="c1">// &lt; this = fail (e.g., 70.0)</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">regression_threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w">    </span><span class="c1">// Coverage drop &gt; this = fail (e.g., 2.0)</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">timeout_per_test_ms</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">PerformanceGate</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">enabled</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">bundle_warn_growth_pct</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w">   </span><span class="c1">// &gt; this% growth = warn</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">bundle_fail_growth_pct</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w">   </span><span class="c1">// &gt; this% growth = fail</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">benchmark_warn_regression_pct</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">benchmark_fail_regression_pct</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">GatePolicy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">fail_action</span><span class="p">:</span><span class="w"> </span><span class="nc">FailAction</span><span class="p">,</span><span class="w">       </span><span class="c1">// Halt pipeline on failure</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">max_warnings_before_fail</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="c1">// Cumulative warnings across stages</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">max_retries</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w">            </span><span class="c1">// Auto-retry attempts before hard fail</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The corresponding TOML configuration:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1"># .validator/quality-gates.toml</span>
+
+<span class="k">[lint]</span>
+<span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">max_errors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span>
+<span class="n">warn_threshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+<span class="n">fail_threshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">25</span>
+<span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+
+<span class="k">[type_check]</span>
+<span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+
+<span class="k">[build]</span>
+<span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">max_duration_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">60000</span>
+<span class="n">fail_duration_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">120000</span>
+
+<span class="k">[test]</span>
+<span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">min_pass_rate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">100.0</span>
+<span class="n">coverage_warn_threshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">80.0</span>
+<span class="n">coverage_fail_threshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">70.0</span>
+<span class="n">regression_threshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">2.0</span>
+<span class="n">timeout_per_test_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5000</span>
+
+<span class="k">[performance]</span>
+<span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">bundle_warn_growth_pct</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">5.0</span>
+<span class="n">bundle_fail_growth_pct</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">15.0</span>
+<span class="n">benchmark_warn_regression_pct</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">10.0</span>
+<span class="n">benchmark_fail_regression_pct</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">25.0</span>
+
+<span class="k">[gate_policy]</span>
+<span class="n">fail_action</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;halt_pipeline&quot;</span>
+<span class="n">max_warnings_before_fail</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
+<span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span>
+</code></pre></div>
+
+<p>This configuration is the Validator's contract with the team. It lives in source control. Changes to thresholds require a PR review. No one — not the Coder, not the Orchestrator, not a hurried engineer at 2 AM — can quietly relax a threshold without it appearing in the commit history.</p>
+<hr />
+<h2 id="114-failure-analysis-and-auto-retry">11.4 Failure Analysis and Auto-Retry</h2>
+<p>When the pipeline fails, the Validator's job is not just to report the failure. It is to <em>analyze</em> the failure, categorize it, and route it to the right specialist. A syntax error goes back to the Coder. A security lint violation routes to the Security CLI for deeper analysis. A performance regression goes back to the Coder with performance-specific guidance. The Validator is a triage nurse, not just a thermometer.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">FailureCategory</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">SyntaxError</span><span class="p">,</span><span class="w">          </span><span class="c1">// Parse errors, invalid syntax</span>
+<span class="w">    </span><span class="n">TypeError</span><span class="p">,</span><span class="w">            </span><span class="c1">// Type mismatches, missing properties</span>
+<span class="w">    </span><span class="n">BuildError</span><span class="p">,</span><span class="w">           </span><span class="c1">// Compilation failures, missing deps</span>
+<span class="w">    </span><span class="n">TestFailure</span><span class="p">,</span><span class="w">          </span><span class="c1">// Assertion failures, test errors</span>
+<span class="w">    </span><span class="n">CoverageRegression</span><span class="p">,</span><span class="w">   </span><span class="c1">// Coverage dropped below threshold</span>
+<span class="w">    </span><span class="n">PerfRegression</span><span class="p">,</span><span class="w">       </span><span class="c1">// Performance degraded beyond threshold</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">CategorizedFailure</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">category</span><span class="p">:</span><span class="w"> </span><span class="nc">FailureCategory</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">stage</span><span class="p">:</span><span class="w"> </span><span class="nc">ValidationStage</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">line</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">message</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">auto_fixable</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">fix_suggestion</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">route_to</span><span class="p">:</span><span class="w"> </span><span class="nc">SpecialistCLI</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">SpecialistCLI</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Coder</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Security</span><span class="p">,</span>
+<span class="w">    </span><span class="n">QA</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">FailureAnalyzer</span><span class="p">;</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">FailureAnalyzer</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">categorize</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">result</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">StageResult</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">CategorizedFailure</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">result</span><span class="p">.</span><span class="n">errors</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">error</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="p">(</span><span class="n">category</span><span class="p">,</span><span class="w"> </span><span class="n">route_to</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="n">result</span><span class="p">.</span><span class="n">stage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">Lint</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="n">is_security_lint_rule</span><span class="p">(</span><span class="o">&amp;</span><span class="n">error</span><span class="p">.</span><span class="n">code</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="p">(</span><span class="n">FailureCategory</span><span class="p">::</span><span class="n">SyntaxError</span><span class="p">,</span><span class="w"> </span><span class="n">SpecialistCLI</span><span class="p">::</span><span class="n">Security</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="p">(</span><span class="n">FailureCategory</span><span class="p">::</span><span class="n">SyntaxError</span><span class="p">,</span><span class="w"> </span><span class="n">SpecialistCLI</span><span class="p">::</span><span class="n">Coder</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">}</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">TypeCheck</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="p">(</span><span class="n">FailureCategory</span><span class="p">::</span><span class="n">TypeError</span><span class="p">,</span><span class="w"> </span><span class="n">SpecialistCLI</span><span class="p">::</span><span class="n">Coder</span><span class="p">)</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">Build</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="p">(</span><span class="n">FailureCategory</span><span class="p">::</span><span class="n">BuildError</span><span class="p">,</span><span class="w"> </span><span class="n">SpecialistCLI</span><span class="p">::</span><span class="n">Coder</span><span class="p">)</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">Test</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="p">(</span><span class="n">FailureCategory</span><span class="p">::</span><span class="n">TestFailure</span><span class="p">,</span><span class="w"> </span><span class="n">SpecialistCLI</span><span class="p">::</span><span class="n">Coder</span><span class="p">)</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">ValidationStage</span><span class="p">::</span><span class="n">Performance</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="p">(</span><span class="n">FailureCategory</span><span class="p">::</span><span class="n">PerfRegression</span><span class="p">,</span><span class="w"> </span><span class="n">SpecialistCLI</span><span class="p">::</span><span class="n">Coder</span><span class="p">)</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">};</span>
+
+<span class="w">            </span><span class="n">CategorizedFailure</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">category</span><span class="p">,</span>
+<span class="w">                </span><span class="n">stage</span><span class="p">:</span><span class="w"> </span><span class="nc">result</span><span class="p">.</span><span class="n">stage</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="nc">error</span><span class="p">.</span><span class="n">file</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">line</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">error</span><span class="p">.</span><span class="n">line</span><span class="p">),</span>
+<span class="w">                </span><span class="n">message</span><span class="p">:</span><span class="w"> </span><span class="nc">error</span><span class="p">.</span><span class="n">message</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">auto_fixable</span><span class="p">:</span><span class="w"> </span><span class="nc">error</span><span class="p">.</span><span class="n">auto_fixable</span><span class="p">,</span>
+<span class="w">                </span><span class="n">fix_suggestion</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">suggest_fix</span><span class="p">(</span><span class="n">error</span><span class="p">),</span>
+<span class="w">                </span><span class="n">route_to</span><span class="p">,</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}).</span><span class="n">collect</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">suggest_fix</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">StructuredError</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">error</span><span class="p">.</span><span class="n">code</span><span class="p">.</span><span class="n">as_str</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">c</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">starts_with</span><span class="p">(</span><span class="s">&quot;TS2345&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="s">&quot;Argument type mismatch. Check function signature and ensure \</span>
+<span class="s">                 the passed argument matches the expected parameter type.&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">c</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">starts_with</span><span class="p">(</span><span class="s">&quot;TS7006&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="s">&quot;Add explicit type annotation to the parameter.&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">c</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">starts_with</span><span class="p">(</span><span class="s">&quot;no-unused-vars&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">starts_with</span><span class="p">(</span><span class="s">&quot;F841&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="s">&quot;Remove unused variable or prefix with underscore.&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;Review error {} and fix the underlying issue.&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">.</span><span class="n">code</span><span class="p">),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">generate_fix_request</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">failures</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">CategorizedFailure</span><span class="p">],</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">FixRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">routes</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="n">SpecialistCLI</span><span class="p">,</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">FixItem</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">HashMap</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">failure</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">failures</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">routes</span><span class="p">.</span><span class="n">entry</span><span class="p">(</span><span class="n">failure</span><span class="p">.</span><span class="n">route_to</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span>
+<span class="w">                </span><span class="p">.</span><span class="n">or_default</span><span class="p">()</span>
+<span class="w">                </span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">FixItem</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="nc">failure</span><span class="p">.</span><span class="n">file</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                    </span><span class="n">line</span><span class="p">:</span><span class="w"> </span><span class="nc">failure</span><span class="p">.</span><span class="n">line</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">category</span><span class="p">:</span><span class="w"> </span><span class="nc">failure</span><span class="p">.</span><span class="n">category</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                    </span><span class="n">message</span><span class="p">:</span><span class="w"> </span><span class="nc">failure</span><span class="p">.</span><span class="n">message</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                    </span><span class="n">suggestion</span><span class="p">:</span><span class="w"> </span><span class="nc">failure</span><span class="p">.</span><span class="n">fix_suggestion</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                    </span><span class="n">auto_fixable</span><span class="p">:</span><span class="w"> </span><span class="nc">failure</span><span class="p">.</span><span class="n">auto_fixable</span><span class="p">,</span>
+<span class="w">                </span><span class="p">});</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">FixRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">total_failures</span><span class="p">:</span><span class="w"> </span><span class="nc">failures</span><span class="p">.</span><span class="n">len</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">auto_fixable_count</span><span class="p">:</span><span class="w"> </span><span class="nc">failures</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">filter</span><span class="p">(</span><span class="o">|</span><span class="n">f</span><span class="o">|</span><span class="w"> </span><span class="n">f</span><span class="p">.</span><span class="n">auto_fixable</span><span class="p">).</span><span class="n">count</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">routes</span><span class="p">,</span>
+<span class="w">            </span><span class="n">retry_after_fix</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="the-auto-retry-loop">The Auto-Retry Loop</h3>
+<p>When the Validator detects failures, it does not just report them. It initiates a retry loop. The fix request goes back to the Coder CLI (via the Orchestrator). The Coder applies fixes. The Validator runs again. This continues up to the configured maximum retries.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">RetryLoop</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">max_retries</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="n">history</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">RetryAttempt</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">RetryAttempt</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">attempt</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">verdict</span><span class="p">:</span><span class="w"> </span><span class="nc">Verdict</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">failed_stages</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">ValidationStage</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">RetryLoop</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">pipeline</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ValidationPipeline</span><span class="p">,</span>
+<span class="w">        </span><span class="n">orchestrator</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">OrchestratorChannel</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">FinalVerdict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">attempt</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="mi">1</span><span class="o">..=</span><span class="bp">self</span><span class="p">.</span><span class="n">max_retries</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pipeline</span><span class="p">.</span><span class="n">run_all_stages</span><span class="p">().</span><span class="k">await</span><span class="p">;</span>
+
+<span class="w">            </span><span class="bp">self</span><span class="p">.</span><span class="n">history</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">RetryAttempt</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">attempt</span><span class="p">,</span>
+<span class="w">                </span><span class="n">verdict</span><span class="p">:</span><span class="w"> </span><span class="nc">result</span><span class="p">.</span><span class="n">verdict</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">failed_stages</span><span class="p">:</span><span class="w"> </span><span class="nc">result</span><span class="p">.</span><span class="n">failed_stages</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="nc">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">().</span><span class="n">to_rfc3339</span><span class="p">(),</span>
+<span class="w">            </span><span class="p">});</span>
+
+<span class="w">            </span><span class="k">match</span><span class="w"> </span><span class="n">result</span><span class="p">.</span><span class="n">verdict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">Verdict</span><span class="p">::</span><span class="n">Pass</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">FinalVerdict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">verdict</span><span class="p">:</span><span class="w"> </span><span class="nc">Verdict</span><span class="p">::</span><span class="n">Pass</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">attempts</span><span class="p">:</span><span class="w"> </span><span class="nc">attempt</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">history</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">history</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                </span><span class="p">},</span>
+<span class="w">                </span><span class="n">Verdict</span><span class="p">::</span><span class="n">Warn</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">attempt</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">FinalVerdict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">verdict</span><span class="p">:</span><span class="w"> </span><span class="nc">Verdict</span><span class="p">::</span><span class="n">Warn</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">attempts</span><span class="p">:</span><span class="w"> </span><span class="nc">attempt</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">history</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">history</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                </span><span class="p">},</span>
+<span class="w">                </span><span class="n">Verdict</span><span class="p">::</span><span class="n">Fail</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">attempt</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">max_retries</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="n">FinalVerdict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="n">verdict</span><span class="p">:</span><span class="w"> </span><span class="nc">Verdict</span><span class="p">::</span><span class="n">Fail</span><span class="p">,</span>
+<span class="w">                        </span><span class="n">attempts</span><span class="p">:</span><span class="w"> </span><span class="nc">attempt</span><span class="p">,</span>
+<span class="w">                        </span><span class="n">history</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">history</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                    </span><span class="p">};</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="c1">// Categorize failures and route fix request</span>
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="n">analyzer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FailureAnalyzer</span><span class="p">;</span>
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">all_failures</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Vec</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">                    </span><span class="k">for</span><span class="w"> </span><span class="n">stage_result</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="n">result</span><span class="p">.</span><span class="n">stage_results</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="k">if</span><span class="w"> </span><span class="n">stage_result</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">StageStatus</span><span class="p">::</span><span class="n">Fail</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                            </span><span class="n">all_failures</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">analyzer</span><span class="p">.</span><span class="n">categorize</span><span class="p">(</span><span class="n">stage_result</span><span class="p">));</span>
+<span class="w">                        </span><span class="p">}</span>
+<span class="w">                    </span><span class="p">}</span>
+
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="n">fix_request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">analyzer</span><span class="p">.</span><span class="n">generate_fix_request</span><span class="p">(</span><span class="o">&amp;</span><span class="n">all_failures</span><span class="p">);</span>
+<span class="w">                    </span><span class="n">orchestrator</span><span class="p">.</span><span class="n">send_fix_request</span><span class="p">(</span><span class="n">fix_request</span><span class="p">).</span><span class="k">await</span><span class="p">;</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">FinalVerdict</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">verdict</span><span class="p">:</span><span class="w"> </span><span class="nc">Verdict</span><span class="p">::</span><span class="n">Fail</span><span class="p">,</span>
+<span class="w">            </span><span class="n">attempts</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">max_retries</span><span class="p">,</span>
+<span class="w">            </span><span class="n">history</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">history</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Many validation failures are auto-fixable. Missing semicolons, unused imports, formatting violations. The Validator categorizes these, sends specific fix instructions to the Coder, and tries again. Only after exhausting retries does it declare a hard failure. The retry history feeds back to the Orchestrator — "PASS after 3 attempts" tells the Orchestrator this was a difficult change, while "PASS on first attempt" confirms the Coder is producing clean output.</p>
+<p>There is a subtle but important constraint on the retry loop: the Validator must detect <em>oscillation</em>. If attempt 1 fails on type errors, the Coder fixes those types but introduces lint errors, and attempt 2 fails on lint, and the Coder fixes the lint but reintroduces the type errors — the system is oscillating, not converging. The Validator tracks the set of failing stages and error codes across attempts. If the same error reappears after being "fixed," the loop terminates with a diagnostic: "Oscillation detected — errors in Stage 2 recurred after being fixed in attempt 1." This prevents infinite fix cycles that waste API tokens without making progress.</p>
+<p>The Orchestrator also uses retry history for longer-term optimization. If a particular type of change (say, API endpoint additions) consistently requires 2-3 validation retries, the Orchestrator can learn to give the Coder more specific instructions upfront — or to dispatch a different specialist for that type of work. The validation retry count is a signal about the Coder's reliability on different task types.</p>
+<hr />
+<h2 id="115-posttooluse-hooks-continuous-validation">11.5 PostToolUse Hooks — Continuous Validation</h2>
+<p>Running validation after the Coder finishes is good. Running validation after every file write is better. Claude Code's hook system provides <code>PostToolUse</code> events — when the Coder writes a file, a hook fires. The Validator catches it, runs a targeted validation on the changed file, and flags problems before the Coder moves on to the next task.</p>
+<p>This is the difference between finding fifty errors at the end of a coding session and finding one error after each file write. The latter is cheaper to fix, less disruptive to flow, and prevents cascading failures where an early mistake propagates through subsequent files.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">ContinuousValidator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">lint_budget_ms</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span><span class="w">      </span><span class="c1">// Max time for incremental lint (default: 2000)</span>
+<span class="w">    </span><span class="n">type_budget_ms</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span><span class="w">      </span><span class="c1">// Max time for incremental type check (default: 5000)</span>
+<span class="w">    </span><span class="n">enabled</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">ContinuousValidator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Called by PostToolUse hook when a file is written or edited</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">on_file_change</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">file_path</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Path</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">QuickResult</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="bp">self</span><span class="p">.</span><span class="n">enabled</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Skip non-source files</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ext</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">file_path</span><span class="p">.</span><span class="n">extension</span><span class="p">()</span><span class="o">?</span><span class="p">.</span><span class="n">to_str</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="p">[</span><span class="s">&quot;rs&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ts&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tsx&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;js&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;jsx&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;py&quot;</span><span class="p">].</span><span class="n">contains</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ext</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Skip test files (QA CLI&#39;s domain)</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">file_path</span><span class="p">.</span><span class="n">to_string_lossy</span><span class="p">().</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;.test.&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="o">||</span><span class="w"> </span><span class="n">file_path</span><span class="p">.</span><span class="n">to_string_lossy</span><span class="p">().</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;_test.&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="o">||</span><span class="w"> </span><span class="n">file_path</span><span class="p">.</span><span class="n">to_string_lossy</span><span class="p">().</span><span class="n">contains</span><span class="p">(</span><span class="s">&quot;/tests/&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">issues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Vec</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Quick lint (budget: 2s)</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">lint_result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">timeout</span><span class="p">(</span>
+<span class="w">            </span><span class="n">Duration</span><span class="p">::</span><span class="n">from_millis</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">lint_budget_ms</span><span class="p">),</span>
+<span class="w">            </span><span class="n">run_quick_lint</span><span class="p">(</span><span class="n">file_path</span><span class="p">),</span>
+<span class="w">        </span><span class="p">).</span><span class="k">await</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">issues</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">lint_result</span><span class="p">.</span><span class="n">issues</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Quick type check (budget: 5s, only if lint passed)</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">issues</span><span class="p">.</span><span class="n">is_empty</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">type_result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">timeout</span><span class="p">(</span>
+<span class="w">                </span><span class="n">Duration</span><span class="p">::</span><span class="n">from_millis</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">type_budget_ms</span><span class="p">),</span>
+<span class="w">                </span><span class="n">run_quick_type_check</span><span class="p">(</span><span class="n">file_path</span><span class="p">),</span>
+<span class="w">            </span><span class="p">).</span><span class="k">await</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">issues</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">type_result</span><span class="p">.</span><span class="n">issues</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">issues</span><span class="p">.</span><span class="n">is_empty</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">None</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">Some</span><span class="p">(</span><span class="n">QuickResult</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="nc">file_path</span><span class="p">.</span><span class="n">to_owned</span><span class="p">(),</span><span class="w"> </span><span class="n">issues</span><span class="w"> </span><span class="p">})</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The performance budget is critical. A PostToolUse hook that takes 30 seconds defeats the purpose — the Coder is blocked, waiting, the flow is broken. The rule: hooks get a 10-second total budget. Lint a single file takes 1-2 seconds. Incremental type check takes 3-5 seconds. Both fit within budget. Running the full test suite (30-120 seconds) or a build (10-60 seconds) does not. The full five-stage pipeline runs when the Coder signals "task complete." Hooks provide fast, incremental feedback during development. Both mechanisms are necessary. Neither is sufficient alone.</p>
+<hr />
+<h2 id="116-the-validator-cli-claudemd">11.6 The Validator CLI CLAUDE.md</h2>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="gh"># Validator CLI — The Gatekeeper</span>
+
+<span class="gu">## Identity</span>
+You are the Validator CLI in a multi-CLI AGI system. You produce verdicts:
+PASS, WARN, or FAIL. You do not write code. You do not suggest features.
+You do not negotiate thresholds.
+
+<span class="gu">## Core Protocol</span>
+
+<span class="gu">### Five-Stage Pipeline</span>
+Execute these stages IN ORDER. Stop on first FAIL.
+<span class="k">1.</span> Lint — Run the project&#39;s linter with JSON output
+<span class="k">2.</span> Type-Check — Run type checker with machine-readable output
+<span class="k">3.</span> Build — Compile and track duration + artifact size
+<span class="k">4.</span> Test — Run test suite with coverage tracking
+<span class="k">5.</span> Performance — Compare metrics against stored baselines
+
+<span class="gu">### Quality Gates</span>
+Read thresholds from <span class="sb">`.validator/quality-gates.toml`</span>.
+NEVER override thresholds. NEVER accept arguments to relax them.
+The configuration file is the sole source of truth.
+
+<span class="gu">### Verdict Format</span>
+Always respond with structured JSON:
+{
+  &quot;verdict&quot;: &quot;PASS | WARN | FAIL&quot;,
+  &quot;stages&quot;: { ... per-stage results ... },
+  &quot;attempt&quot;: 1,
+  &quot;timestamp&quot;: &quot;ISO-8601&quot;
+}
+
+<span class="gu">## Failure Handling</span>
+When a stage FAILS:
+<span class="k">1.</span> Parse error output into structured failures
+<span class="k">2.</span> Categorize: syntax | type | build | test | coverage | performance
+<span class="k">3.</span> Generate fix suggestions for each failure
+<span class="k">4.</span> Route fix request to the appropriate specialist CLI
+<span class="k">5.</span> Wait for fixes, then re-run (max 3 retries)
+
+<span class="gu">## Rules</span>
+<span class="k">1.</span> Never self-certify. You validate what others produce.
+<span class="k">2.</span> Never modify source code. You only run tools against it.
+<span class="k">3.</span> Never relax thresholds unless the config file changes via PR.
+<span class="k">4.</span> Always run all enabled stages. No shortcuts, no skipping.
+<span class="k">5.</span> Report structured output. The Orchestrator parses your verdicts.
+<span class="k">6.</span> Be fast. Incremental checks in hooks. Full pipeline on task completion.
+
+<span class="gu">## Interaction with Other CLIs</span>
+<span class="k">-</span><span class="w"> </span>Orchestrator → sends changed files, expects a verdict
+<span class="k">-</span><span class="w"> </span>Coder → you send fix requests, Coder sends back fixes
+<span class="k">-</span><span class="w"> </span>Security → you flag security lint rules, Security does deep analysis
+<span class="k">-</span><span class="w"> </span>QA → you run existing tests, QA writes new tests for uncovered paths
+</code></pre></div>
+
+<hr />
+<h2 id="117-the-validator-in-non-engineering-domains">11.7 The Validator in Non-Engineering Domains</h2>
+<p>The five-stage validation pattern generalizes beyond code. Any domain that produces artifacts requiring quality assurance benefits from a dedicated validation step with structured gates.</p>
+<p><strong>Publishing Pipeline:</strong> A book manuscript passes through five stages: grammar check (lint), style guide compliance (type-check), rendering to PDF/EPUB (build), reader comprehension tests via focus group feedback (test), and page count / reading time budgets (performance). Each stage gates the next — a manuscript with grammar errors does not proceed to layout. The quality gates are configurable: a technical manual demands different style compliance than a novel.</p>
+<p><strong>Data Pipeline Validator:</strong> Data engineering teams validate ETL outputs: schema validation (lint), referential integrity (type-check), pipeline execution (build), data quality tests — row counts, null rates, distribution drift (test), and query performance against SLA budgets (performance). A data pipeline where today's row count is 50% below yesterday's baseline triggers the same kind of regression alert as a coverage drop.</p>
+<p><strong>Legal Document Review:</strong> Contract templates pass through clause completeness checks (lint), regulatory compliance verification (type-check), document generation from template (build), sample scenario testing against edge cases (test), and review turnaround time budgets (performance). The quality gate configuration specifies which regulatory frameworks apply per jurisdiction.</p>
+<p>In every domain, the pattern is the same: ordered stages, configurable thresholds, structured output, failure categorization, and auto-retry with routed fix requests. The five stages map to: <em>syntax correctness</em> (lint), <em>semantic correctness</em> (type-check), <em>artifact generation</em> (build), <em>behavioral verification</em> (test), and <em>resource budget compliance</em> (performance).</p>
+<p>The Validator pattern also maps directly to CI/CD integration. The five-stage pipeline translates one-to-one into GitHub Actions steps, Azure DevOps stages, or Jenkins pipeline blocks. Each stage produces structured output that CI platforms can parse into check annotations, PR comments, and dashboard metrics. The Validator's structured verdict JSON can be posted as a PR comment, letting human reviewers see the full quality picture at a glance:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Status</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Lint</td>
+<td>PASS</td>
+<td>0 errors, 3 warnings</td>
+</tr>
+<tr>
+<td>Type-Check</td>
+<td>PASS</td>
+<td>0 errors</td>
+</tr>
+<tr>
+<td>Build</td>
+<td>PASS</td>
+<td>14.2s (baseline: 12.8s, +10.9%)</td>
+</tr>
+<tr>
+<td>Test</td>
+<td>PASS</td>
+<td>147/147 passed, 87.3% coverage</td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>WARN</td>
+<td>Bundle grew 4.2% (threshold: 5%)</td>
+</tr>
+<tr>
+<td><strong>Verdict</strong></td>
+<td><strong>PASS</strong></td>
+<td>2 attempts, 1 auto-fix applied</td>
+</tr>
+</tbody>
+</table>
+<p>This table is not a mockup — it is the exact output the Validator produces when integrated into a CI pipeline. The Orchestrator can query the CI system's API to retrieve this verdict programmatically, closing the loop between the multi-CLI system and the team's existing development workflow.</p>
+<hr />
+<h2 id="118-validator-vs-security-cli-complementary-not-overlapping">11.8 Validator vs. Security CLI — Complementary, Not Overlapping</h2>
+<p>A common question when designing the multi-CLI fleet: why do we need both a Validator and a Security CLI? Both check code. Both produce structured findings. Both gate shipment.</p>
+<p>The distinction is scope and depth. The Validator catches <em>syntactic and structural</em> problems: lint violations, type errors, test failures, coverage regressions, performance degradation. These are the problems that standard development tools detect. The Security CLI catches <em>semantic security vulnerabilities</em>: injection patterns, hardcoded secrets, dependency CVEs, OWASP Top 10 violations, STRIDE threats. These require specialized analysis tools and domain expertise that the general validation pipeline does not provide.</p>
+<p>The interaction between them is precise:</p>
+<ul>
+<li>The Validator runs the project's standard lint rules. If a lint rule happens to be security-related (like <code>no-eval</code> in ESLint or <code>S301</code> in Ruff's Bandit integration), the Validator flags it and routes it to the Security CLI for deeper analysis rather than treating it as a simple lint error.</li>
+<li>The Security CLI's findings do not pass through the Validator's pipeline. They have their own severity calibration and reporting format (Chapter 10). The Orchestrator consumes both outputs independently.</li>
+<li>The Validator can be configured to require a Security CLI PASS as a sixth stage (a "security gate"), but this is optional and configured per project. Not every commit needs a full six-pass security audit — but every release candidate does.</li>
+</ul>
+<p>The Validator is fast, broad, and automated. The Security CLI is deep, focused, and augmented by LLM reasoning. Together they provide both the breadth of standard quality checking and the depth of security-specific analysis.</p>
+<hr />
+<h2 id="119-testing-the-validator-cli">11.9 Testing the Validator CLI</h2>
+<h3 id="test-1-pipeline-ordering">Test 1: Pipeline Ordering</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Input: Project with lint errors AND test failures.
+Expected: Pipeline halts at Stage 1 (Lint). Test stage never runs.
+Verify: No test execution output in results. Duration reflects lint-only.
+</code></pre></div>
+
+<h3 id="test-2-quality-gate-enforcement">Test 2: Quality Gate Enforcement</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Input: Test suite passes but coverage is 65%. Gate threshold is 70%.
+Expected: Stage 4 (Test) status = FAIL. Verdict = FAIL.
+Not: PASS with a warning. Coverage below fail threshold is a hard failure.
+</code></pre></div>
+
+<h3 id="test-3-auto-retry-loop">Test 3: Auto-Retry Loop</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Input: Lint fails with 3 auto-fixable warnings (unused imports).
+Expected: Validator routes fix request → Coder runs auto-fix →
+Validator retries → PASS on second attempt. History shows 2 attempts.
+</code></pre></div>
+
+<h3 id="test-4-regression-detection">Test 4: Regression Detection</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Input: Baseline coverage 85%. New code drops coverage to 82%.
+Regression threshold: 2%.
+Expected: Stage 4 FAIL with message &quot;Coverage regressed 3.0% (threshold: 2.0%)&quot;.
+</code></pre></div>
+
+<h3 id="test-5-continuous-validation-hook">Test 5: Continuous Validation Hook</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Input: Coder writes a .ts file with a type error via FileEditTool.
+PostToolUse hook fires.
+Expected: Hook detects type error within 5 seconds. Reports file:line.
+Coder receives feedback before writing the next file.
+</code></pre></div>
+
+<h3 id="test-6-structured-output">Test 6: Structured Output</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Input: Multiple failures across lint and test stages.
+Expected: Final verdict JSON includes per-stage results, error counts,
+coverage metrics, duration per stage, and categorized failures with
+route_to fields. Orchestrator can parse without additional processing.
+</code></pre></div>
+
+<p>If all six tests pass, the Validator CLI enforces ordered pipeline execution, applies configurable quality gates, retries with routed fix requests, detects regressions, provides continuous feedback via hooks, and produces structured output that the Orchestrator consumes without additional parsing.</p>
+<hr />
+<p><em>Chapter 11 Target Verification:</em>
+- [x] Five-stage validation pipeline (lint → type-check → build → test → performance)
+- [x] Structured output parsing per stage (JSON from ESLint, Ruff, Clippy, tsc, cargo check, pyright)
+- [x] Quality gate configuration with pass/warn/fail thresholds
+- [x] VERIFICATION_AGENT feature flag from Claude Code source
+- [x] Failure categorization and routing to specialist CLIs
+- [x] Auto-retry loop with fix request generation
+- [x] PostToolUse hooks for continuous validation
+- [x] Performance budget for hooks (10-second constraint)
+- [x] Complete Validator CLI CLAUDE.md template
+- [x] Non-engineering domain applications (publishing, data, legal)
+- [x] 6 test scenarios covering pipeline ordering, gates, retry, regression, hooks, output</p>
+<div style="display:flex;justify-content:space-between;padding:2rem 0;margin-top:3rem;border-top:1px solid var(--border);"><a href="chapter-10.html" style="color:var(--accent-blue);text-decoration:none;">← The Security CLI — The Guardian</a><a href="chapter-12.html" style="color:var(--accent-blue);text-decoration:none;text-align:right;">The QA CLI — The Adversary →</a></div>
+</main>
+<footer class="doc-footer" style="text-align:center;padding:2rem;color:var(--text-secondary);font-size:0.85rem;">
+  <p><a href="index.html" style="color:var(--accent-blue);">← Table of Contents</a></p>
+</footer>
+<a href="#" id="back-to-top" style="display:none;position:fixed;bottom:2rem;right:2rem;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;text-decoration:none;font-size:1.2rem;z-index:99;">↑</a>
+<script>
+(function(){
+var bar=document.querySelector('.scroll-indicator .bar');
+function updateBar(){var s=window.scrollY,h=document.documentElement.scrollHeight-window.innerHeight;if(bar)bar.style.width=h>0?(s/h*100)+'%':'0%';}
+var btt=document.getElementById('back-to-top');
+function updateBtt(){if(btt)btt.style.display=window.scrollY>400?'flex':'none';}
+window.toggleSidebar=function(){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}};
+window.copyCode=function(b){var c=b.parentElement.querySelector('code');if(!c)return;navigator.clipboard.writeText(c.textContent).then(function(){var o=b.textContent;b.textContent='\u2713 Copied';b.style.color='var(--accent-green)';setTimeout(function(){b.textContent=o;b.style.color='';},2000);});};
+document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=1024){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s)s.classList.remove('open');if(o)o.classList.remove('active');}});});
+var tk=false;window.addEventListener('scroll',function(){if(!tk){requestAnimationFrame(function(){updateBar();updateBtt();tk=false;});tk=true;}});
+updateBar();
+})();
+</script>
+</body>
+</html>

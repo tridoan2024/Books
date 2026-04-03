@@ -1,0 +1,1935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 2: Claude Code Architecture — The Keystone</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-orange: #d29922;
+  --accent-red: #f85149;
+  --accent-purple: #bc8cff;
+  --code-bg: #161b22;
+  --sidebar-width: 300px;
+  --header-height: 60px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 16px; line-height: 1.7;
+  color: var(--text-primary); background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+.main { margin-left: var(--sidebar-width); padding: 5rem 3rem 4rem; max-width: 52rem; }
+h1 { font-size: 1.75rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.75rem; color: var(--accent-blue); }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+p { margin: 0.75rem 0; }
+a { color: var(--accent-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; position: relative; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 3px solid var(--accent-blue); margin: 1rem 0; padding: 0.5rem 1rem; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 0 8px 8px 0; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--bg-secondary); }
+.reading-time { color: var(--text-secondary); font-size: 0.8rem; font-weight: normal; }
+.part-heading { font-size: 1.75rem; text-align: center; color: var(--accent-green); padding: 2rem 0 1rem; margin-top: 4rem; border-top: 1px solid var(--border); letter-spacing: 1px; text-transform: uppercase; border-bottom: none; }
+.copy-btn { position: absolute; top: 8px; right: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary); padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+.copy-btn:hover { color: var(--text-primary); background: var(--bg-hover, var(--border)); }
+
+/* Sidebar */
+.sidebar { position: fixed; top: var(--header-height); left: 0; bottom: 0; width: var(--sidebar-width); background: var(--bg-secondary); border-right: 1px solid var(--border); overflow-y: auto; padding: 1.25rem 0 3rem; z-index: 50; }
+.sidebar-title { padding: 0 1rem 0.75rem; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; }
+.sidebar a { display: block; padding: 4px 1rem; font-size: 0.82rem; color: var(--text-secondary); text-decoration: none; border-left: 2px solid transparent; }
+.sidebar a:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.sidebar a.active { color: var(--accent-blue); border-left-color: var(--accent-blue); background: rgba(88,166,255,0.08); }
+.sidebar-part { font-weight: 700; color: var(--accent-green) !important; text-transform: uppercase; font-size: 0.72rem !important; letter-spacing: 0.5px; margin-top: 1rem; padding-top: 0.75rem !important; border-top: 1px solid var(--border); }
+.sidebar-chapter { font-weight: 600; color: var(--text-primary) !important; }
+
+/* Header */
+.site-header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-height); display: flex; align-items: center; padding: 0 1.5rem; z-index: 100; border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: rgba(22,27,34,0.88); }
+.hamburger { display: none; background: none; border: none; color: var(--text-primary); font-size: 1.4rem; cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem; }
+.header-nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.header-nav button { background: none; border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; }
+.header-nav button:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.header-nav button:disabled { opacity: 0.3; cursor: default; }
+
+/* Mobile */
+@media(max-width:1024px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .hamburger { display: block; }
+  .main { margin-left: 0; padding: 5rem 1.5rem 3rem; }
+  .sidebar-overlay.active { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 49; }
+}
+@media(max-width:640px) {
+  body { font-size: 15px; }
+  .main { padding: 4.5rem 1rem 2rem; }
+  h1 { font-size: 1.4rem; }
+  pre { font-size: 0.82rem; }
+}
+</style>
+</head>
+<body>
+
+
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<main class="main">
+<h1 id="chapter-2-claude-code-architecture-the-keystone">Chapter 2: Claude Code Architecture — The Keystone</h1>
+<h2 id="the-9-layer-stack-10-extension-points-and-the-streaming-agent-loop-that-powers-everything">The 9-Layer Stack, 10 Extension Points, and the Streaming Agent Loop That Powers Everything</h2>
+<hr />
+<p>You are about to write a hook that fires on <code>PreToolUse</code> and blocks dangerous bash commands. But you need to know: does the hook receive the command before or after the permission check? Does it get a raw string or a JSON object? What exit code blocks execution versus logging a warning?</p>
+<p>These are not trivia questions. They are the difference between a hook that protects your system and one that silently fails while <code>rm -rf .</code> executes underneath it.</p>
+<p>You cannot answer them without understanding the architecture. This chapter is that understanding — the complete technical map of Claude Code from the CLI entry point to the terminal pixel. Every configuration decision in this book — how you structure CLAUDE.md, what permissions to set, which lifecycle events to hook, how to decompose the monolith into specialized CLIs — flows from what you learn here.</p>
+<hr />
+<h2 id="21-the-9-layer-architecture">2.1 The 9-Layer Architecture</h2>
+<p>Claude Code is organized as a 9-layer stack. Each layer has a specific responsibility, clear boundaries with adjacent layers, and defined extension points for customization. Understanding which layer to modify for a given goal is the difference between a clean extension and a fragile hack.</p>
+<h3 id="layer-1-entry-points">Layer 1: Entry Points</h3>
+<p>Claude Code has four distinct entry modes, each serving a different deployment pattern:</p>
+<table>
+<thead>
+<tr>
+<th>Entry Mode</th>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Interactive CLI</strong></td>
+<td><code>cli.tsx</code> → <code>main.tsx</code></td>
+<td>The default. Terminal REPL with React/Ink TUI</td>
+</tr>
+<tr>
+<td><strong>MCP Server</strong></td>
+<td><code>mcp.ts</code></td>
+<td>Expose Claude Code as an MCP server. Other tools connect to it</td>
+</tr>
+<tr>
+<td><strong>HTTP/WebSocket Server</strong></td>
+<td><code>server/</code></td>
+<td>Remote sessions via <code>cc://</code> URLs. SDK bridges for VS Code, Cursor</td>
+</tr>
+<tr>
+<td><strong>SDK Stub</strong></td>
+<td><code>agentSdkTypes.ts</code></td>
+<td>npm package <code>@anthropic-ai/sdk-claude-code</code>. Programmatic API</td>
+</tr>
+</tbody>
+</table>
+<p>The CLI entry point (<code>cli.tsx</code>) is a fast-path dispatcher. It checks for simple flags (<code>--version</code>, <code>--mcp</code>, <code>--daemon</code>) before loading the full React application. The <code>-p</code> (non-interactive) mode skips 52 subcommand registrations, saving approximately 65ms of startup time. The <code>--bare</code> mode gates off roughly 90% of the startup sequence.</p>
+<p><strong>Boot sequence performance optimizations:</strong></p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>cli.tsx (fast-path dispatch, ~5ms)
+  ↓
+main.tsx with import-time parallelism:
+  - profileCheckpoint(&#39;main_tsx_entry&#39;)
+  - startMdmRawRead() + startKeychainPrefetch()   ← parallel with 135ms of requires
+  ↓
+setup():
+  - Node.js ≥18 check
+  - UDS messaging server initialization
+  - setCwd() (critical: must be early, other systems depend on it)
+  - FileChanged watcher registration
+  - Background jobs: memory loading, plugin discovery, hook wiring
+  ↓
+launchRepl() via dynamic import (keeps React off the critical path)
+  ↓
+startDeferredPrefetches(): user context warming, model capability probing
+</code></pre></div>
+
+<p><strong>Multi-CLI implication:</strong> Each specialized CLI needs a different entry mode. The Orchestrator uses the SDK entry for programmatic spawning. The Research CLI might run as an MCP server, exposing its findings as resources. The Coder CLI uses the interactive entry for full tool access. Understanding entry modes lets you choose the right surface for each specialist.</p>
+<h3 id="layer-2-the-query-engine-the-agentic-loop">Layer 2: The Query Engine (The Agentic Loop)</h3>
+<p>This is the single most important component in Claude Code. Everything else is configuration and tooling around this loop.</p>
+<p>The <code>QueryEngine</code> (<code>query.ts</code>, <code>QueryEngine.ts</code>) implements a <code>while(true)</code> agentic loop that alternates between LLM inference and tool execution:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>┌────────────────────────────────────────────────────────────┐
+│                    THE QUERY ENGINE                         │
+│                                                            │
+│  1. Assemble context                                       │
+│     ├── System prompt (CLAUDE.md + rules + skills + memory)│
+│     ├── Conversation history                               │
+│     ├── Tool schemas (52 tools = ~10K tokens)             │
+│     └── Git context + directory listing                    │
+│                                                            │
+│  2. Call Claude API (streaming SSE)                        │
+│     └── Response contains: thinking + text + tool_use      │
+│                                                            │
+│  3. Process response                                       │
+│     ├── stop_reason == &quot;end_turn&quot; → EXIT LOOP              │
+│     └── stop_reason == &quot;tool_use&quot; → CONTINUE               │
+│                                                            │
+│  4. For each tool_use in response:                         │
+│     a. Permission check (deny → ask → allow cascade)       │
+│     b. PreToolUse hooks (exit 2 = BLOCK)                  │
+│     c. Execute tool                                        │
+│     d. PostToolUse hooks (auto-lint, notify, log)         │
+│     e. Truncate result if &gt; threshold                      │
+│     f. Append tool_result to conversation                  │
+│                                                            │
+│  5. Check turn count (max ~100, configurable)              │
+│     └── Exceeded → EXIT LOOP with warning                  │
+│                                                            │
+│  6. Check context budget                                   │
+│     ├── Near limit → trigger auto-compaction               │
+│     └── At limit → emergency context collapse              │
+│                                                            │
+│  7. LOOP BACK TO STEP 2                                    │
+│                                                            │
+│  Post-loop side effects:                                   │
+│  ├── Stop hooks                                            │
+│  ├── TaskCompleted hooks (if in teammate mode)             │
+│  ├── TeammateIdle hooks                                    │
+│  ├── Memory extraction (background subagent)               │
+│  ├── Auto-dream check (24h cooldown, 5-session minimum)   │
+│  └── Prompt suggestion generation                          │
+└────────────────────────────────────────────────────────────┘
+</code></pre></div>
+
+<p><strong>17-step per-iteration pipeline</strong> (the full internal sequence):</p>
+<ol>
+<li>Read pending messages from UDS inbox (if <code>UDS_INBOX</code> enabled)</li>
+<li>Assemble system prompt (layers 1–8 of context system)</li>
+<li>Apply prompt caching (two-phase: static global + dynamic per-org)</li>
+<li>Build API request with beta headers</li>
+<li>Stream API response via SSE</li>
+<li>Parse content blocks as they arrive (thinking, text, tool_use)</li>
+<li>For each tool_use: extract tool name and input from JSON stream</li>
+<li>Permission check (4-layer cascade: managed → user → project → local)</li>
+<li>If permission mode is <code>auto</code>: run 2-stage TRANSCRIPT_CLASSIFIER</li>
+<li>Fire PreToolUse hooks (can block with exit code 2)</li>
+<li>Execute tool via <code>StreamingToolExecutor</code></li>
+<li>Fire PostToolUse hooks</li>
+<li>Truncate oversized results</li>
+<li>Append tool_result to conversation history</li>
+<li>Update token budget tracking</li>
+<li>Check compaction triggers</li>
+<li>Loop or exit based on stop_reason</li>
+</ol>
+<p><strong>Multi-CLI implication:</strong> The query engine is the component every specialized CLI shares. The difference between CLIs is what tools are registered (step 11), what permissions are configured (step 8), and what system prompt is assembled (step 2). The loop itself is identical. This means a multi-CLI system is not 8 separate codebases — it is 8 configurations of the same engine.</p>
+<h3 id="layer-3-the-context-system">Layer 3: The Context System</h3>
+<p>Every turn, Claude Code assembles a context window from nine sources. The order matters — later sources take priority, and the total must fit within the model's context limit.</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Typical Tokens</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Base system prompt</td>
+<td>3,000–5,000</td>
+<td>Core instructions, tool usage rules, behavior guidelines</td>
+</tr>
+<tr>
+<td>2. CLAUDE.md hierarchy</td>
+<td>500–2,000</td>
+<td><code>~/.claude/CLAUDE.md</code> → project → local (merged, project wins)</td>
+</tr>
+<tr>
+<td>3. Matching rules</td>
+<td>200–600</td>
+<td>Rules whose <code>paths:</code> frontmatter matches files in scope</td>
+</tr>
+<tr>
+<td>4. Active skill instructions</td>
+<td>200–800</td>
+<td>Loaded by <code>/command</code> or auto-detection</td>
+</tr>
+<tr>
+<td>5. Git context</td>
+<td>200–500</td>
+<td>Branch, recent commits, status, dirty files</td>
+</tr>
+<tr>
+<td>6. Directory listing</td>
+<td>200–1,000</td>
+<td>Project file structure snapshot</td>
+</tr>
+<tr>
+<td>7. Memory context</td>
+<td>100–500</td>
+<td>MEMORY.md index + relevant memory files</td>
+</tr>
+<tr>
+<td>8. Tool definitions</td>
+<td>3,000–10,000</td>
+<td>JSON schemas for all registered tools</td>
+</tr>
+<tr>
+<td>9. Conversation history</td>
+<td>50,000–150,000</td>
+<td>Messages, tool calls, tool results</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total system prompt: 7,000–15,000 tokens.</strong> This is the overhead paid on every API call.</p>
+<p><strong>The CLAUDE.md trick:</strong> Claude Code places CLAUDE.md content inside a synthetic user message rather than the system message. This is a prompt-caching optimization — the system prompt remains static (maximizing cache hits), while CLAUDE.md content rides in the user turn where it is still visible to the model but does not invalidate the system prompt cache.</p>
+<p><strong>Two-phase prompt caching:</strong></p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Phase 1: Static Global Cache
+  ├── Base system prompt (rarely changes)
+  ├── Tool schemas (change only when tools are added/removed)
+  └── Global settings
+  → Cache TTL: Long (content-hash based, survives across sessions)
+
+Phase 2: Dynamic Per-Org Cache
+  ├── CLAUDE.md content
+  ├── Git context (changes per turn)
+  ├── Memory context
+  └── Conversation history
+  → Cache TTL: Short (invalidated by content changes)
+</code></pre></div>
+
+<p>Content-hash temp files are used to preserve cache validity across sessions. The system writes deterministic temporary files whose paths are derived from content hashes, so the API's prompt cache sees the same "file" path and reuses cached prefill.</p>
+<p><strong>Multi-CLI implication:</strong> Each specialized CLI assembles a different context. The Security CLI loads security-focused rules and a CLAUDE.md with threat-modeling instructions. The Coder CLI loads coding-standard rules and a CLAUDE.md with implementation guidelines. The tool schemas section varies because each CLI registers different tools. This is the primary mechanism for CLI specialization — not code changes, but context changes.</p>
+<h3 id="layer-4-the-tool-system">Layer 4: The Tool System</h3>
+<p>52 tools organized across 9 categories:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Tools</th>
+<th>Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>File &amp; Shell</strong></td>
+<td>Read, Edit, Write, Glob, Grep, NotebookEdit, Bash, PowerShell, REPL</td>
+<td>9</td>
+</tr>
+<tr>
+<td><strong>Agent &amp; Task</strong></td>
+<td>Agent, TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, TeamCreate, TeamDelete, SendMessage</td>
+<td>9</td>
+</tr>
+<tr>
+<td><strong>Web &amp; Search</strong></td>
+<td>WebFetch, WebSearch, ToolSearch</td>
+<td>3</td>
+</tr>
+<tr>
+<td><strong>MCP Integration</strong></td>
+<td>MCPTool (base), ListMcpResources, ReadMcpResource, McpAuth</td>
+<td>4</td>
+</tr>
+<tr>
+<td><strong>Planning</strong></td>
+<td>EnterPlanMode, ExitPlanMode</td>
+<td>2</td>
+</tr>
+<tr>
+<td><strong>Scheduling</strong></td>
+<td>CronCreate, CronDelete, CronList</td>
+<td>3</td>
+</tr>
+<tr>
+<td><strong>Code Intelligence</strong></td>
+<td>LSP (9 operations: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls)</td>
+<td>1</td>
+</tr>
+<tr>
+<td><strong>Skills &amp; Config</strong></td>
+<td>Skill, Config, Brief</td>
+<td>3</td>
+</tr>
+<tr>
+<td><strong>Worktree</strong></td>
+<td>EnterWorktree, ExitWorktree</td>
+<td>2</td>
+</tr>
+<tr>
+<td><strong>Output</strong></td>
+<td>StructuredOutput, SyntheticOutput, AskUserQuestion</td>
+<td>3</td>
+</tr>
+<tr>
+<td><strong>Internal</strong></td>
+<td>Sleep, RemoteTrigger, Monitor, TerminalPanel</td>
+<td>4+</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The 40-member tool interface:</strong></p>
+<p>Every tool implements a protocol with approximately 40 methods and properties. The critical ones for multi-CLI design:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">Tool</span><span class="o">&lt;</span><span class="nx">Input</span><span class="p">,</span><span class="w"> </span><span class="nx">Output</span><span class="p">,</span><span class="w"> </span><span class="nx">Progress</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// === Identity ===</span>
+<span class="w">  </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">description</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">            </span><span class="c1">// Shown to the model</span>
+<span class="w">  </span><span class="nx">prompt</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">                 </span><span class="c1">// Usage instructions for the model</span>
+
+<span class="w">  </span><span class="c1">// === Input/Output ===</span>
+<span class="w">  </span><span class="nx">inputSchema</span><span class="o">:</span><span class="w"> </span><span class="kt">ZodSchema</span><span class="p">;</span><span class="w">           </span><span class="c1">// Zod schema (validated before execution)</span>
+<span class="w">  </span><span class="nx">call</span><span class="p">(</span><span class="nx">input</span><span class="p">,</span><span class="w"> </span><span class="nx">context</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">ToolResult</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// === Behavior Flags (fail-closed: all default false) ===</span>
+<span class="w">  </span><span class="nx">isReadOnly</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">            </span><span class="c1">// Can this tool modify state?</span>
+<span class="w">  </span><span class="nx">isConcurrencySafe</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">     </span><span class="c1">// Can run parallel with other tools?</span>
+<span class="w">  </span><span class="nx">isDestructive</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">         </span><span class="c1">// Could cause irreversible damage?</span>
+<span class="w">  </span><span class="nx">isEnabled</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">             </span><span class="c1">// Should this tool be available?</span>
+<span class="w">  </span><span class="nx">shouldDefer</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">             </span><span class="c1">// Lazy-loaded (fetched on demand)?</span>
+<span class="w">  </span><span class="nx">alwaysLoad</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">              </span><span class="c1">// Always in tool pool regardless of filtering?</span>
+
+<span class="w">  </span><span class="c1">// === Permission Integration ===</span>
+<span class="w">  </span><span class="nx">checkPermissions</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">PermissionDecision</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">validateInput</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="ow">void</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">toAutoClassifierInput</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="nx">ClassifierInput</span><span class="p">;</span><span class="w">  </span><span class="c1">// Feeds the AI permission classifier</span>
+
+<span class="w">  </span><span class="c1">// === Rendering (React/Ink) — 7 methods ===</span>
+<span class="w">  </span><span class="nx">renderToolUseMessage</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ReactNode</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">renderToolResultMessage</span><span class="p">(</span><span class="nx">result</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ReactNode</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">renderToolUseProgressMessage</span><span class="p">(</span><span class="nx">progress</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ReactNode</span><span class="p">;</span>
+<span class="w">  </span><span class="c1">// ... 4 more rendering methods</span>
+
+<span class="w">  </span><span class="c1">// === MCP/LSP Markers ===</span>
+<span class="w">  </span><span class="nx">isMcp</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">isLsp</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>The tool assembly pipeline:</strong></p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>getAllBaseTools()                    → All tools for the current environment
+  ↓
+getTools(permissionContext)         → Filter by deny rules + isEnabled()
+  ↓
+assembleToolPool(permCtx, mcp)     → Merge built-in + MCP tools, sort for cache stability
+  ↓
+filterToolsByDenyRules()           → Strip denied tools before model sees them
+</code></pre></div>
+
+<p>The sort step is critical for prompt caching: tools are sorted deterministically so the tool schema section of the system prompt has a stable hash across turns.</p>
+<p><strong>Multi-CLI implication:</strong> The primary differentiation mechanism between CLIs. The Orchestrator registers only AgentTool, TaskCreate/Update/List, SendMessage, SyntheticOutput — it literally cannot edit files. The Security CLI registers Read, Grep, Glob, and custom SAST tools — it can observe but not modify. The Coder CLI gets the full file/shell tool set. Tool filtering is how you enforce the principle that each specialist does one thing well and cannot do the rest.</p>
+<h3 id="layer-5-the-permission-system">Layer 5: The Permission System</h3>
+<p>Four permission modes, evaluated in a specific cascade:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Managed (enterprise, cannot override)
+  → User (~/.claude/settings.json)
+    → Project (.claude/settings.json, committed to git)
+      → Local (.claude/settings.local.json, gitignored)
+</code></pre></div>
+
+<p><strong>The 2-stage TRANSCRIPT_CLASSIFIER:</strong></p>
+<p>When permission mode is <code>auto</code> (the AI-powered mode), Claude Code runs a two-stage security classifier:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Tool request arrives
+  ↓
+Stage 1: Fast Heuristics (~1ms)
+  ├── Is it &quot;rm -rf /&quot;? → DENY
+  ├── Is it a known-safe read-only tool? → ALLOW
+  ├── Does it match an explicit deny pattern? → DENY
+  ├── Does it match an explicit allow pattern? → ALLOW
+  └── Uncertain? → proceed to Stage 2
+  ↓
+Stage 2: Model Inference (~200ms)
+  ├── Feed tool name, input, context to classifier model
+  ├── Model evaluates: is this tool call safe given the conversation context?
+  └── Returns: ALLOW / DENY / ASK_USER
+</code></pre></div>
+
+<p>The <strong>BASH_CLASSIFIER</strong> (<code>bashPermissions.ts</code>, 7,200 lines) is the most sophisticated component of the permission system. It uses tree-sitter AST analysis to parse bash commands and evaluate:</p>
+<ul>
+<li>Command intent classification (read, write, delete, network, process management)</li>
+<li>Path traversal detection (is the command operating outside the project directory?)</li>
+<li>Destructiveness scoring (reversible vs irreversible operations)</li>
+<li>Sed pattern validation (is the sed command a safe substitution or a destructive rewrite?)</li>
+<li>Denial learning (tracks previously denied patterns to auto-deny similar future requests)</li>
+</ul>
+<p><strong>Multi-CLI implication:</strong> Each CLI needs a different permission model. The Security CLI should be read-only — it can read any file but cannot modify anything. The Coder CLI can modify files but should not be able to deploy. The Orchestrator can spawn agents but should not be able to read source files directly. The permission system is already designed for this — the <code>deny</code> rules simply differ per CLI configuration.</p>
+<h3 id="layer-6-the-hook-system">Layer 6: The Hook System</h3>
+<p>27 lifecycle events, each with a specific phase in the query engine loop:</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>When It Fires</th>
+<th>Can Block?</th>
+<th>Hook Types</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SessionStart</code></td>
+<td>Session initialization</td>
+<td>No</td>
+<td>command, HTTP</td>
+</tr>
+<tr>
+<td><code>Setup</code></td>
+<td>Initial environment setup</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>UserPromptSubmit</code></td>
+<td>Before user prompt is processed</td>
+<td>Yes</td>
+<td>command, prompt</td>
+</tr>
+<tr>
+<td><code>PreToolUse</code></td>
+<td>Before tool execution</td>
+<td><strong>Yes</strong> (exit 2)</td>
+<td>command, HTTP, prompt, agent</td>
+</tr>
+<tr>
+<td><code>PostToolUse</code></td>
+<td>After successful tool execution</td>
+<td>No</td>
+<td>command, HTTP</td>
+</tr>
+<tr>
+<td><code>PostToolUseFailure</code></td>
+<td>After failed tool execution</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>PermissionDenied</code></td>
+<td>After a permission denial</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>PermissionRequest</code></td>
+<td>When user approval dialog shown</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>Notification</code></td>
+<td>Alert event</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>Stop</code></td>
+<td>Before Claude finishes responding</td>
+<td><strong>Yes</strong></td>
+<td>command, agent</td>
+</tr>
+<tr>
+<td><code>SubagentStart</code></td>
+<td>Before subagent spawns</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>SubagentStop</code></td>
+<td>Before subagent returns</td>
+<td><strong>Yes</strong></td>
+<td>command, agent</td>
+</tr>
+<tr>
+<td><code>FileChanged</code></td>
+<td>Watched file modified</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>CwdChanged</code></td>
+<td>Working directory changes</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>TaskCompleted</code></td>
+<td>Teammate finishes task</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>TeammateIdle</code></td>
+<td>Teammate has no tasks</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>Elicitation</code></td>
+<td>OAuth URL elicitation</td>
+<td>No</td>
+<td>command</td>
+</tr>
+<tr>
+<td><code>WorktreeCreate</code></td>
+<td>Git worktree created</td>
+<td>No</td>
+<td>command</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Four hook types</strong> (not just shell scripts):</p>
+<ol>
+<li><strong>Command hooks</strong> — Shell scripts receiving JSON on stdin. Exit code 0 = allow, 2 = block.</li>
+<li><strong>HTTP hooks</strong> — POST requests with JSON body to external endpoints. SSRF-guarded, 5s timeout.</li>
+<li><strong>Prompt hooks</strong> — Single-turn LLM evaluation. The hook is a yes/no decision prompt.</li>
+<li><strong>Agent hooks</strong> — Spawns a subagent with tools for verification. The subagent decides.</li>
+</ol>
+<p><strong>Hook response protocol (JSON on stdout):</strong></p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;continue&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;suppressOutput&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;approve&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Command is safe&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;systemMessage&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Optional message injected into conversation&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;hookSpecificOutput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;hookEventName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;PreToolUse&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;permissionDecision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;allow&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;async&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;asyncTimeout&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5000</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Post-turn hook execution order:</strong>
+1. Stop hooks → can block continuation
+2. TaskCompleted hooks (teammate mode)
+3. TeammateIdle hooks
+4. Side effects: prompt suggestion, memory extraction, auto-dream trigger, computer-use cleanup</p>
+<p><strong>Multi-CLI implication:</strong> Hooks are the orchestration nervous system. The Orchestrator uses <code>TaskCompleted</code> hooks to know when a specialist finishes. <code>TeammateIdle</code> hooks trigger task reassignment. <code>PreToolUse</code> hooks in the Security CLI block any write operations. <code>PostToolUse</code> hooks in the Validator CLI auto-run tests after every code change. Hooks transform the query engine from a generic loop into a domain-specific workflow engine.</p>
+<h3 id="layer-7-the-memory-system">Layer 7: The Memory System</h3>
+<p>Three memory modes, each with different persistence and scope:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Behavior</th>
+<th>Location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Auto Only</strong></td>
+<td>Single directory with MEMORY.md index</td>
+<td><code>~/.claude/projects/&lt;slug&gt;/memory/</code></td>
+</tr>
+<tr>
+<td><strong>Team + Auto</strong></td>
+<td>Combined prompt from team + auto directories</td>
+<td>Team dir + auto dir</td>
+</tr>
+<tr>
+<td><strong>Kairos (Assistant)</strong></td>
+<td>Append-only daily log, nightly <code>/dream</code> consolidation</td>
+<td>Kairos-specific</td>
+</tr>
+</tbody>
+</table>
+<p><strong>MEMORY.md as index (not storage):</strong>
+- Maximum 200 lines / 25KB
+- Each entry is a one-line pointer to a memory file
+- Memory files have YAML frontmatter (type, description, importance)
+- Four types: <code>user</code>, <code>feedback</code>, <code>project</code>, <code>reference</code></p>
+<p><strong>Auto-memory extraction:</strong>
+- Spawns a forked subagent in background
+- Subagent gets: Read, Grep, Glob, WebFetch, Write (to memory dir only)
+- Triggers periodically (token-based: minimum 10K tokens, 5K between updates, 3 tool calls between)
+- Shares parent's prompt cache for efficiency</p>
+<p><strong>KAIROS_DREAM (auto-consolidation):</strong>
+- 24-hour cooldown between dreams
+- 5-session minimum before first dream
+- 4-phase pipeline: <strong>orient</strong> → <strong>gather</strong> → <strong>consolidate</strong> → <strong>prune</strong>
+- PID-locked to prevent concurrent dreams
+- Updates MEMORY.md with consolidated insights</p>
+<p><strong>Multi-CLI implication:</strong> Each CLI has private memory (its own MEMORY.md). The Security CLI remembers vulnerability patterns across sessions. The Coder CLI remembers refactoring decisions. The shared memory bus (Chapter 14) is separate from private memory — it is typed, schema-validated shared state for cross-CLI coordination.</p>
+<h3 id="layer-8-the-state-management-system">Layer 8: The State Management System</h3>
+<p>Custom pub/sub store with approximately 400 <code>AppState</code> fields. The store is not Redux, not MobX — it is a custom implementation using <code>useSyncExternalStore</code> for React binding.</p>
+<p>Key state categories:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session</td>
+<td>sessionId, model, permissionMode, isInteractive</td>
+</tr>
+<tr>
+<td>Conversation</td>
+<td>messages, toolResults, thinkingBlocks, tokenUsage</td>
+</tr>
+<tr>
+<td>UI</td>
+<td>loadingState, spinnerText, inputMode, themeName</td>
+</tr>
+<tr>
+<td>Cost</td>
+<td>inputTokens, outputTokens, costUSD, cacheHits</td>
+</tr>
+<tr>
+<td>Agent</td>
+<td>activeSubagents, teammateStatus, taskList</td>
+</tr>
+<tr>
+<td>Permission</td>
+<td>denialTracking, autoClassifierResults</td>
+</tr>
+</tbody>
+</table>
+<p>State changes trigger side effects: sync to SDK clients, persist settings, update UI components, emit telemetry.</p>
+<h3 id="layer-9-the-ui-layer-reactink">Layer 9: The UI Layer (React/Ink)</h3>
+<p>89+ React hooks powering a terminal-based UI built on Ink. This layer is the most likely to be stripped or replaced in specialized CLIs — the Security CLI might output structured JSON instead of a TUI, the Orchestrator might use a custom dashboard.</p>
+<p>Key components:
+- <code>useStreamingResponse</code> — Real-time display of model output
+- <code>useToolExecution</code> — Status indicators during tool runs
+- <code>usePermissionDialog</code> — User approval prompts
+- <code>useCompactionIndicator</code> — Visual feedback during compaction</p>
+<hr />
+<h2 id="22-the-10-extension-points">2.2 The 10 Extension Points</h2>
+<p>Claude Code's architecture exposes 10 distinct extension points, ordered from lowest to highest modification effort:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Extension Point</th>
+<th>Mechanism</th>
+<th>Effort</th>
+<th>Scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>CLAUDE.md</strong></td>
+<td>Natural language instructions</td>
+<td>Zero code</td>
+<td>Behavior guidance</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>Rules</strong></td>
+<td>Path-scoped markdown with YAML frontmatter</td>
+<td>Zero code</td>
+<td>Coding standards</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>Settings</strong></td>
+<td>JSON configuration (permissions, env, hooks)</td>
+<td>Zero code</td>
+<td>Guardrails, env</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>Hooks</strong></td>
+<td>Shell scripts/HTTP/prompts at lifecycle events</td>
+<td>Shell scripts</td>
+<td>Automation</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>Skills</strong></td>
+<td>Packaged workflows as <code>/commands</code></td>
+<td>Markdown + config</td>
+<td>Workflows</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>Agents</strong></td>
+<td>Specialized subagent definitions</td>
+<td>Markdown + config</td>
+<td>Delegation</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>MCP Servers</strong></td>
+<td>External tool providers via JSON-RPC</td>
+<td>Any language</td>
+<td>New capabilities</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>Tool Registry</strong></td>
+<td>Add/remove/modify tools in <code>tools.ts</code></td>
+<td>TypeScript</td>
+<td>Tool behavior</td>
+</tr>
+<tr>
+<td>9</td>
+<td><strong>Permission Engine</strong></td>
+<td>Custom permission logic in <code>permissions/</code></td>
+<td>TypeScript</td>
+<td>Security model</td>
+</tr>
+<tr>
+<td>10</td>
+<td><strong>Query Engine</strong></td>
+<td>Modify the agentic loop in <code>query.ts</code></td>
+<td>TypeScript</td>
+<td>Core behavior</td>
+</tr>
+</tbody>
+</table>
+<p><strong>For multi-CLI systems:</strong> Extension points 1–7 require zero source code changes. You create 8 different configurations of the same Claude Code binary. Extension points 8–10 require forking — used when a CLI needs tools or behaviors that cannot be achieved through configuration alone.</p>
+<p><strong>Practical guideline:</strong> Start with configuration (points 1–7). Only fork when you hit a wall that configuration cannot solve. The most common reasons to fork:</p>
+<ul>
+<li>A tool needs to influence the loop's next decision (not just return a result)</li>
+<li>You need permission semantics beyond allow/deny (budget-based, time-based, role-based)</li>
+<li>You need to strip capabilities for compliance (no web access, no bash outside sandbox)</li>
+<li>You need deep telemetry or billing gates in the execution path</li>
+</ul>
+<hr />
+<h2 id="23-streaming-tool-execution">2.3 Streaming Tool Execution</h2>
+<p>This is Claude Code's most distinctive architectural innovation and the one most often misunderstood.</p>
+<p>Traditional agentic systems (LangChain, AutoGPT, most frameworks):
+1. Send prompt to model
+2. Wait for complete response
+3. Parse tool calls from response
+4. Execute tools
+5. Send results back</p>
+<p>Claude Code's <code>StreamingToolExecutor</code>:
+1. Send prompt to model
+2. As response streams in, parse tool calls <strong>during</strong> streaming
+3. Start executing tools <strong>before the response is complete</strong>
+4. Buffer results in tool order for deterministic output</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="kd">class</span><span class="w"> </span><span class="nx">StreamingToolExecutor</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">addTool</span><span class="p">(</span><span class="nx">block</span><span class="p">,</span><span class="w"> </span><span class="nx">assistantMessage</span><span class="p">)</span><span class="w">   </span><span class="c1">// Called DURING streaming</span>
+<span class="w">  </span><span class="nx">getRemainingResults</span><span class="p">()</span><span class="w">              </span><span class="c1">// Yields results in tool-call order</span>
+
+<span class="w">  </span><span class="c1">// Concurrency control:</span>
+<span class="w">  </span><span class="c1">// - Tools with isConcurrencySafe=true → run in parallel</span>
+<span class="w">  </span><span class="c1">// - Tools with isConcurrencySafe=false → exclusive access</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Why this matters:</strong> When Claude returns three tool calls in one response — say, Read file A, Read file B, and Grep for pattern C — the streaming executor starts reading file A as soon as that tool_use block is complete in the stream, even while file B and pattern C are still being generated by the model. Read and Grep are both <code>isConcurrencySafe=true</code>, so all three execute in parallel.</p>
+<p><strong>Concurrency rules:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>isConcurrencySafe</th>
+<th>isReadOnly</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read</td>
+<td>true</td>
+<td>true</td>
+<td>Pure observation, no side effects</td>
+</tr>
+<tr>
+<td>Grep</td>
+<td>true</td>
+<td>true</td>
+<td>Pure observation</td>
+</tr>
+<tr>
+<td>Glob</td>
+<td>true</td>
+<td>true</td>
+<td>Pure observation</td>
+</tr>
+<tr>
+<td>WebFetch</td>
+<td>true</td>
+<td>true</td>
+<td>External read, no local side effects</td>
+</tr>
+<tr>
+<td>Edit</td>
+<td>false</td>
+<td>false</td>
+<td>Modifies files, could conflict</td>
+</tr>
+<tr>
+<td>Write</td>
+<td>false</td>
+<td>false</td>
+<td>Modifies files, could conflict</td>
+</tr>
+<tr>
+<td>Bash</td>
+<td>dynamic</td>
+<td>dynamic</td>
+<td>Depends on command analysis</td>
+</tr>
+<tr>
+<td>Agent</td>
+<td>true</td>
+<td>false</td>
+<td>Separate process, isolated context</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Max concurrency:</strong> <code>CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY</code> (default 10). Adjustable for machines with more or fewer cores.</p>
+<p><strong>Multi-CLI implication:</strong> The Coder CLI benefits most from streaming execution — it often generates multiple file reads followed by edits. RCode's <code>tokio::task::JoinSet</code> provides true OS-level parallelism for this pattern, executing tools across CPU cores rather than on JavaScript's single-threaded event loop. This is one of the primary performance advantages of the Rust rewrite.</p>
+<hr />
+<h2 id="24-the-complete-request-trace">2.4 The Complete Request Trace</h2>
+<p>Let's trace a single request through all 9 layers. You type:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Fix the off-by-one error in src/parser.py line 42
+</code></pre></div>
+
+<p><strong>Layer 1 — Entry:</strong> The Ink TUI captures your input, wraps it as a user message.</p>
+<p><strong>Layer 3 — Context Assembly</strong> (~50ms):
+- CLAUDE.md loaded (42 lines → ~150 tokens)
+- Python rule matched (<code>src/parser.py</code> → <code>**/*.py</code>) → <code>python.md</code> loaded (~200 tokens)
+- Git context: branch <code>fix/parser-bug</code>, 1 modified file (~100 tokens)
+- Tool schemas: 52 tools → ~10,000 tokens
+- Total system prompt: ~12,000 tokens</p>
+<p><strong>Layer 2 — Query Engine, Iteration 1:</strong></p>
+<p>API call (~700ms first token). Claude returns:
+- Thinking block: "Let me read the file to understand the bug around line 42"
+- Tool_use block: <code>Read(file_path="/src/parser.py")</code></p>
+<p><strong>Layer 5 — Permission:</strong> <code>Read(*)</code> is in the allow list → allowed (~1ms)</p>
+<p><strong>Layer 6 — Hooks:</strong> No PreToolUse hooks configured for Read → skip</p>
+<p><strong>Layer 4 — Tool Execution:</strong> File read (~10ms). 200 lines → ~800 tokens.</p>
+<p><strong>Layer 6 — Hooks:</strong> No PostToolUse hooks for Read → skip</p>
+<p><strong>Layer 8 — State:</strong> Update token counter (+800 tokens for tool result)</p>
+<p><strong>Layer 2 — Query Engine, Iteration 2:</strong></p>
+<p>API call (~700ms). Claude returns:
+- Thinking: "Found the bug — the loop iterates one element too far"
+- Text: "I found the off-by-one error..."
+- Tool_use: <code>Edit(file_path="/src/parser.py", old_string="for i in range(len(items))", new_string="for i in range(len(items) - 1)")</code></p>
+<p><strong>Layer 5 — Permission:</strong> Edit uses default mode → auto-allowed in this config</p>
+<p><strong>Layer 6 — PreToolUse hooks:</strong> None for Edit → skip</p>
+<p><strong>Layer 4 — Tool Execution:</strong> String replacement (~5ms). Success.</p>
+<p><strong>Layer 6 — PostToolUse hooks:</strong> <code>auto-lint-python.sh</code> fires (~200ms):
+- Reads JSON input from stdin
+- Detects <code>.py</code> extension
+- Runs <code>ruff check --fix src/parser.py</code>
+- Runs <code>ruff format src/parser.py</code>
+- Exit code 0</p>
+<p><strong>Layer 2 — Query Engine, Iteration 3:</strong></p>
+<p>API call. Claude returns:
+- Tool_use: <code>Bash(command="python -m pytest tests/test_parser.py -x")</code></p>
+<p><strong>Layer 5 — Permission:</strong> <code>Bash(python -m pytest *)</code> is in the allow list → allowed</p>
+<p><strong>Layer 6 — PreToolUse hooks:</strong> <code>block-destructive.sh</code> fires (~50ms):
+- Reads JSON input
+- Checks <code>python -m pytest tests/test_parser.py -x</code> against destructive patterns
+- No match → exit code 0</p>
+<p><strong>Layer 4 — Tool Execution:</strong> Bash (~3s). Output: "5 passed, 0 failed"</p>
+<p><strong>Layer 2 — Query Engine, Iteration 4:</strong></p>
+<p>API call. Claude returns:
+- Text only: "Fixed the off-by-one error in <code>src/parser.py:42</code>. The loop was iterating one element too far. All 5 tests pass."
+- <code>stop_reason: end_turn</code></p>
+<p><strong>Layer 2 — Post-loop:</strong> Stop hooks → memory extraction check → no auto-dream (cooldown not elapsed)</p>
+<p><strong>Layer 9 — UI:</strong> Final text rendered to terminal.</p>
+<p><strong>Total: 4 iterations, 3 tool calls, ~8 seconds, ~$0.05 (Sonnet)</strong></p>
+<hr />
+<h2 id="25-rcode-the-rust-architecture-side-by-side">2.5 RCode: The Rust Architecture Side-by-Side</h2>
+<p>RCode reimplements the Claude Code architecture in Rust across 32 modules. The architectural layers are the same; the implementation differs in critical performance dimensions.</p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>Claude Code (TypeScript)</th>
+<th>RCode (Rust)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Runtime</strong></td>
+<td>Node.js (V8, single-threaded event loop)</td>
+<td>Tokio (multi-threaded async runtime)</td>
+</tr>
+<tr>
+<td><strong>Parallelism</strong></td>
+<td>Cooperative (microtask queue, setTimeout)</td>
+<td>Preemptive (OS threads via JoinSet)</td>
+</tr>
+<tr>
+<td><strong>Tool execution</strong></td>
+<td>StreamingToolExecutor (single thread)</td>
+<td>JoinSet::spawn (true multi-core)</td>
+</tr>
+<tr>
+<td><strong>Memory footprint</strong></td>
+<td>~200MB (Node.js + React/Ink + npm deps)</td>
+<td>~15MB (static binary)</td>
+</tr>
+<tr>
+<td><strong>Startup time</strong></td>
+<td>~300ms (dynamic imports, plugin loading)</td>
+<td>~10ms (no runtime, no JIT)</td>
+</tr>
+<tr>
+<td><strong>Binary size</strong></td>
+<td>~60MB source map + ~200MB installed</td>
+<td>~6MB release binary</td>
+</tr>
+<tr>
+<td><strong>Code intelligence</strong></td>
+<td>Limited (no built-in AST)</td>
+<td>tree-sitter (Rust, Python, JS, TS, Go)</td>
+</tr>
+<tr>
+<td><strong>Plugin system</strong></td>
+<td>JavaScript (dynamic import)</td>
+<td>MLua (embedded Lua 5.4 VM)</td>
+</tr>
+<tr>
+<td><strong>TUI</strong></td>
+<td>React/Ink (89 hooks)</td>
+<td>Ratatui (Rust-native terminal rendering)</td>
+</tr>
+<tr>
+<td><strong>Config</strong></td>
+<td>JSON (settings.json)</td>
+<td>TOML + JSON (figment layered config)</td>
+</tr>
+<tr>
+<td><strong>Persistence</strong></td>
+<td>SQLite via better-sqlite3</td>
+<td>SQLite via rusqlite</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Module map (32 directories):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose</th>
+<th>Claude Code Equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agents/</code></td>
+<td>Agent definitions and spawning</td>
+<td><code>tools/AgentTool/</code></td>
+</tr>
+<tr>
+<td><code>engine/</code></td>
+<td>Agentic loop (query engine)</td>
+<td><code>query.ts</code>, <code>QueryEngine.ts</code></td>
+</tr>
+<tr>
+<td><code>swarm/</code></td>
+<td>coordinator.rs, manager.rs, team.rs</td>
+<td><code>coordinator/coordinatorMode.ts</code></td>
+</tr>
+<tr>
+<td><code>tasks/</code></td>
+<td>Task type definitions</td>
+<td><code>tools/TaskCreate/</code> etc.</td>
+</tr>
+<tr>
+<td><code>tools/</code></td>
+<td>Tool implementations</td>
+<td><code>tools/*/</code></td>
+</tr>
+<tr>
+<td><code>treesitter/</code></td>
+<td>Code intelligence (5 languages)</td>
+<td>None (RCode advantage)</td>
+</tr>
+<tr>
+<td><code>plugins/</code></td>
+<td>Lua plugin system (MLua)</td>
+<td>Plugin JS loading</td>
+</tr>
+<tr>
+<td><code>memory/</code></td>
+<td>Memory bridge (copilot-mem MCP)</td>
+<td><code>memdir/</code>, <code>services/memory/</code></td>
+</tr>
+<tr>
+<td><code>mcp/</code></td>
+<td>MCP client (JSON-RPC)</td>
+<td><code>services/mcp/</code></td>
+</tr>
+<tr>
+<td><code>permissions/</code></td>
+<td>Permission engine</td>
+<td><code>hooks/useCanUseTool.tsx</code></td>
+</tr>
+<tr>
+<td><code>hooks/</code></td>
+<td>Lifecycle hooks</td>
+<td><code>utils/hooks/</code></td>
+</tr>
+<tr>
+<td><code>skills/</code></td>
+<td>Skill system</td>
+<td>Skills loading</td>
+</tr>
+<tr>
+<td><code>session/</code></td>
+<td>SQLite session store</td>
+<td>Session persistence</td>
+</tr>
+<tr>
+<td><code>settings/</code></td>
+<td>Layered config (figment)</td>
+<td>Settings loading</td>
+</tr>
+<tr>
+<td><code>bridge/</code></td>
+<td>Remote session control</td>
+<td><code>bridge/</code> (33 modules)</td>
+</tr>
+<tr>
+<td><code>watcher/</code></td>
+<td>File system watching (notify)</td>
+<td>FileChanged hooks</td>
+</tr>
+<tr>
+<td><code>tui/</code> + <code>ui/</code> + <code>screens/</code></td>
+<td>Ratatui terminal UI</td>
+<td>React/Ink</td>
+</tr>
+<tr>
+<td><code>intent/</code></td>
+<td>Intent analysis for routing</td>
+<td>Auto-router skill</td>
+</tr>
+<tr>
+<td><code>commands/</code></td>
+<td>Slash commands</td>
+<td><code>commands/</code></td>
+</tr>
+<tr>
+<td><code>cli/</code></td>
+<td>CLI argument parsing</td>
+<td><code>cli.tsx</code></td>
+</tr>
+<tr>
+<td><code>config/</code></td>
+<td>TOML configuration</td>
+<td><code>settings.json</code> loading</td>
+</tr>
+<tr>
+<td><code>llm/</code></td>
+<td>LLM client (streaming SSE)</td>
+<td><code>services/api/claude.ts</code></td>
+</tr>
+<tr>
+<td><code>streaming/</code></td>
+<td>SSE event parsing</td>
+<td>SSE stream parser</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The Rust advantage for multi-CLI:</strong> True OS-level parallelism means the Orchestrator can spawn and monitor 8 specialist CLIs without the event-loop bottleneck. Each specialist runs in its own process with its own Tokio runtime. Communication happens through typed channels or Unix Domain Sockets. The 6MB binary means deployment is trivial — no Node.js installation, no npm dependencies, just a single executable per specialist.</p>
+<hr />
+<h2 id="26-the-20-key-source-files">2.6 The 20 Key Source Files</h2>
+<p>For readers who want to go deeper into the Claude Code source, these 20 files contain the architectural spine:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>File</th>
+<th>Lines</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>entrypoints/cli.tsx</code></td>
+<td>~200</td>
+<td>CLI entry point, fast-path dispatch</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>entrypoints/main.tsx</code></td>
+<td>~800</td>
+<td>Full application boot, React/Ink setup</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>query.ts</code></td>
+<td>~500</td>
+<td>The while-true agentic loop</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>QueryEngine.ts</code></td>
+<td>~300</td>
+<td>Session lifecycle, message accumulation</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>context.ts</code></td>
+<td>~400</td>
+<td>System prompt assembly (9 sources)</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>tools.ts</code></td>
+<td>~600</td>
+<td>Tool registry, assembly pipeline, filtering</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>Tool.ts</code></td>
+<td>~200</td>
+<td>Tool interface definition (40 members)</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>services/api/claude.ts</code></td>
+<td>~800</td>
+<td>API client, SSE streaming, retry logic</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>StreamingToolExecutor.ts</code></td>
+<td>~200</td>
+<td>Concurrent tool execution during streaming</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>hooks/useCanUseTool.tsx</code></td>
+<td>~300</td>
+<td>Permission evaluation cascade</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>utils/permissions/</code></td>
+<td>~400</td>
+<td>Permission pattern matching</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>bashPermissions.ts</code></td>
+<td>~7,200</td>
+<td>Bash command security classifier (tree-sitter AST)</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>coordinator/coordinatorMode.ts</code></td>
+<td>~600</td>
+<td>Multi-agent orchestration mode</td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>services/compact/autoCompact.ts</code></td>
+<td>~300</td>
+<td>Context compaction trigger logic</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>services/memory/extractMemories/</code></td>
+<td>~200</td>
+<td>Auto-memory extraction subagent</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>tasks/DreamTask/DreamTask.ts</code></td>
+<td>~157</td>
+<td>KAIROS_DREAM 4-stage consolidation</td>
+</tr>
+<tr>
+<td>17</td>
+<td><code>constants/betas.ts</code></td>
+<td>~100</td>
+<td>Beta API headers (17 capabilities)</td>
+</tr>
+<tr>
+<td>18</td>
+<td><code>constants/features.ts</code></td>
+<td>~200</td>
+<td>Feature flag definitions (88 flags)</td>
+</tr>
+<tr>
+<td>19</td>
+<td><code>bridge/</code> (33 files)</td>
+<td>~15,000</td>
+<td>Remote session control, CCR multi-session</td>
+</tr>
+<tr>
+<td>20</td>
+<td><code>services/mcp/</code> (23 files)</td>
+<td>~3,000</td>
+<td>MCP client, server discovery, OAuth</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="27-decomposing-the-monolith-for-multi-cli">2.7 Decomposing the Monolith for Multi-CLI</h2>
+<p>The critical insight from this chapter: <strong>Claude Code is not a monolith — it is a framework with pluggable layers.</strong> Building a multi-CLI system does not require building 8 separate applications. It requires configuring the same engine 8 different ways.</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Orchestrator</th>
+<th>Research</th>
+<th>Planner</th>
+<th>Coder</th>
+<th>Security</th>
+<th>Validator</th>
+<th>QA</th>
+<th>Doc</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Entry</td>
+<td>SDK</td>
+<td>MCP</td>
+<td>CLI</td>
+<td>CLI</td>
+<td>CLI</td>
+<td>CLI</td>
+<td>CLI</td>
+<td>CLI</td>
+</tr>
+<tr>
+<td>Query Engine</td>
+<td>Same</td>
+<td>Same</td>
+<td>Same</td>
+<td>Same</td>
+<td>Same</td>
+<td>Same</td>
+<td>Same</td>
+<td>Same</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Orchestration-focused</td>
+<td>Research-focused</td>
+<td>Architecture-focused</td>
+<td>Implementation-focused</td>
+<td>Threat-focused</td>
+<td>Build/test-focused</td>
+<td>Adversarial</td>
+<td>Documentation</td>
+</tr>
+<tr>
+<td>Tools</td>
+<td>6 (Agent, Task, Send)</td>
+<td>5 (Read, Grep, Web)</td>
+<td>5 (Read, Plan, Write)</td>
+<td>10 (Full file/shell)</td>
+<td>6 (Read, Grep, SAST)</td>
+<td>6 (Read, Bash, Test)</td>
+<td>6 (Read, Bash, Fuzz)</td>
+<td>5 (Read, Write, Git)</td>
+</tr>
+<tr>
+<td>Permissions</td>
+<td>Cannot edit files</td>
+<td>Read-only</td>
+<td>Plan mode + write</td>
+<td>Full with deny list</td>
+<td>Read-only + report</td>
+<td>Build commands only</td>
+<td>Test commands only</td>
+<td>Doc dirs only</td>
+</tr>
+<tr>
+<td>Hooks</td>
+<td>TaskCompleted, TeammateIdle</td>
+<td>PostToolUse (cache results)</td>
+<td>Stop (verify plan quality)</td>
+<td>PostToolUse (auto-lint)</td>
+<td>PreToolUse (block writes)</td>
+<td>PostToolUse (run tests)</td>
+<td>PostToolUse (log findings)</td>
+<td>FileChanged (auto-update)</td>
+</tr>
+<tr>
+<td>Memory</td>
+<td>Global task state</td>
+<td>Research cache</td>
+<td>Architecture decisions</td>
+<td>Implementation patterns</td>
+<td>Vulnerability patterns</td>
+<td>Test coverage history</td>
+<td>Edge case library</td>
+<td>Doc style guide</td>
+</tr>
+<tr>
+<td>UI</td>
+<td>Dashboard</td>
+<td>JSON output</td>
+<td>Structured ADR</td>
+<td>Full TUI</td>
+<td>Report format</td>
+<td>Test results</td>
+<td>Finding report</td>
+<td>Markdown</td>
+</tr>
+</tbody>
+</table>
+<p>The query engine — the while-true loop at the heart — is identical across all 8 CLIs. What changes is what surrounds it: the tools it can call, the permissions that govern those tools, the hooks that fire at each lifecycle event, the memory it accumulates, and the context it assembles into the system prompt.</p>
+<p>This is the keystone. Every chapter that follows builds on this decomposition.</p>
+<p><strong>Important note on the 8-CLI example:</strong> The 8 CLIs used throughout this book — Orchestrator, Research, Planner, Coder, Security, Validator, QA, Documentation — are a teaching scaffold. They illustrate the architecture patterns you need to learn. The real system supports <em>any number</em> of domain-specific CLIs: a Doctor CLI that reads medical literature and checks diagnoses against clinical guidelines, a Lawyer CLI that cross-references case law and generates contract clauses, a Therapy CLI that follows CBT protocols, a Finance CLI that models risk scenarios, a DevOps CLI that manages infrastructure. The architecture is the same. The specialization is different. Eight is not a limit — it is a starting point.</p>
+<hr />
+<h2 id="28-the-api-client-and-retry-logic">2.8 The API Client and Retry Logic</h2>
+<p>The API client (<code>services/api/claude.ts</code>, approximately 800 lines) is the bridge between the query engine and the Claude API. Its design decisions directly affect multi-CLI reliability.</p>
+<h3 id="connection-management">Connection Management</h3>
+<p>Claude Code maintains a persistent HTTP/2 connection to the API endpoint. The base URL defaults to <code>https://api.anthropic.com</code> but is overridable via:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ANTHROPIC_BASE_URL</code></td>
+<td>Direct API endpoint override</td>
+</tr>
+<tr>
+<td><code>CLAUDE_CODE_USE_BEDROCK</code></td>
+<td>Route through AWS Bedrock</td>
+</tr>
+<tr>
+<td><code>CLAUDE_CODE_USE_VERTEX</code></td>
+<td>Route through Google Vertex AI</td>
+</tr>
+<tr>
+<td><code>CLAUDE_CODE_USE_FOUNDRY</code></td>
+<td>Route through Anthropic Foundry</td>
+</tr>
+</tbody>
+</table>
+<p>Each provider has different beta header support. Bedrock uses <code>extraBodyParams</code> instead of headers for some capabilities. Vertex's <code>countTokens</code> endpoint only accepts <code>claude-code-20250219</code> and <code>interleaved-thinking</code> headers. These provider differences matter when deploying multi-CLI systems across cloud environments.</p>
+<h3 id="retry-strategy">Retry Strategy</h3>
+<p>The API client implements exponential backoff with jitter for transient failures:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Attempt 1: immediate
+Attempt 2: wait 1s + random(0, 0.5s)
+Attempt 3: wait 2s + random(0, 1.0s)
+Attempt 4: wait 4s + random(0, 2.0s)
+(max 4 retries)
+</code></pre></div>
+
+<p>Retryable status codes: <code>429</code> (rate limited), <code>500</code>, <code>502</code>, <code>503</code>, <code>529</code> (overloaded). The <code>Retry-After</code> header is respected when present — if the API says "wait 30 seconds," the client waits 30 seconds regardless of the exponential backoff schedule.</p>
+<p>Non-retryable errors (fail immediately): <code>400</code> (bad request — schema violation), <code>401</code> (invalid API key), <code>403</code> (permission denied), <code>404</code>.</p>
+<p><strong>Multi-CLI implication:</strong> Each specialist CLI has its own API connection. Rate limits are per-API-key, not per-connection. A multi-CLI system with 8 specialists hitting the same API key can exhaust rate limits 8x faster. Solutions:
+- Use separate API keys per CLI (if your plan supports it)
+- Use <code>task-budgets</code> to limit token consumption per specialist
+- Route through different providers: Coder through Bedrock, Research through direct API, Planner through Vertex
+- Implement a token budget manager in the Orchestrator that gates specialist requests</p>
+<h3 id="session-headers">Session Headers</h3>
+<p>Every API request includes:
+- <code>X-Claude-Code-Session-Id</code> — Unique session identifier for proxy aggregation and debugging
+- <code>Anthropic-Organization-Id</code> — Organization routing (if applicable)
+- <code>Anthropic-Beta</code> — Comma-separated list of enabled beta features</p>
+<p>The session ID is critical for multi-CLI debugging: when something goes wrong, you can correlate API logs across all specialist CLIs by their session IDs. The Orchestrator should log all specialist session IDs for traceability.</p>
+<h3 id="token-counting">Token Counting</h3>
+<p>Claude Code tracks token usage with per-turn granularity:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">TurnCost</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">inputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">outputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">cacheReadTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">cacheCreationTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">thinkingTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">model</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">costUSD</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>costUSD</code> field is computed using the model's known pricing. The running total is displayed by <code>/stats</code> and persisted to the session store. For multi-CLI systems, the Orchestrator should aggregate costs across all specialists to provide a single cost dashboard for each user request.</p>
+<hr />
+<h2 id="29-the-sse-streaming-protocol">2.9 The SSE Streaming Protocol</h2>
+<p>Understanding the wire protocol between Claude Code and the API is necessary for diagnosing performance issues and building custom CLIs that communicate with the same API.</p>
+<p>The Claude API streams responses as <strong>Server-Sent Events (SSE)</strong>. Each event contains a JSON payload with a specific type:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>event: message_start
+data: {&quot;type&quot;:&quot;message_start&quot;,&quot;message&quot;:{&quot;id&quot;:&quot;msg_01...&quot;,&quot;model&quot;:&quot;claude-opus-4-6&quot;,...}}
+
+event: content_block_start
+data: {&quot;type&quot;:&quot;content_block_start&quot;,&quot;index&quot;:0,&quot;content_block&quot;:{&quot;type&quot;:&quot;thinking&quot;,&quot;thinking&quot;:&quot;&quot;}}
+
+event: content_block_delta
+data: {&quot;type&quot;:&quot;content_block_delta&quot;,&quot;index&quot;:0,&quot;delta&quot;:{&quot;type&quot;:&quot;thinking_delta&quot;,&quot;thinking&quot;:&quot;Let me analyze...&quot;}}
+
+event: content_block_stop
+data: {&quot;type&quot;:&quot;content_block_stop&quot;,&quot;index&quot;:0}
+
+event: content_block_start
+data: {&quot;type&quot;:&quot;content_block_start&quot;,&quot;index&quot;:1,&quot;content_block&quot;:{&quot;type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;&quot;}}
+
+event: content_block_delta
+data: {&quot;type&quot;:&quot;content_block_delta&quot;,&quot;index&quot;:1,&quot;delta&quot;:{&quot;type&quot;:&quot;text_delta&quot;,&quot;text&quot;:&quot;I&#39;ll fix the bug...&quot;}}
+
+event: content_block_start
+data: {&quot;type&quot;:&quot;content_block_start&quot;,&quot;index&quot;:2,&quot;content_block&quot;:{&quot;type&quot;:&quot;tool_use&quot;,&quot;id&quot;:&quot;toolu_01...&quot;,&quot;name&quot;:&quot;Read&quot;,&quot;input&quot;:{}}}
+
+event: content_block_delta
+data: {&quot;type&quot;:&quot;content_block_delta&quot;,&quot;index&quot;:2,&quot;delta&quot;:{&quot;type&quot;:&quot;input_json_delta&quot;,&quot;partial_json&quot;:&quot;{\&quot;file_path\&quot;:\&quot;/src/main.py\&quot;}&quot;}}
+
+event: content_block_stop
+data: {&quot;type&quot;:&quot;content_block_stop&quot;,&quot;index&quot;:2}
+
+event: message_delta
+data: {&quot;type&quot;:&quot;message_delta&quot;,&quot;delta&quot;:{&quot;stop_reason&quot;:&quot;tool_use&quot;},&quot;usage&quot;:{&quot;output_tokens&quot;:127}}
+
+event: message_stop
+data: {&quot;type&quot;:&quot;message_stop&quot;}
+</code></pre></div>
+
+<p>A single response can contain multiple content blocks of different types:</p>
+<table>
+<thead>
+<tr>
+<th>Block Type</th>
+<th>Purpose</th>
+<th>Processing</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>thinking</code></td>
+<td>Extended reasoning (chain of thought)</td>
+<td>Displayed if <code>/thinking</code> enabled, otherwise buffered silently</td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td>Human-readable response</td>
+<td>Displayed character-by-character as deltas arrive</td>
+</tr>
+<tr>
+<td><code>tool_use</code></td>
+<td>Tool call request</td>
+<td>Accumulated until <code>content_block_stop</code>, then executed</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>interleaved-thinking-2025-05-14</code> beta header enables thinking blocks to appear <em>between</em> other content blocks, not just at the start. This allows the model to reason between tool calls:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>thinking → &quot;Let me read the file...&quot;
+tool_use → Read(src/auth.py)
+thinking → &quot;I see the bug on line 47, the comparison uses == instead of is...&quot;
+tool_use → Edit(src/auth.py, ...)
+text → &quot;Fixed the identity comparison bug.&quot;
+</code></pre></div>
+
+<p><strong>Stream watchdog:</strong> The <code>CLAUDE_ENABLE_STREAM_WATCHDOG</code> environment variable enables a watchdog that monitors for stalled streams. If no SSE event arrives within a timeout window, the watchdog terminates the connection and triggers a retry. This is critical for production multi-CLI systems where a stalled API connection should not block the entire pipeline.</p>
+<p><strong>Beta headers sent with every request:</strong></p>
+<p>Claude Code sends up to 17 beta headers with each API request, enabling capabilities that are not yet part of the stable API:</p>
+<table>
+<thead>
+<tr>
+<th>Header</th>
+<th>What It Enables</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>claude-code-20250219</code></td>
+<td>Base Claude Code capability</td>
+</tr>
+<tr>
+<td><code>interleaved-thinking-2025-05-14</code></td>
+<td>Thinking blocks between content blocks</td>
+</tr>
+<tr>
+<td><code>context-1m-2025-08-07</code></td>
+<td>1M token context window (opt-in)</td>
+</tr>
+<tr>
+<td><code>structured-outputs-2025-12-15</code></td>
+<td>JSON schema enforcement on output</td>
+</tr>
+<tr>
+<td><code>web-search-2025-03-05</code></td>
+<td>Built-in web search capability</td>
+</tr>
+<tr>
+<td><code>effort-2025-11-24</code></td>
+<td>Effort levels (low/medium/high/max)</td>
+</tr>
+<tr>
+<td><code>task-budgets-2026-03-13</code></td>
+<td>Per-task token budgets</td>
+</tr>
+<tr>
+<td><code>fast-mode-2026-02-01</code></td>
+<td>Reduced-latency generation</td>
+</tr>
+<tr>
+<td><code>token-efficient-tools-2026-03-28</code></td>
+<td>Compressed tool schemas</td>
+</tr>
+<tr>
+<td><code>advisor-tool-2026-03-01</code></td>
+<td>Separate advisor model for review</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Multi-CLI implication:</strong> Different CLIs can use different beta headers. The Research CLI benefits from <code>context-1m</code> (massive context for RAG). The Validator CLI uses <code>fast-mode</code> (quick test result processing). The Planner CLI uses <code>effort</code> set to <code>max</code> for deep architectural reasoning. The Orchestrator uses <code>task-budgets</code> to control per-specialist token spend.</p>
+<hr />
+<h2 id="29-cost-economics-of-the-architecture">2.9 Cost Economics of the Architecture</h2>
+<p>Understanding where tokens go is essential for engineering a cost-effective multi-CLI system.</p>
+<h3 id="token-budget-breakdown-single-turn">Token Budget Breakdown (Single Turn)</h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Input Tokens</th>
+<th>Output Tokens</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>System prompt</td>
+<td>7,000–15,000</td>
+<td>0</td>
+<td>Paid every turn (cacheable)</td>
+</tr>
+<tr>
+<td>Conversation history</td>
+<td>10,000–150,000</td>
+<td>0</td>
+<td>Grows with each turn</td>
+</tr>
+<tr>
+<td>Thinking blocks</td>
+<td>0</td>
+<td>500–5,000</td>
+<td>Extended reasoning</td>
+</tr>
+<tr>
+<td>Text response</td>
+<td>0</td>
+<td>100–2,000</td>
+<td>Human-readable output</td>
+</tr>
+<tr>
+<td>Tool calls</td>
+<td>0</td>
+<td>200–1,000</td>
+<td>Tool name + input JSON</td>
+</tr>
+<tr>
+<td>Tool results</td>
+<td>500–10,000</td>
+<td>0</td>
+<td>Appended as next turn input</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cost-per-model-per-million-tokens-as-of-2026">Cost Per Model (per million tokens, as of 2026)</h3>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Input</th>
+<th>Output</th>
+<th>Thinking</th>
+<th>Cache Read</th>
+<th>Cache Write</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 4.6</td>
+<td>$15</td>
+<td>$75</td>
+<td>$15</td>
+<td>$1.50</td>
+<td>$18.75</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>$3</td>
+<td>$15</td>
+<td>$3</td>
+<td>$0.30</td>
+<td>$3.75</td>
+</tr>
+<tr>
+<td>Haiku 4.5</td>
+<td>$0.80</td>
+<td>$4</td>
+<td>$0.80</td>
+<td>$0.08</td>
+<td>$1.00</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cost-per-operation-typical">Cost Per Operation (Typical)</h3>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Turns</th>
+<th>Input Tokens</th>
+<th>Output Tokens</th>
+<th>Cost (Sonnet)</th>
+<th>Cost (Opus)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read a file</td>
+<td>1</td>
+<td>~3,000</td>
+<td>~100</td>
+<td>$0.01</td>
+<td>$0.05</td>
+</tr>
+<tr>
+<td>Search codebase</td>
+<td>1</td>
+<td>~2,000</td>
+<td>~300</td>
+<td>$0.01</td>
+<td>$0.05</td>
+</tr>
+<tr>
+<td>Fix a bug</td>
+<td>4–6</td>
+<td>~30,000</td>
+<td>~5,000</td>
+<td>$0.17</td>
+<td>$0.83</td>
+</tr>
+<tr>
+<td>Code review</td>
+<td>3–5</td>
+<td>~20,000</td>
+<td>~3,000</td>
+<td>$0.11</td>
+<td>$0.53</td>
+</tr>
+<tr>
+<td>Architecture analysis</td>
+<td>5–8</td>
+<td>~50,000</td>
+<td>~10,000</td>
+<td>$0.30</td>
+<td>$1.50</td>
+</tr>
+<tr>
+<td>Full feature implementation</td>
+<td>10–20</td>
+<td>~100,000</td>
+<td>~20,000</td>
+<td>$0.60</td>
+<td>$3.00</td>
+</tr>
+</tbody>
+</table>
+<h3 id="multi-cli-cost-optimization-strategy">Multi-CLI Cost Optimization Strategy</h3>
+<p>The cost advantage of multi-CLI is counterintuitive. Running 8 CLIs sounds 8x more expensive. In practice, it is often <em>cheaper</em> because:</p>
+<ol>
+<li>
+<p><strong>Smaller context per CLI.</strong> A specialist CLI carries 20K tokens of domain context, not 150K tokens of everything. Smaller context = cheaper per turn.</p>
+</li>
+<li>
+<p><strong>Model mixing.</strong> The Orchestrator runs on Opus ($15/$75) because decision quality matters. The Validator runs on Haiku ($0.80/$4) because test results are deterministic. The Coder runs on Sonnet ($3/$15) as a balanced choice. A typical task might use:</p>
+</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>CLI</th>
+<th>Model</th>
+<th>Turns</th>
+<th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Orchestrator</td>
+<td>Opus</td>
+<td>3</td>
+<td>$0.45</td>
+</tr>
+<tr>
+<td>Research</td>
+<td>Sonnet</td>
+<td>4</td>
+<td>$0.20</td>
+</tr>
+<tr>
+<td>Planner</td>
+<td>Opus</td>
+<td>2</td>
+<td>$0.30</td>
+</tr>
+<tr>
+<td>Coder</td>
+<td>Sonnet</td>
+<td>8</td>
+<td>$0.48</td>
+</tr>
+<tr>
+<td>Security</td>
+<td>Sonnet</td>
+<td>3</td>
+<td>$0.15</td>
+</tr>
+<tr>
+<td>Validator</td>
+<td>Haiku</td>
+<td>5</td>
+<td>$0.05</td>
+</tr>
+<tr>
+<td>QA</td>
+<td>Sonnet</td>
+<td>3</td>
+<td>$0.12</td>
+</tr>
+<tr>
+<td>Doc</td>
+<td>Haiku</td>
+<td>4</td>
+<td>$0.04</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td></td>
+<td><strong>32</strong></td>
+<td><strong>$1.79</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The same task on a single Opus CLI with a saturated context window: ~15 turns at ~$1.50/turn = <strong>$22.50</strong>. The multi-CLI approach is <strong>12x cheaper</strong> because it uses the right model for each subtask and keeps contexts lean.</p>
+<ol>
+<li>
+<p><strong>Prompt caching.</strong> Each specialist CLI's system prompt is stable across turns (same tools, same CLAUDE.md, same rules). High cache hit rates mean the 7,000–15,000 token system prompt is paid at the cache read rate (1/10th the input rate for Opus), not the full input rate.</p>
+</li>
+<li>
+<p><strong><code>task-budgets</code> beta header.</strong> The <code>task-budgets-2026-03-13</code> header enables per-spawned-task token budgets. The Orchestrator can allocate 50K tokens to the Validator and 200K tokens to the Coder, preventing runaway costs from any single specialist.</p>
+</li>
+</ol>
+<hr />
+<h2 id="210-architecture-principles-for-what-follows">2.10 Architecture Principles for What Follows</h2>
+<p>Seven principles extracted from this architecture govern every design decision in the remaining 25 chapters:</p>
+<p><strong>Principle 1: The loop is universal; the configuration is specific.</strong> The query engine is the same for every CLI. Specialization happens through tools, permissions, hooks, memory, and context — never by modifying the loop itself.</p>
+<p><strong>Principle 2: Tools define capability boundaries.</strong> A CLI that does not have the Edit tool cannot modify files. A CLI that does not have the Bash tool cannot execute commands. Tool registration is the primary mechanism for enforcing what a specialist can and cannot do.</p>
+<p><strong>Principle 3: Permissions enforce trust boundaries.</strong> Even if a CLI has the Bash tool, deny rules can restrict it to specific command patterns. Permission layers (managed → user → project → local) allow team-level and individual-level control.</p>
+<p><strong>Principle 4: Hooks are the nervous system.</strong> PreToolUse hooks are guardrails. PostToolUse hooks are automation. TaskCompleted hooks are orchestration signals. FileChanged hooks are reactive triggers. The hook system transforms a generic loop into a domain-specific workflow engine.</p>
+<p><strong>Principle 5: Context is expensive and finite.</strong> Every token in the system prompt is paid on every API call. Every tool result grows the conversation history. Lean CLAUDE.md files, targeted searches, and prompt caching are not optimizations — they are requirements.</p>
+<p><strong>Principle 6: Streaming is not optional.</strong> The StreamingToolExecutor's ability to begin tool execution during response generation is a fundamental performance advantage. Any custom CLI implementation must preserve this capability.</p>
+<p><strong>Principle 7: The number of CLIs is unlimited.</strong> Eight is the teaching example. The architecture supports 2 CLIs or 200. A Doctor CLI, a Lawyer CLI, a Therapy CLI, a Finance CLI — any domain that benefits from a specialized system prompt, curated tool set, and dedicated context window is a candidate for its own CLI. The patterns in this book apply equally to all of them.</p>
+<hr />
+<h2 id="212-the-skill-and-plugin-loading-architecture">2.12 The Skill and Plugin Loading Architecture</h2>
+<p>Skills and plugins are the highest-level extension points that do not require source code modification. Understanding how they load is essential for building CLI-specific workflows.</p>
+<h3 id="skill-discovery-and-loading">Skill Discovery and Loading</h3>
+<p>Skills are discovered from multiple locations, merged in priority order:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>1. Managed settings skills (enterprise-deployed, highest priority)
+2. CLI flag skills (--skills argument, session-only)
+3. Project skills (.claude/skills/*/SKILL.md)
+4. User skills (~/.claude/skills/*/SKILL.md)
+5. Plugin-provided skills (.claude-plugin/marketplace.json)
+</code></pre></div>
+
+<p>Each skill's <code>SKILL.md</code> file has YAML frontmatter controlling its behavior:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="nn">---</span>
+<span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">security-audit</span>
+<span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;OWASP/CWE</span><span class="nv"> </span><span class="s">security</span><span class="nv"> </span><span class="s">analysis.</span><span class="nv"> </span><span class="s">Use</span><span class="nv"> </span><span class="s">when</span><span class="nv"> </span><span class="s">user</span><span class="nv"> </span><span class="s">says</span><span class="nv"> </span><span class="s">&#39;audit&#39;,</span><span class="nv"> </span><span class="s">&#39;security&#39;,</span><span class="nv"> </span><span class="s">&#39;vulnerabilities&#39;.&quot;</span>
+<span class="nt">argument-hint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;[target-path]&quot;</span>
+<span class="nt">user-invocable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="nt">allowed-tools</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Read, Grep, Glob, Bash, Agent</span>
+<span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opus</span>
+<span class="nt">effort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span>
+<span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fork</span>
+<span class="nt">agent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">general-purpose</span>
+<span class="nt">paths</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;src/auth/**&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;src/middleware/**&quot;</span>
+<span class="nn">---</span>
+</code></pre></div>
+
+<p><strong>Key frontmatter fields for multi-CLI:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Effect on Skill Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>allowed-tools</code></td>
+<td>Restricts which tools the skill can invoke — essential for specialist CLIs</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td>Override the CLI's default model for this skill (e.g., Opus for security, Haiku for linting)</td>
+</tr>
+<tr>
+<td><code>effort</code></td>
+<td>Set reasoning depth (low for quick tasks, max for architecture)</td>
+</tr>
+<tr>
+<td><code>context: fork</code></td>
+<td>Run in a subagent with isolated context — prevents skill from polluting main conversation</td>
+</tr>
+<tr>
+<td><code>paths</code></td>
+<td>Auto-activate when files matching these globs are in scope</td>
+</tr>
+<tr>
+<td><code>disable-model-invocation: true</code></td>
+<td>Only the user can trigger this skill (prevents model from auto-loading it)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Dynamic context injection:</strong> Skills support <code>!`command`</code> syntax that executes shell commands <em>before</em> the skill content reaches the model. The <code>/pr-summary</code> skill, for example, runs <code>gh pr diff $ARGUMENTS</code> during loading, so the model starts with the full diff already in context — no additional tool calls needed.</p>
+<h3 id="plugin-marketplace">Plugin Marketplace</h3>
+<p>Claude Code supports a plugin ecosystem via <code>.claude-plugin/marketplace.json</code>. Plugins can provide:</p>
+<ul>
+<li>Additional tools (via MCP server registration)</li>
+<li>Additional skills (SKILL.md files in the plugin directory)</li>
+<li>Additional hooks (wired through the plugin's configuration)</li>
+<li>Additional agent definitions</li>
+</ul>
+<p>Plugins are hot-reloadable — you can install or update a plugin without restarting the session. The plugin discovery service runs in the background during session setup.</p>
+<p><strong>Multi-CLI implication:</strong> Each specialist CLI can load different skills and plugins. The Security CLI loads security-audit and threat-model skills. The Coder CLI loads refactor, fix-issue, and scaffold skills. The Documentation CLI loads doc-writer and changelog skills. Skills are the mechanism for encoding domain-specific workflows without modifying source code.</p>
+<h3 id="the-complete-loading-sequence">The Complete Loading Sequence</h3>
+<p>At session start, Claude Code executes this loading sequence (simplified):</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>1. Parse CLI arguments (--model, --skills, --agents, etc.)
+2. Load settings cascade (managed → user → project → local)
+3. Discover and load plugins (background)
+4. Discover and load skills (from all 5 sources)
+5. Discover and load agent definitions (from .claude/agents/)
+6. Discover and load rules (from .claude/rules/)
+7. Register hooks (from settings.json + plugins + agent frontmatter)
+8. Initialize MCP connections (from settings + plugins)
+9. Build tool pool (built-in + MCP + deferred)
+10. Assemble initial system prompt
+11. Fire SessionStart hooks
+12. Enter the query engine loop
+</code></pre></div>
+
+<p>Steps 3–8 run in parallel where possible. The total boot time on a well-configured project is approximately 300ms for TypeScript, 10ms for RCode.</p>
+<p>For multi-CLI systems, the Orchestrator typically completes this sequence first, then spawns specialists. Each specialist runs its own loading sequence independently, which is why startup parallelism matters — 8 specialists loading sequentially would add 2.4 seconds. Loading in parallel brings it to ~300ms total.</p>
+<p>This is the keystone. Every chapter that follows builds on this decomposition.</p>
+<hr />
+<p><em>Chapter 2 Target Verification:</em>
+- [x] Complete 9-layer architecture with source file references
+- [x] All 10 extension points mapped to multi-CLI customization
+- [x] Streaming agent loop walkthrough (one complete turn, 4 iterations)
+- [x] Tool protocol (40-member interface) documented
+- [x] RCode vs TypeScript side-by-side comparison (32 modules mapped)
+- [x] 20 key source files reference table
+- [x] Decomposition matrix: how each layer varies across 8 CLIs</p>
+<div style="display:flex;justify-content:space-between;padding:2rem 0;margin-top:3rem;border-top:1px solid var(--border);"><a href="chapter-01.html" style="color:var(--accent-blue);text-decoration:none;">← The Multi-CLI Vision</a><a href="chapter-03.html" style="color:var(--accent-blue);text-decoration:none;text-align:right;">Hidden Powers — Unreleased Features and the Lev… →</a></div>
+</main>
+<footer class="doc-footer" style="text-align:center;padding:2rem;color:var(--text-secondary);font-size:0.85rem;">
+  <p><a href="index.html" style="color:var(--accent-blue);">← Table of Contents</a></p>
+</footer>
+<a href="#" id="back-to-top" style="display:none;position:fixed;bottom:2rem;right:2rem;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;text-decoration:none;font-size:1.2rem;z-index:99;">↑</a>
+<script>
+(function(){
+var bar=document.querySelector('.scroll-indicator .bar');
+function updateBar(){var s=window.scrollY,h=document.documentElement.scrollHeight-window.innerHeight;if(bar)bar.style.width=h>0?(s/h*100)+'%':'0%';}
+var btt=document.getElementById('back-to-top');
+function updateBtt(){if(btt)btt.style.display=window.scrollY>400?'flex':'none';}
+window.toggleSidebar=function(){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}};
+window.copyCode=function(b){var c=b.parentElement.querySelector('code');if(!c)return;navigator.clipboard.writeText(c.textContent).then(function(){var o=b.textContent;b.textContent='\u2713 Copied';b.style.color='var(--accent-green)';setTimeout(function(){b.textContent=o;b.style.color='';},2000);});};
+document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=1024){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s)s.classList.remove('open');if(o)o.classList.remove('active');}});});
+var tk=false;window.addEventListener('scroll',function(){if(!tk){requestAnimationFrame(function(){updateBar();updateBtt();tk=false;});tk=true;}});
+updateBar();
+})();
+</script>
+</body>
+</html>

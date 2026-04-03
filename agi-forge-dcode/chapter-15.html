@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 15: Inter-CLI Communication Protocol</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-orange: #d29922;
+  --accent-red: #f85149;
+  --accent-purple: #bc8cff;
+  --code-bg: #161b22;
+  --sidebar-width: 300px;
+  --header-height: 60px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 16px; line-height: 1.7;
+  color: var(--text-primary); background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+.main { margin-left: var(--sidebar-width); padding: 5rem 3rem 4rem; max-width: 52rem; }
+h1 { font-size: 1.75rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.75rem; color: var(--accent-blue); }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+p { margin: 0.75rem 0; }
+a { color: var(--accent-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; position: relative; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 3px solid var(--accent-blue); margin: 1rem 0; padding: 0.5rem 1rem; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 0 8px 8px 0; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--bg-secondary); }
+.reading-time { color: var(--text-secondary); font-size: 0.8rem; font-weight: normal; }
+.part-heading { font-size: 1.75rem; text-align: center; color: var(--accent-green); padding: 2rem 0 1rem; margin-top: 4rem; border-top: 1px solid var(--border); letter-spacing: 1px; text-transform: uppercase; border-bottom: none; }
+.copy-btn { position: absolute; top: 8px; right: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary); padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+.copy-btn:hover { color: var(--text-primary); background: var(--bg-hover, var(--border)); }
+
+/* Sidebar */
+.sidebar { position: fixed; top: var(--header-height); left: 0; bottom: 0; width: var(--sidebar-width); background: var(--bg-secondary); border-right: 1px solid var(--border); overflow-y: auto; padding: 1.25rem 0 3rem; z-index: 50; }
+.sidebar-title { padding: 0 1rem 0.75rem; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; }
+.sidebar a { display: block; padding: 4px 1rem; font-size: 0.82rem; color: var(--text-secondary); text-decoration: none; border-left: 2px solid transparent; }
+.sidebar a:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.sidebar a.active { color: var(--accent-blue); border-left-color: var(--accent-blue); background: rgba(88,166,255,0.08); }
+.sidebar-part { font-weight: 700; color: var(--accent-green) !important; text-transform: uppercase; font-size: 0.72rem !important; letter-spacing: 0.5px; margin-top: 1rem; padding-top: 0.75rem !important; border-top: 1px solid var(--border); }
+.sidebar-chapter { font-weight: 600; color: var(--text-primary) !important; }
+
+/* Header */
+.site-header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-height); display: flex; align-items: center; padding: 0 1.5rem; z-index: 100; border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: rgba(22,27,34,0.88); }
+.hamburger { display: none; background: none; border: none; color: var(--text-primary); font-size: 1.4rem; cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem; }
+.header-nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.header-nav button { background: none; border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; }
+.header-nav button:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.header-nav button:disabled { opacity: 0.3; cursor: default; }
+
+/* Mobile */
+@media(max-width:1024px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .hamburger { display: block; }
+  .main { margin-left: 0; padding: 5rem 1.5rem 3rem; }
+  .sidebar-overlay.active { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 49; }
+}
+@media(max-width:640px) {
+  body { font-size: 15px; }
+  .main { padding: 4.5rem 1rem 2rem; }
+  h1 { font-size: 1.4rem; }
+  pre { font-size: 0.82rem; }
+}
+</style>
+</head>
+<body>
+
+
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<main class="main">
+<h1 id="chapter-15-inter-cli-communication-protocol">Chapter 15: Inter-CLI Communication Protocol</h1>
+<h2 id="mailboxes-unix-domain-sockets-mcp-transport-and-the-message-envelope">Mailboxes, Unix Domain Sockets, MCP Transport, and the Message Envelope</h2>
+<hr />
+<p>Eight processes. Eight independent Claude Code instances, each with its own context window, tool registry, and streaming agent loop. They share a filesystem. They share a goal. They share nothing else.</p>
+<p>Chapter 14 gave us shared memory — a passive layer where CLIs read and write state to common locations on disk. Memory answers the question <em>what does everyone know?</em> But it cannot answer the question that matters more: <em>what should everyone do next?</em></p>
+<p>For that, you need communication. Active, directed, reliable communication. Not "write a file and hope someone reads it" — real messaging. The Orchestrator tells the Coder to start implementing. The Security CLI tells the Orchestrator it found a critical vulnerability. The QA CLI broadcasts that the test database is corrupted. The Architect asks the Coder a question and blocks until it gets an answer.</p>
+<p>This is inter-process communication, one of the oldest problems in computer science. But multi-CLI AI agent systems add a twist that Dijkstra never contemplated in 1965: the processes doing the communicating are stochastic. They hallucinate. They misinterpret instructions. They sometimes decide, mid-task, that the task has changed. Building a communication protocol for agents that might go off-script at any moment is a different engineering problem than building one for deterministic programs.</p>
+<p>Claude Code's source reveals three distinct communication layers. The <strong>mailbox system</strong> — file-based JSON inboxes with advisory locking — handles teammate-to-teammate messaging within a swarm. The <strong>SendMessage tool</strong> provides a high-level interface that routes messages by name, handles structured protocol messages like shutdown requests, and bridges between in-process and tmux-based teammates. And the <strong>UDS_INBOX</strong> feature — Unix Domain Sockets gated behind a feature flag — enables zero-overhead peer-to-peer messaging between any two Claude Code sessions on the same machine.</p>
+<p>This chapter dissects all three. Then we build the Rust implementation of a complete multi-CLI communication stack.</p>
+<hr />
+<h2 id="151-the-communication-problem">15.1 The Communication Problem</h2>
+<p>Multi-CLI systems face communication challenges that single-agent systems never encounter. Consider the reference architecture from Chapter 1. The Orchestrator receives: "Build a REST API for user authentication with OAuth2, rate limiting, and comprehensive test coverage." It decomposes into subtasks and dispatches:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Orchestrator CLI
+  +-- Research CLI  -&gt; &quot;Survey OAuth2 libraries, compare passport vs oauth2-server&quot;
+  +-- Planner CLI   -&gt; &quot;Create implementation DAG with dependencies&quot;
+  +-- Coder CLI     -&gt; &quot;Implement API routes and middleware&quot;
+  +-- Security CLI  -&gt; &quot;Audit implementation for OWASP Top 10&quot;
+  +-- QA CLI        -&gt; &quot;Write integration tests for all endpoints&quot;
+  +-- Docs CLI      -&gt; &quot;Generate OpenAPI spec and developer guide&quot;
+</code></pre></div>
+
+<p>This decomposition creates six simultaneous communication needs:</p>
+<ol>
+<li>
+<p><strong>Task dispatch.</strong> The Orchestrator sends detailed instructions to each specialist. One-to-one, directed, potentially hundreds of tokens.</p>
+</li>
+<li>
+<p><strong>Progress reporting.</strong> Each specialist periodically informs the Orchestrator of status. Fire-and-forget — no acknowledgment needed.</p>
+</li>
+<li>
+<p><strong>Dependency notification.</strong> The Planner tells the Coder when the DAG is ready. The Coder tells Security when code is committed. Event-driven, triggered by state transitions.</p>
+</li>
+<li>
+<p><strong>Queries.</strong> Security finds a suspicious pattern in auth middleware. It asks the Coder: "Why <code>eval()</code> instead of <code>JSON.parse()</code> on line 47?" Request/response — Security pauses until the Coder answers.</p>
+</li>
+<li>
+<p><strong>Broadcasts.</strong> QA discovers the test database is corrupted. Every CLI needs to know immediately. One-to-many, urgent.</p>
+</li>
+<li>
+<p><strong>Coordination.</strong> Coder and Docs both want to modify <code>README.md</code>. They need a primitive — a lock or lease — to avoid clobbering each other's changes.</p>
+</li>
+</ol>
+<p>No single communication pattern handles all six. This is why Claude Code implements multiple layers.</p>
+<h3 id="why-shared-files-are-not-enough">Why Shared Files Are Not Enough</h3>
+<p>The naive approach — CLI A writes a JSON file, CLI B polls for it — fails in production for four reasons:</p>
+<p><strong>Race conditions.</strong> Two CLIs write to the same file simultaneously. One write is silently lost. Claude Code's <code>tasks.ts</code> uses <code>proper-lockfile</code> with exponential backoff (30 retries, 5ms minimum, 100ms maximum) specifically because a 10-agent swarm creates enough contention to blow past naive locking.</p>
+<p><strong>Polling overhead.</strong> There is no <code>inotify</code> for AI agents. Each CLI must poll at some interval. Claude Code's mailbox polls at tool-round boundaries — the pause between tool executions. Messages can be delayed by the duration of a tool execution (30+ seconds for complex bash commands).</p>
+<p><strong>No delivery guarantees.</strong> Files can be read before fully written. Files can be deleted before the sender confirms delivery. Files can be orphaned when a CLI crashes mid-write.</p>
+<p><strong>No addressing.</strong> Files do not have a "to" field. You need a naming convention (<code>inbox-coder.json</code>) and every CLI must know it. Fragile and does not scale.</p>
+<p>Claude Code builds an entire messaging layer <em>on top of</em> the filesystem. The distinction between "using the filesystem as a messaging layer" and "building a messaging layer on the filesystem" matters enormously.</p>
+<hr />
+<h2 id="152-three-communication-patterns">15.2 Three Communication Patterns</h2>
+<p>Every message between CLIs falls into one of three patterns, each demanding different infrastructure.</p>
+<h3 id="pattern-1-requestresponse">Pattern 1: Request/Response</h3>
+<p>The caller sends a message and waits for a reply. The most intuitive pattern and the most dangerous for agent systems.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Security CLI                          Coder CLI
+    |                                     |
+    +---- &quot;Why eval() on line 47?&quot; ------&gt;|
+    |                                     +-- [reads code, formulates answer]
+    |&lt;---- &quot;Legacy compat, will fix&quot; -----+
+    |                                     |
+</code></pre></div>
+
+<p>Claude Code's <code>SendMessage</code> tool supports structured messages with <code>request_id</code> fields for correlation. From <code>SendMessageTool.ts</code>:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">StructuredMessage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">z</span><span class="p">.</span><span class="nx">discriminatedUnion</span><span class="p">(</span><span class="s1">&#39;type&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="nx">z</span><span class="p">.</span><span class="nx">object</span><span class="p">({</span>
+<span class="w">    </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="nx">z</span><span class="p">.</span><span class="nx">literal</span><span class="p">(</span><span class="s1">&#39;shutdown_request&#39;</span><span class="p">),</span>
+<span class="w">    </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="kt">z.string</span><span class="p">().</span><span class="nx">optional</span><span class="p">(),</span>
+<span class="w">  </span><span class="p">}),</span>
+<span class="w">  </span><span class="nx">z</span><span class="p">.</span><span class="nx">object</span><span class="p">({</span>
+<span class="w">    </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="nx">z</span><span class="p">.</span><span class="nx">literal</span><span class="p">(</span><span class="s1">&#39;shutdown_response&#39;</span><span class="p">),</span>
+<span class="w">    </span><span class="nx">request_id</span><span class="o">:</span><span class="w"> </span><span class="kt">z.string</span><span class="p">(),</span>
+<span class="w">    </span><span class="nx">approve</span><span class="o">:</span><span class="w"> </span><span class="kt">semanticBoolean</span><span class="p">(),</span>
+<span class="w">    </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="kt">z.string</span><span class="p">().</span><span class="nx">optional</span><span class="p">(),</span>
+<span class="w">  </span><span class="p">}),</span>
+<span class="w">  </span><span class="nx">z</span><span class="p">.</span><span class="nx">object</span><span class="p">({</span>
+<span class="w">    </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="nx">z</span><span class="p">.</span><span class="nx">literal</span><span class="p">(</span><span class="s1">&#39;plan_approval_response&#39;</span><span class="p">),</span>
+<span class="w">    </span><span class="nx">request_id</span><span class="o">:</span><span class="w"> </span><span class="kt">z.string</span><span class="p">(),</span>
+<span class="w">    </span><span class="nx">approve</span><span class="o">:</span><span class="w"> </span><span class="kt">semanticBoolean</span><span class="p">(),</span>
+<span class="w">    </span><span class="nx">feedback</span><span class="o">:</span><span class="w"> </span><span class="kt">z.string</span><span class="p">().</span><span class="nx">optional</span><span class="p">(),</span>
+<span class="w">  </span><span class="p">}),</span>
+<span class="p">])</span>
+</code></pre></div>
+
+<p><strong>Deadlock danger.</strong> If CLI A sends a request to CLI B, and CLI B simultaneously sends a request to CLI A, both block forever. Agent systems are especially prone because the LLM does not understand blocking semantics. Mitigation: every request/response exchange must have a timeout.</p>
+<h3 id="pattern-2-fire-and-forget">Pattern 2: Fire-and-Forget</h3>
+<p>The sender emits a message and continues immediately. No reply expected.</p>
+<p><strong>When to use:</strong> Status updates, progress reports, task completion notifications, idle notifications. Agent teams' idle notifications are the purest example — after every turn, a teammate sends an idle notification to the lead. No acknowledgment needed. This creates a heartbeat-like pattern without explicit heartbeat infrastructure.</p>
+<h3 id="pattern-3-pubsub-broadcast">Pattern 3: Pub/Sub (Broadcast)</h3>
+<p>One sender, multiple receivers. Claude Code supports <code>"*"</code> as the recipient in <code>SendMessage</code>, which broadcasts to all teammates. The prompt warns that broadcast is expensive — linear in team size. In a 10-agent swarm, a broadcast generates 10 inbox writes, each requiring lock acquisition.</p>
+<hr />
+<h2 id="153-transport-layer-three-mechanisms">15.3 Transport Layer: Three Mechanisms</h2>
+<p>Communication patterns describe <em>what</em> agents need to say. Transport mechanisms describe <em>how</em> the bytes move.</p>
+<h3 id="transport-1-file-based-mailbox">Transport 1: File-Based Mailbox</h3>
+<p>Claude Code's primary communication transport for agent teams. Every teammate gets an inbox file:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>~/.claude/teams/{team-name}/inboxes/
+  +-- team-lead.json
+  +-- researcher.json
+  +-- implementer.json
+  +-- security-auditor.json
+</code></pre></div>
+
+<p>Each inbox is a JSON array of <code>TeammateMessage</code> objects:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="cp">#[derive(Debug, Serialize, Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">TeammateMessage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">from</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">        </span><span class="c1">// Sender agent name</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">text</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">        </span><span class="c1">// Message content</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">   </span><span class="c1">// ISO 8601</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">read</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w">          </span><span class="c1">// Consumed?</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">color</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">summary</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="c1">// 5-10 word UI preview</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The critical engineering is in the locking. The write protocol:</p>
+<ol>
+<li>Acquire advisory lock on <code>{agent-name}.json</code></li>
+<li>Read existing messages</li>
+<li>Append new message</li>
+<li>Write entire array back</li>
+<li>Release lock</li>
+</ol>
+<p>This read-modify-write cycle is not atomic at the filesystem level. The lock makes it safe. Without it, concurrent writes would each read the same array, each append, and one would clobber the other's append.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">path</span><span class="p">::{</span><span class="n">Path</span><span class="p">,</span><span class="w"> </span><span class="n">PathBuf</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">fs2</span><span class="p">::</span><span class="n">FileExt</span><span class="p">;</span><span class="w"> </span><span class="c1">// Cross-platform file locking</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Mailbox</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inbox_dir</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">Mailbox</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">team_dir</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Path</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">inbox_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">team_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;inboxes&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="n">fs</span><span class="p">::</span><span class="n">create_dir_all</span><span class="p">(</span><span class="o">&amp;</span><span class="n">inbox_dir</span><span class="p">).</span><span class="n">ok</span><span class="p">();</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">inbox_dir</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">send</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">to</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">message</span><span class="p">:</span><span class="w"> </span><span class="nc">TeammateMessage</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">MailboxError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">inbox_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">inbox_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}.json&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">to</span><span class="p">));</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">inbox_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}.lock&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">to</span><span class="p">));</span>
+
+<span class="w">        </span><span class="c1">// Acquire lock with retry</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">OpenOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">create</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">open</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lock_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span>
+<span class="w">        </span><span class="k">loop</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">match</span><span class="w"> </span><span class="n">lock_file</span><span class="p">.</span><span class="n">try_lock_exclusive</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nb">Ok</span><span class="p">(())</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">break</span><span class="p">,</span>
+<span class="w">                </span><span class="nb">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">retries</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">max_retries</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">retries</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="n">backoff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">cmp</span><span class="p">::</span><span class="n">min</span><span class="p">(</span><span class="mi">5</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">retries</span><span class="p">),</span><span class="w"> </span><span class="mi">100</span><span class="p">);</span>
+<span class="w">                    </span><span class="n">std</span><span class="p">::</span><span class="n">thread</span><span class="p">::</span><span class="n">sleep</span><span class="p">(</span><span class="n">std</span><span class="p">::</span><span class="n">time</span><span class="p">::</span><span class="n">Duration</span><span class="p">::</span><span class="n">from_millis</span><span class="p">(</span><span class="n">backoff</span><span class="p">));</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">MailboxError</span><span class="p">::</span><span class="n">LockFailed</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">to_string</span><span class="p">())),</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Read-modify-write under lock</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">messages</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">TeammateMessage</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">inbox_path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">inbox_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="n">serde_json</span><span class="p">::</span><span class="n">from_str</span><span class="p">(</span><span class="o">&amp;</span><span class="n">data</span><span class="p">).</span><span class="n">unwrap_or_default</span><span class="p">()</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">Vec</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">        </span><span class="p">};</span>
+
+<span class="w">        </span><span class="n">messages</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">message</span><span class="p">);</span>
+<span class="w">        </span><span class="n">fs</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="o">&amp;</span><span class="n">inbox_path</span><span class="p">,</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">to_string_pretty</span><span class="p">(</span><span class="o">&amp;</span><span class="n">messages</span><span class="p">)</span><span class="o">?</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Release lock</span>
+<span class="w">        </span><span class="n">lock_file</span><span class="p">.</span><span class="n">unlock</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">receive</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">agent_name</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">TeammateMessage</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">MailboxError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">inbox_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">inbox_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}.json&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">agent_name</span><span class="p">));</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">inbox_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}.lock&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">agent_name</span><span class="p">));</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="n">inbox_path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Vec</span><span class="p">::</span><span class="n">new</span><span class="p">());</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">OpenOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">create</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">open</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lock_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">lock_file</span><span class="p">.</span><span class="n">lock_exclusive</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">inbox_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">messages</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">TeammateMessage</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">from_str</span><span class="p">(</span><span class="o">&amp;</span><span class="n">data</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Mark unread messages as read, collect them</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">unread</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">TeammateMessage</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">messages</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="o">|</span><span class="n">m</span><span class="o">|</span><span class="w"> </span><span class="o">!</span><span class="n">m</span><span class="p">.</span><span class="n">read</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">cloned</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">msg</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">messages</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">msg</span><span class="p">.</span><span class="n">read</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">fs</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="o">&amp;</span><span class="n">inbox_path</span><span class="p">,</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">to_string_pretty</span><span class="p">(</span><span class="o">&amp;</span><span class="n">messages</span><span class="p">)</span><span class="o">?</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">lock_file</span><span class="p">.</span><span class="n">unlock</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">unread</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Broadcast to all inboxes in the team</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">broadcast</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">from</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">text</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">summary</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="kt">str</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="n">MailboxError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">sent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">read_dir</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">inbox_dir</span><span class="p">)</span><span class="o">?</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">entry</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="n">path</span><span class="p">();</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">path</span><span class="p">.</span><span class="n">extension</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">e</span><span class="o">|</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;json&quot;</span><span class="p">).</span><span class="n">unwrap_or</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">agent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">path</span><span class="p">.</span><span class="n">file_stem</span><span class="p">()</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">and_then</span><span class="p">(</span><span class="o">|</span><span class="n">s</span><span class="o">|</span><span class="w"> </span><span class="n">s</span><span class="p">.</span><span class="n">to_str</span><span class="p">())</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">);</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">agent</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="n">msg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TeammateMessage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="n">from</span><span class="p">:</span><span class="w"> </span><span class="nc">from</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
+<span class="w">                        </span><span class="n">text</span><span class="p">:</span><span class="w"> </span><span class="nc">text</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
+<span class="w">                        </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="nc">chrono</span><span class="p">::</span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">().</span><span class="n">to_rfc3339</span><span class="p">(),</span>
+<span class="w">                        </span><span class="n">read</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+<span class="w">                        </span><span class="n">color</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">                        </span><span class="n">summary</span><span class="p">:</span><span class="w"> </span><span class="nc">summary</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="nb">String</span><span class="p">::</span><span class="n">from</span><span class="p">),</span>
+<span class="w">                    </span><span class="p">};</span>
+<span class="w">                    </span><span class="bp">self</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">agent</span><span class="p">,</span><span class="w"> </span><span class="n">msg</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                    </span><span class="n">sent</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">sent</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Message delivery timing:</strong> Tmux-based teammates poll their inbox at startup and between turns. In-process teammates receive messages through <code>queuePendingMessage</code> — direct injection into the agent's message queue, bypassing the filesystem entirely. Sub-millisecond delivery for co-located agents, turn-bounded latency for tmux agents.</p>
+<h3 id="transport-2-unix-domain-sockets-uds_inbox">Transport 2: Unix Domain Sockets (UDS_INBOX)</h3>
+<p>Behind the <code>UDS_INBOX</code> feature flag, Claude Code implements peer-to-peer messaging over Unix Domain Sockets. Each instance creates a listener at <code>/tmp/cc-socks/{pid}.sock</code>.</p>
+<p>Three advantages over file-based mailboxes:</p>
+<ol>
+<li><strong>Zero polling.</strong> Event-driven — the kernel notifies immediately when a message arrives.</li>
+<li><strong>Bidirectional.</strong> A single connection supports send and receive. Natural for request/response.</li>
+<li><strong>No serialization overhead.</strong> No read-modify-write cycle. Raw bytes stream directly.</li>
+</ol>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">os</span><span class="p">::</span><span class="n">unix</span><span class="p">::</span><span class="n">net</span><span class="p">::{</span><span class="n">UnixListener</span><span class="p">,</span><span class="w"> </span><span class="n">UnixStream</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">io</span><span class="p">::{</span><span class="n">Read</span><span class="p">,</span><span class="w"> </span><span class="n">Write</span><span class="p">,</span><span class="w"> </span><span class="n">BufReader</span><span class="p">,</span><span class="w"> </span><span class="n">BufRead</span><span class="p">};</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">UdsTransport</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">socket_path</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="w">    </span><span class="n">listener</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">UnixListener</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">UdsTransport</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">bind</span><span class="p">(</span><span class="n">socket_dir</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Path</span><span class="p">,</span><span class="w"> </span><span class="n">pid</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">TransportError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">socket_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">socket_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}.sock&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">pid</span><span class="p">));</span>
+<span class="w">        </span><span class="c1">// Clean up stale socket from crashed process</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">socket_path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">fs</span><span class="p">::</span><span class="n">remove_file</span><span class="p">(</span><span class="o">&amp;</span><span class="n">socket_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">UnixListener</span><span class="p">::</span><span class="n">bind</span><span class="p">(</span><span class="o">&amp;</span><span class="n">socket_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">listener</span><span class="p">.</span><span class="n">set_nonblocking</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">socket_path</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">listener</span><span class="p">)</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">send_to</span><span class="p">(</span><span class="n">target</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Path</span><span class="p">,</span><span class="w"> </span><span class="n">envelope</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MessageEnvelope</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">TransportError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">UnixStream</span><span class="p">::</span><span class="n">connect</span><span class="p">(</span><span class="n">target</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">payload</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">to_vec</span><span class="p">(</span><span class="n">envelope</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="c1">// Length-prefixed framing: 4 bytes big-endian length + payload</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">len</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">payload</span><span class="p">.</span><span class="n">len</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u32</span><span class="p">).</span><span class="n">to_be_bytes</span><span class="p">();</span>
+<span class="w">        </span><span class="n">stream</span><span class="p">.</span><span class="n">write_all</span><span class="p">(</span><span class="o">&amp;</span><span class="n">len</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">stream</span><span class="p">.</span><span class="n">write_all</span><span class="p">(</span><span class="o">&amp;</span><span class="n">payload</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">stream</span><span class="p">.</span><span class="n">flush</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">try_receive</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">MessageEnvelope</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">TransportError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">listener</span><span class="p">.</span><span class="n">as_ref</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">ok_or</span><span class="p">(</span><span class="n">TransportError</span><span class="p">::</span><span class="n">NotBound</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">listener</span><span class="p">.</span><span class="n">accept</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">((</span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="n">_addr</span><span class="p">))</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">reader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BufReader</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
+<span class="w">                </span><span class="c1">// Read length prefix</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">len_buf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="mi">0</span><span class="k">u8</span><span class="p">;</span><span class="w"> </span><span class="mi">4</span><span class="p">];</span>
+<span class="w">                </span><span class="n">reader</span><span class="p">.</span><span class="n">read_exact</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">len_buf</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">len</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kt">u32</span><span class="p">::</span><span class="n">from_be_bytes</span><span class="p">(</span><span class="n">len_buf</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">usize</span><span class="p">;</span>
+<span class="w">                </span><span class="c1">// Read payload</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">payload</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="mi">0</span><span class="k">u8</span><span class="p">;</span><span class="w"> </span><span class="n">len</span><span class="p">];</span>
+<span class="w">                </span><span class="n">reader</span><span class="p">.</span><span class="n">read_exact</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">payload</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">envelope</span><span class="p">:</span><span class="w"> </span><span class="nc">MessageEnvelope</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">from_slice</span><span class="p">(</span><span class="o">&amp;</span><span class="n">payload</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">envelope</span><span class="p">))</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="nb">Err</span><span class="p">(</span><span class="k">ref</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">kind</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">io</span><span class="p">::</span><span class="n">ErrorKind</span><span class="p">::</span><span class="n">WouldBlock</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">None</span><span class="p">),</span>
+<span class="w">            </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">TransportError</span><span class="p">::</span><span class="n">Io</span><span class="p">(</span><span class="n">e</span><span class="p">)),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="nb">Drop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">UdsTransport</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">remove_file</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">socket_path</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The addressing scheme supports three formats: <code>"researcher"</code> (teammate name, routes through mailbox), <code>"uds:/path/to/socket"</code> (direct UDS connection), and <code>"bridge:session_id"</code> (remote relay). When a message arrives over UDS, it is wrapped in an XML envelope for the receiving agent:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="nt">&lt;cross-session-message</span><span class="w"> </span><span class="na">from=</span><span class="s">&quot;uds:/tmp/cc-socks/1234.sock&quot;</span><span class="nt">&gt;</span>
+<span class="w">  </span>Check<span class="w"> </span>if<span class="w"> </span>tests<span class="w"> </span>pass<span class="w"> </span>over<span class="w"> </span>there
+<span class="nt">&lt;/cross-session-message&gt;</span>
+</code></pre></div>
+
+<p>The <code>from</code> attribute enables reply routing — the recipient copies <code>from</code> into <code>to</code> for the response.</p>
+<p><strong>Delivery guarantees:</strong> UDS provides reliable, in-order delivery within a connection. If the recipient crashes, the sender gets an immediate error — strictly stronger than file-based mailboxes where a crash leaves orphaned inbox files.</p>
+<h3 id="transport-3-mcp-as-communication-backbone">Transport 3: MCP as Communication Backbone</h3>
+<p>The Model Context Protocol makes tool invocation the messaging primitive. Instead of sending a text message "run the security audit," CLI A calls the <code>security_audit</code> tool exposed by CLI B's MCP server. Parameters are the payload. The result is the response.</p>
+<p>This collapses the distinction between "sending a message" and "invoking a capability" — the most natural communication model for AI agents, which already think in terms of tool calls.</p>
+<p>MCP supports three wire protocols:</p>
+<table>
+<thead>
+<tr>
+<th>Protocol</th>
+<th>Latency</th>
+<th>Deployment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>stdio</strong></td>
+<td>~1ms</td>
+<td>Parent spawns child process</td>
+</tr>
+<tr>
+<td><strong>HTTP/SSE</strong></td>
+<td>~50-200ms</td>
+<td>HTTP server + Server-Sent Events</td>
+</tr>
+<tr>
+<td><strong>WebSocket</strong></td>
+<td>~5-20ms</td>
+<td>Bridge/remote sessions</td>
+</tr>
+</tbody>
+</table>
+<p>Wire CLIs together via MCP:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;security-cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rcode&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;--mcp&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;--agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;security&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;RCODE_SECURITY_MODE&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;qa-cli&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rcode&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;--mcp&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;--agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;qa&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;RCODE_QA_MODE&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Each spawned MCP server is a fully functional CLI instance, running headless, exposing its tools via stdio. The Orchestrator calls their tools as if they were local — each call executes in a separate process with a separate context window.</p>
+<p>The MCP approach has a profound advantage over mailbox and UDS: <strong>tool schemas are the API contract.</strong> When the Security CLI exposes a <code>run_security_audit</code> tool via MCP, the tool's JSON schema defines exactly what parameters it accepts and what it returns. The Orchestrator does not need to construct a free-form text message hoping the Security CLI interprets it correctly — it calls a typed function. This eliminates an entire class of communication failures: misunderstood messages, missing parameters, ambiguous instructions.</p>
+<p>The Rust implementation wraps MCP tool calls in a communication abstraction:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">McpTransport</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">servers</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">McpServerHandle</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">McpServerHandle</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">cli_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">process</span><span class="p">:</span><span class="w"> </span><span class="nc">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">Child</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">stdin</span><span class="p">:</span><span class="w"> </span><span class="nc">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">ChildStdin</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">stdout</span><span class="p">:</span><span class="w"> </span><span class="nc">BufReader</span><span class="o">&lt;</span><span class="n">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">ChildStdout</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">McpTransport</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">spawn_cli</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">cli_name</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="o">&amp;</span><span class="kt">str</span><span class="p">],</span>
+<span class="w">        </span><span class="n">env</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">TransportError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">cmd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">Command</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">command</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cmd</span><span class="p">.</span><span class="n">args</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">envs</span><span class="p">(</span><span class="n">env</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">stdin</span><span class="p">(</span><span class="n">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">Stdio</span><span class="p">::</span><span class="n">piped</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="n">stdout</span><span class="p">(</span><span class="n">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">Stdio</span><span class="p">::</span><span class="n">piped</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="n">stderr</span><span class="p">(</span><span class="n">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">Stdio</span><span class="p">::</span><span class="n">null</span><span class="p">());</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">child</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cmd</span><span class="p">.</span><span class="n">spawn</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">stdin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">child</span><span class="p">.</span><span class="n">stdin</span><span class="p">.</span><span class="n">take</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">stdout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BufReader</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">child</span><span class="p">.</span><span class="n">stdout</span><span class="p">.</span><span class="n">take</span><span class="p">().</span><span class="n">unwrap</span><span class="p">());</span>
+
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">servers</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">cli_name</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="n">McpServerHandle</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">cli_name</span><span class="p">:</span><span class="w"> </span><span class="nc">cli_name</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">process</span><span class="p">:</span><span class="w"> </span><span class="nc">child</span><span class="p">,</span>
+<span class="w">            </span><span class="n">stdin</span><span class="p">,</span>
+<span class="w">            </span><span class="n">stdout</span><span class="p">,</span>
+<span class="w">        </span><span class="p">});</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">call_tool</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">cli_name</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">tool_name</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">params</span><span class="p">:</span><span class="w"> </span><span class="nc">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="p">,</span><span class="w"> </span><span class="n">TransportError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">servers</span><span class="p">.</span><span class="n">get_mut</span><span class="p">(</span><span class="n">cli_name</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">ok_or</span><span class="p">(</span><span class="n">TransportError</span><span class="p">::</span><span class="n">ServerNotFound</span><span class="p">(</span><span class="n">cli_name</span><span class="p">.</span><span class="n">to_string</span><span class="p">()))</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Send JSON-RPC request over stdio</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">json</span><span class="o">!</span><span class="p">({</span>
+<span class="w">            </span><span class="s">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;2.0&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="nc">uuid</span><span class="p">::</span><span class="n">Uuid</span><span class="p">::</span><span class="n">new_v4</span><span class="p">().</span><span class="n">to_string</span><span class="p">(),</span>
+<span class="w">            </span><span class="s">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tools/call&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="s">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="nc">tool_name</span><span class="p">,</span>
+<span class="w">                </span><span class="s">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="nc">params</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">});</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">request_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">to_vec</span><span class="p">(</span><span class="o">&amp;</span><span class="n">request</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">server</span><span class="p">.</span><span class="n">stdin</span><span class="p">.</span><span class="n">write_all</span><span class="p">(</span><span class="o">&amp;</span><span class="n">request_bytes</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">server</span><span class="p">.</span><span class="n">stdin</span><span class="p">.</span><span class="n">write_all</span><span class="p">(</span><span class="s">b&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">server</span><span class="p">.</span><span class="n">stdin</span><span class="p">.</span><span class="n">flush</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Read JSON-RPC response</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">String</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">        </span><span class="n">server</span><span class="p">.</span><span class="n">stdout</span><span class="p">.</span><span class="n">read_line</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">line</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">response</span><span class="p">:</span><span class="w"> </span><span class="nc">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">from_str</span><span class="p">(</span><span class="o">&amp;</span><span class="n">line</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="transport-comparison-and-selection">Transport Comparison and Selection</h3>
+<table>
+<thead>
+<tr>
+<th>Criterion</th>
+<th>Mailbox</th>
+<th>UDS</th>
+<th>MCP (stdio)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup cost</td>
+<td>None (filesystem)</td>
+<td>Socket bind</td>
+<td>Process spawn</td>
+</tr>
+<tr>
+<td>Latency</td>
+<td>50-500ms (polling)</td>
+<td>&lt;1ms</td>
+<td>~1ms</td>
+</tr>
+<tr>
+<td>Bidirectional</td>
+<td>No (separate inbox)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Typed interface</td>
+<td>No (raw text)</td>
+<td>No (raw bytes)</td>
+<td>Yes (JSON Schema)</td>
+</tr>
+<tr>
+<td>Cross-machine</td>
+<td>No</td>
+<td>No</td>
+<td>Yes (HTTP/SSE)</td>
+</tr>
+<tr>
+<td>Crash detection</td>
+<td>No signal</td>
+<td>Connection error</td>
+<td>Process exit</td>
+</tr>
+<tr>
+<td>Concurrent safety</td>
+<td>Advisory locks</td>
+<td>Kernel-managed</td>
+<td>Process isolation</td>
+</tr>
+</tbody>
+</table>
+<p>The right transport depends on the deployment:
+- <strong>Same process, same machine:</strong> In-memory queue (fastest, zero overhead)
+- <strong>Different processes, same machine:</strong> UDS (fast, bidirectional, crash detection)
+- <strong>Different processes, shared filesystem:</strong> Mailbox (universal fallback)
+- <strong>Different machines:</strong> MCP over HTTP/SSE or WebSocket</p>
+<hr />
+<h2 id="154-the-typed-message-envelope">15.4 The Typed Message Envelope</h2>
+<p>Raw strings are not enough for production systems. You need structured messages with metadata for routing, correlation, error handling, and debugging.</p>
+<h3 id="the-problem">The Problem</h3>
+<p>Without correlation IDs, messages are ambiguous. If the Coder is working on multiple tasks, "fix these 3 issues" could refer to auth issues or rate limiting issues. Context is implicit in conversation history, not explicit in the message.</p>
+<h3 id="the-envelope">The Envelope</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">serde</span><span class="p">::{</span><span class="n">Serialize</span><span class="p">,</span><span class="w"> </span><span class="n">Deserialize</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">uuid</span><span class="p">::</span><span class="n">Uuid</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">chrono</span><span class="p">::{</span><span class="n">DateTime</span><span class="p">,</span><span class="w"> </span><span class="n">Utc</span><span class="p">};</span>
+
+<span class="cp">#[derive(Debug, Serialize, Deserialize, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MessageEnvelope</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Identity</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">correlation_id</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">causation_id</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+
+<span class="w">    </span><span class="c1">// Routing</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">sender</span><span class="p">:</span><span class="w"> </span><span class="nc">AgentAddress</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">recipient</span><span class="p">:</span><span class="w"> </span><span class="nc">RecipientAddress</span><span class="p">,</span>
+
+<span class="w">    </span><span class="c1">// Payload</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">message_type</span><span class="p">:</span><span class="w"> </span><span class="nc">MessageType</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">payload</span><span class="p">:</span><span class="w"> </span><span class="nc">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">summary</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+
+<span class="w">    </span><span class="c1">// Metadata</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="nc">DateTime</span><span class="o">&lt;</span><span class="n">Utc</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">ttl_seconds</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">u64</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">priority</span><span class="p">:</span><span class="w"> </span><span class="nc">Priority</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">requires_response</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+
+<span class="w">    </span><span class="c1">// Delivery</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">delivery_attempts</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">max_retries</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">acknowledged_at</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DateTime</span><span class="o">&lt;</span><span class="n">Utc</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Serialize, Deserialize, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">AgentAddress</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">agent_id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">agent_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">team_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">session_id</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Serialize, Deserialize, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">RecipientAddress</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">agent_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">       </span><span class="c1">// or &quot;*&quot; for broadcast</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">team_name</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">socket_path</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">bridge_id</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Serialize, Deserialize, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">MessageType</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">TaskAssignment</span><span class="p">,</span>
+<span class="w">    </span><span class="n">TaskUpdate</span><span class="p">,</span>
+<span class="w">    </span><span class="n">TaskCompleted</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Query</span><span class="p">,</span>
+<span class="w">    </span><span class="n">QueryResponse</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Broadcast</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ShutdownRequest</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ShutdownResponse</span><span class="p">,</span>
+<span class="w">    </span><span class="n">PlanApprovalRequest</span><span class="p">,</span>
+<span class="w">    </span><span class="n">PlanApprovalResponse</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Error</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Heartbeat</span><span class="p">,</span>
+<span class="w">    </span><span class="n">HeartbeatAck</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">Priority</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Low</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Normal</span><span class="p">,</span>
+<span class="w">    </span><span class="n">High</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Critical</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">MessageEnvelope</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span>
+<span class="w">        </span><span class="n">sender</span><span class="p">:</span><span class="w"> </span><span class="nc">AgentAddress</span><span class="p">,</span>
+<span class="w">        </span><span class="n">recipient</span><span class="p">:</span><span class="w"> </span><span class="nc">RecipientAddress</span><span class="p">,</span>
+<span class="w">        </span><span class="n">message_type</span><span class="p">:</span><span class="w"> </span><span class="nc">MessageType</span><span class="p">,</span>
+<span class="w">        </span><span class="n">payload</span><span class="p">:</span><span class="w"> </span><span class="nc">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="nc">Uuid</span><span class="p">::</span><span class="n">new_v4</span><span class="p">().</span><span class="n">to_string</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">correlation_id</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">            </span><span class="n">causation_id</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">            </span><span class="n">sender</span><span class="p">,</span>
+<span class="w">            </span><span class="n">recipient</span><span class="p">,</span>
+<span class="w">            </span><span class="n">message_type</span><span class="p">,</span>
+<span class="w">            </span><span class="n">payload</span><span class="p">,</span>
+<span class="w">            </span><span class="n">summary</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">            </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="nc">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">ttl_seconds</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">            </span><span class="n">priority</span><span class="p">:</span><span class="w"> </span><span class="nc">Priority</span><span class="p">::</span><span class="n">Normal</span><span class="p">,</span>
+<span class="w">            </span><span class="n">requires_response</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+<span class="w">            </span><span class="n">delivery_attempts</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">            </span><span class="n">max_retries</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">            </span><span class="n">acknowledged_at</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">with_correlation</span><span class="p">(</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">correlation_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">id</span><span class="p">.</span><span class="n">to_string</span><span class="p">());</span>
+<span class="w">        </span><span class="bp">self</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">with_causation</span><span class="p">(</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">causation_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">id</span><span class="p">.</span><span class="n">to_string</span><span class="p">());</span>
+<span class="w">        </span><span class="bp">self</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_expired</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">ttl</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">ttl_seconds</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">elapsed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">timestamp</span><span class="p">).</span><span class="n">num_seconds</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u64</span><span class="p">;</span>
+<span class="w">            </span><span class="n">elapsed</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">ttl</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kc">false</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_broadcast</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">recipient</span><span class="p">.</span><span class="n">agent_name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;*&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>correlation_id</code> traces message flows across agents. When the Orchestrator dispatches a task, it generates a correlation ID. Every subsequent message — progress, queries, errors, completion — carries it. This enables conversation threading, latency measurement, failure analysis, and audit logging.</p>
+<p>The <code>causation_id</code> creates a causal chain: Message B was caused by Message A. Message C was caused by Message B. You can reconstruct the exact sequence that led to any outcome — invaluable for debugging multi-agent failures.</p>
+<hr />
+<h2 id="155-the-message-router">15.5 The Message Router</h2>
+<p>The router resolves recipient addresses and selects transport:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MessageRouter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">mailbox</span><span class="p">:</span><span class="w"> </span><span class="nc">Mailbox</span><span class="p">,</span>
+<span class="w">    </span><span class="n">uds</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">UdsTransport</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">team_config</span><span class="p">:</span><span class="w"> </span><span class="nc">TeamConfig</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">TeamConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">members</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">TeamMember</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">TeamMember</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">agent_id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">agent_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">backend</span><span class="p">:</span><span class="w"> </span><span class="nc">BackendType</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">socket_path</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">is_active</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Clone, PartialEq)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">BackendType</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">InProcess</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Tmux</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ITerm2</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">MessageRouter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">route</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">envelope</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MessageEnvelope</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DeliveryReport</span><span class="p">,</span><span class="w"> </span><span class="n">RoutingError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Check TTL</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">envelope</span><span class="p">.</span><span class="n">is_expired</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">RoutingError</span><span class="p">::</span><span class="n">MessageExpired</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Broadcast expansion</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">envelope</span><span class="p">.</span><span class="n">is_broadcast</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">route_broadcast</span><span class="p">(</span><span class="n">envelope</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Direct UDS address</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="k">ref</span><span class="w"> </span><span class="n">socket_path</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">envelope</span><span class="p">.</span><span class="n">recipient</span><span class="p">.</span><span class="n">socket_path</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">route_uds</span><span class="p">(</span><span class="n">envelope</span><span class="p">,</span><span class="w"> </span><span class="n">socket_path</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Name resolution</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">recipient_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">envelope</span><span class="p">.</span><span class="n">recipient</span><span class="p">.</span><span class="n">agent_name</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">member</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">team_config</span><span class="p">.</span><span class="n">members</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">find</span><span class="p">(</span><span class="o">|</span><span class="n">m</span><span class="o">|</span><span class="w"> </span><span class="n">m</span><span class="p">.</span><span class="n">agent_name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="o">*</span><span class="n">recipient_name</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">ok_or</span><span class="p">(</span><span class="n">RoutingError</span><span class="p">::</span><span class="n">RecipientNotFound</span><span class="p">(</span><span class="n">recipient_name</span><span class="p">.</span><span class="n">clone</span><span class="p">()))</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="n">member</span><span class="p">.</span><span class="n">is_active</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">RoutingError</span><span class="p">::</span><span class="n">RecipientInactive</span><span class="p">(</span><span class="n">recipient_name</span><span class="p">.</span><span class="n">clone</span><span class="p">()));</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Transport selection based on backend type</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">member</span><span class="p">.</span><span class="n">backend</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">BackendType</span><span class="p">::</span><span class="n">InProcess</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// Direct memory injection — handled by engine, not router</span>
+<span class="w">                </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DeliveryReport</span><span class="p">::</span><span class="n">queued_in_process</span><span class="p">())</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">BackendType</span><span class="p">::</span><span class="n">Tmux</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">BackendType</span><span class="p">::</span><span class="n">ITerm2</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// File-based mailbox</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="k">ref</span><span class="w"> </span><span class="n">socket</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">member</span><span class="p">.</span><span class="n">socket_path</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">uds</span><span class="p">.</span><span class="n">is_some</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="c1">// Prefer UDS when available</span>
+<span class="w">                        </span><span class="k">return</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">route_uds</span><span class="p">(</span><span class="n">envelope</span><span class="p">,</span><span class="w"> </span><span class="n">socket</span><span class="p">);</span>
+<span class="w">                    </span><span class="p">}</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="bp">self</span><span class="p">.</span><span class="n">route_mailbox</span><span class="p">(</span><span class="n">envelope</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">member</span><span class="p">.</span><span class="n">agent_name</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">route_broadcast</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">envelope</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MessageEnvelope</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DeliveryReport</span><span class="p">,</span><span class="w"> </span><span class="n">RoutingError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">sender</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">envelope</span><span class="p">.</span><span class="n">sender</span><span class="p">.</span><span class="n">agent_name</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">delivered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">failed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">member</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">team_config</span><span class="p">.</span><span class="n">members</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">member</span><span class="p">.</span><span class="n">agent_name</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="o">*</span><span class="n">sender</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">member</span><span class="p">.</span><span class="n">is_active</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">targeted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">envelope</span><span class="p">.</span><span class="n">clone</span><span class="p">();</span>
+<span class="w">                </span><span class="n">targeted</span><span class="p">.</span><span class="n">recipient</span><span class="p">.</span><span class="n">agent_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">member</span><span class="p">.</span><span class="n">agent_name</span><span class="p">.</span><span class="n">clone</span><span class="p">();</span>
+
+<span class="w">                </span><span class="k">match</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">route</span><span class="p">(</span><span class="o">&amp;</span><span class="n">targeted</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">delivered</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">                    </span><span class="nb">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">failed</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DeliveryReport</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">delivered</span><span class="p">,</span><span class="w"> </span><span class="n">failed</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">route_mailbox</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">envelope</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MessageEnvelope</span><span class="p">,</span>
+<span class="w">        </span><span class="n">agent_name</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DeliveryReport</span><span class="p">,</span><span class="w"> </span><span class="n">RoutingError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">msg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TeammateMessage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">from</span><span class="p">:</span><span class="w"> </span><span class="nc">envelope</span><span class="p">.</span><span class="n">sender</span><span class="p">.</span><span class="n">agent_name</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">text</span><span class="p">:</span><span class="w"> </span><span class="nc">serde_json</span><span class="p">::</span><span class="n">to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">envelope</span><span class="p">.</span><span class="n">payload</span><span class="p">)</span><span class="o">?</span><span class="p">,</span>
+<span class="w">            </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="nc">envelope</span><span class="p">.</span><span class="n">timestamp</span><span class="p">.</span><span class="n">to_rfc3339</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">read</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+<span class="w">            </span><span class="n">color</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">            </span><span class="n">summary</span><span class="p">:</span><span class="w"> </span><span class="nc">envelope</span><span class="p">.</span><span class="n">summary</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">mailbox</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">agent_name</span><span class="p">,</span><span class="w"> </span><span class="n">msg</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DeliveryReport</span><span class="p">::</span><span class="n">single_success</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">route_uds</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">envelope</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MessageEnvelope</span><span class="p">,</span>
+<span class="w">        </span><span class="n">socket_path</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DeliveryReport</span><span class="p">,</span><span class="w"> </span><span class="n">RoutingError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PathBuf</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">socket_path</span><span class="p">);</span>
+<span class="w">        </span><span class="n">UdsTransport</span><span class="p">::</span><span class="n">send_to</span><span class="p">(</span><span class="o">&amp;</span><span class="n">path</span><span class="p">,</span><span class="w"> </span><span class="n">envelope</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DeliveryReport</span><span class="p">::</span><span class="n">single_success</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The router implements a transport preference hierarchy: UDS when available (zero-latency, bidirectional), falling back to file-based mailbox (universal, resilient). In-process agents bypass both — messages are injected directly into the agent's message queue.</p>
+<hr />
+<h2 id="156-task-coordination-with-file-locking">15.6 Task Coordination with File Locking</h2>
+<p>The shared task list — <code>~/.claude/tasks/{team-name}/</code> — is read and written by every agent simultaneously. Without careful coordination, classic concurrency bugs emerge: lost updates, phantom reads, double-claimed tasks.</p>
+<h3 id="the-atomic-claim-protocol">The Atomic Claim Protocol</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">fs2</span><span class="p">::</span><span class="n">FileExt</span><span class="p">;</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">TaskCoordinator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">task_dir</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="w">    </span><span class="n">high_watermark_path</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Task</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">subject</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">description</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">owner</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">status</span><span class="p">:</span><span class="w"> </span><span class="nc">TaskStatus</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">blocks</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">blocked_by</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, PartialEq)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">TaskStatus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pending</span><span class="p">,</span>
+<span class="w">    </span><span class="n">InProgress</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Completed</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">ClaimResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Success</span><span class="p">,</span>
+<span class="w">    </span><span class="n">AlreadyClaimed</span><span class="p">(</span><span class="nb">String</span><span class="p">),</span><span class="w">     </span><span class="c1">// by whom</span>
+<span class="w">    </span><span class="n">AlreadyCompleted</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Blocked</span><span class="p">(</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">),</span><span class="w">       </span><span class="c1">// blocking task IDs</span>
+<span class="w">    </span><span class="n">AgentBusy</span><span class="p">(</span><span class="nb">String</span><span class="p">),</span><span class="w">          </span><span class="c1">// task the agent already owns</span>
+<span class="w">    </span><span class="n">LockFailed</span><span class="p">(</span><span class="nb">String</span><span class="p">),</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">TaskCoordinator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Claim a task atomically, preventing double-claim</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">claim_task</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">task_id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">claimant</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ClaimResult</span><span class="p">,</span><span class="w"> </span><span class="n">CoordError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">task_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">task_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;task-{}.json&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">task_id</span><span class="p">));</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">task_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;task-{}.lock&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">task_id</span><span class="p">));</span>
+
+<span class="w">        </span><span class="c1">// Acquire exclusive lock with exponential backoff</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">OpenOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">create</span><span class="p">(</span><span class="kc">true</span><span class="p">).</span><span class="n">write</span><span class="p">(</span><span class="kc">true</span><span class="p">).</span><span class="n">open</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lock_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">acquire_with_backoff</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lock_file</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="o">||</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Read current task</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">task_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">task</span><span class="p">:</span><span class="w"> </span><span class="nc">Task</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">from_str</span><span class="p">(</span><span class="o">&amp;</span><span class="n">data</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">            </span><span class="c1">// Check: not already claimed by someone else</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="k">ref</span><span class="w"> </span><span class="n">owner</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">task</span><span class="p">.</span><span class="n">owner</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">owner</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">claimant</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ClaimResult</span><span class="p">::</span><span class="n">AlreadyClaimed</span><span class="p">(</span><span class="n">owner</span><span class="p">.</span><span class="n">clone</span><span class="p">()));</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Check: not completed</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">task</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Completed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ClaimResult</span><span class="p">::</span><span class="n">AlreadyCompleted</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Check: claimant not already busy with another task</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">busy_task</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">find_owned_task</span><span class="p">(</span><span class="n">claimant</span><span class="p">)</span><span class="o">?</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">busy_task</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">task_id</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ClaimResult</span><span class="p">::</span><span class="n">AgentBusy</span><span class="p">(</span><span class="n">busy_task</span><span class="p">));</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Check: all blockers completed</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">unresolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">find_unresolved_blockers</span><span class="p">(</span><span class="o">&amp;</span><span class="n">task</span><span class="p">.</span><span class="n">blocked_by</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="n">unresolved</span><span class="p">.</span><span class="n">is_empty</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ClaimResult</span><span class="p">::</span><span class="n">Blocked</span><span class="p">(</span><span class="n">unresolved</span><span class="p">));</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Claim</span>
+<span class="w">            </span><span class="n">task</span><span class="p">.</span><span class="n">owner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">claimant</span><span class="p">.</span><span class="n">to_string</span><span class="p">());</span>
+<span class="w">            </span><span class="n">task</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">InProgress</span><span class="p">;</span>
+<span class="w">            </span><span class="n">fs</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="o">&amp;</span><span class="n">task_path</span><span class="p">,</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">to_string_pretty</span><span class="p">(</span><span class="o">&amp;</span><span class="n">task</span><span class="p">)</span><span class="o">?</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ClaimResult</span><span class="p">::</span><span class="n">Success</span><span class="p">)</span>
+<span class="w">        </span><span class="p">})();</span>
+
+<span class="w">        </span><span class="n">lock_file</span><span class="p">.</span><span class="n">unlock</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">result</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">acquire_with_backoff</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">file</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">fs</span><span class="p">::</span><span class="n">File</span><span class="p">,</span>
+<span class="w">        </span><span class="n">max_retries</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">        </span><span class="n">min_ms</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="w">        </span><span class="n">max_ms</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">CoordError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">attempt</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="mi">0</span><span class="o">..</span><span class="n">max_retries</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">match</span><span class="w"> </span><span class="n">file</span><span class="p">.</span><span class="n">try_lock_exclusive</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nb">Ok</span><span class="p">(())</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(()),</span>
+<span class="w">                </span><span class="nb">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="n">backoff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">cmp</span><span class="p">::</span><span class="n">min</span><span class="p">(</span><span class="n">min_ms</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">attempt</span><span class="p">),</span><span class="w"> </span><span class="n">max_ms</span><span class="p">);</span>
+<span class="w">                    </span><span class="n">std</span><span class="p">::</span><span class="n">thread</span><span class="p">::</span><span class="n">sleep</span><span class="p">(</span><span class="n">std</span><span class="p">::</span><span class="n">time</span><span class="p">::</span><span class="n">Duration</span><span class="p">::</span><span class="n">from_millis</span><span class="p">(</span><span class="n">backoff</span><span class="p">));</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Err</span><span class="p">(</span><span class="n">CoordError</span><span class="p">::</span><span class="n">LockTimeout</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">find_owned_task</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">agent</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">CoordError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">read_dir</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">task_dir</span><span class="p">)</span><span class="o">?</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">entry</span><span class="o">?</span><span class="p">.</span><span class="n">path</span><span class="p">();</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">path</span><span class="p">.</span><span class="n">extension</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">e</span><span class="o">|</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;json&quot;</span><span class="p">).</span><span class="n">unwrap_or</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
+<span class="w">                </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">path</span><span class="p">.</span><span class="n">file_name</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">n</span><span class="o">|</span><span class="w"> </span><span class="n">n</span><span class="p">.</span><span class="n">to_string_lossy</span><span class="p">().</span><span class="n">starts_with</span><span class="p">(</span><span class="s">&quot;task-&quot;</span><span class="p">)).</span><span class="n">unwrap_or</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">task</span><span class="p">:</span><span class="w"> </span><span class="nc">Task</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">from_str</span><span class="p">(</span><span class="o">&amp;</span><span class="n">data</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">task</span><span class="p">.</span><span class="n">owner</span><span class="p">.</span><span class="n">as_deref</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">agent</span><span class="p">)</span>
+<span class="w">                    </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">task</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Completed</span>
+<span class="w">                </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">task</span><span class="p">.</span><span class="n">id</span><span class="p">));</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">None</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">find_unresolved_blockers</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">blocked_by</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="nb">String</span><span class="p">])</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">CoordError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">unresolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Vec</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">blocker_id</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">blocked_by</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">task_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;task-{}.json&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">blocker_id</span><span class="p">));</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">task</span><span class="p">:</span><span class="w"> </span><span class="nc">Task</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">from_str</span><span class="p">(</span><span class="o">&amp;</span><span class="n">data</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">task</span><span class="p">.</span><span class="n">status</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">TaskStatus</span><span class="p">::</span><span class="n">Completed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">unresolved</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">blocker_id</span><span class="p">.</span><span class="n">clone</span><span class="p">());</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">unresolved</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The lock budget — 30 retries with exponential backoff from 5ms to 100ms — is deliberately generous. From Claude Code's source comment: the critical section does readdir + N reads + writeFile (~50-100ms on slow disks), so the last caller in a 10-way race needs ~900ms. 30 retries gives ~2.6s total wait.</p>
+<p>The <code>find_owned_task</code> check prevents a common failure mode in agent swarms: an agent that claims multiple tasks, context-switches between them, and does poorly on all because its context window is split. One task at a time keeps agents focused.</p>
+<h3 id="high-water-mark">High Water Mark</h3>
+<p>When a swarm is reset, task files are deleted. But the next swarm's tasks must not reuse IDs. Claude Code stores a high water mark — a simple integer in <code>.highwatermark</code> — and new task IDs start from <code>highWaterMark + 1</code>.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">TaskCoordinator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">next_task_id</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">CoordError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">hwm_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">high_watermark_path</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">current</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">hwm_path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="n">hwm_path</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="n">trim</span><span class="p">().</span><span class="n">parse</span><span class="p">().</span><span class="n">unwrap_or</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="mi">0</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">next</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="n">fs</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="n">hwm_path</span><span class="p">,</span><span class="w"> </span><span class="n">next</span><span class="p">.</span><span class="n">to_string</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">next</span><span class="p">.</span><span class="n">to_string</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="157-walkthrough-multi-cli-coordination-in-action">15.7 Walkthrough: Multi-CLI Coordination in Action</h2>
+<p>Let us trace a complete coordination scenario from initial request to delivery.</p>
+<p><strong>The request:</strong> User types to the Orchestrator: "Build a user authentication API with JWT, rate limiting, and tests."</p>
+<h3 id="phase-1-team-creation-and-task-planning">Phase 1: Team Creation and Task Planning</h3>
+<p>The Orchestrator creates a team and task DAG:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Team: auth-api-build
+Tasks:
+  1: &quot;Research JWT libraries&quot;          (no dependencies)
+  2: &quot;Design API schema&quot;              (no dependencies)
+  3: &quot;Implement auth routes&quot;           (blocked by 1, 2)
+  4: &quot;Add rate limiting&quot;              (blocked by 3)
+  5: &quot;Security audit&quot;                 (blocked by 3, 4)
+  6: &quot;Write integration tests&quot;        (blocked by 3)
+  7: &quot;Generate API docs&quot;             (blocked by 3, 4, 5, 6)
+</code></pre></div>
+
+<p>The Orchestrator spawns teammates via <code>AgentTool</code>. Each spawned teammate receives its initial instructions via mailbox, not command-line arguments — mailboxes have no length limits or escaping challenges.</p>
+<h3 id="phase-2-parallel-execution">Phase 2: Parallel Execution</h3>
+<p>Tasks 1 and 2 have no dependencies. Two agents claim them simultaneously. The atomic claim protocol ensures no double-claim:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Researcher -&gt; claim_task(&quot;1&quot;) -&gt; Lock acquired -&gt; No blockers -&gt; SUCCESS
+Planner    -&gt; claim_task(&quot;2&quot;) -&gt; Lock acquired -&gt; No blockers -&gt; SUCCESS
+</code></pre></div>
+
+<p>Both work in parallel. When Researcher completes Task 1:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TaskCompleted&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;correlation_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;task_auth-api-build&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;payload&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;task_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;passport-jwt recommended over jsonwebtoken for Express&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="phase-3-dependency-cascade">Phase 3: Dependency Cascade</h3>
+<p>Task 3 is blocked by Tasks 1 and 2. When both complete, the Coder checks the task list, sees Task 3 is unblocked, and claims it. The claim protocol verifies: <code>blocked_by: ["1", "2"]</code> — both completed. Claim succeeds.</p>
+<p>While the Coder works on Task 3, the other agents idle. The idle notification system provides a heartbeat — each agent sends an idle message to the lead after every turn.</p>
+<h3 id="phase-4-error-recovery">Phase 4: Error Recovery</h3>
+<p>The Coder crashes mid-task (tmux pane dies). The Orchestrator detects the missing heartbeat — no idle notification within 2x the expected turn duration. It broadcasts:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Broadcast&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;High&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;payload&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;alert&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Coder crashed during Task 3. Spawning replacement.&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The replacement Coder reads the partially completed state from the filesystem and resumes. The task was not completed, so it remains claimable by the new agent.</p>
+<h3 id="phase-5-graceful-shutdown">Phase 5: Graceful Shutdown</h3>
+<p>When all tasks complete, the Orchestrator initiates shutdown via structured message:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ShutdownRequest&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;payload&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;All tasks completed&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+
+<p>Each teammate responds with <code>ShutdownResponse</code> carrying the matching <code>request_id</code>. When all approve, the Orchestrator cleans up the team.</p>
+<p>The total message flow for this scenario: 7 task dispatches, ~20 status updates, 1 error broadcast, 1 replacement spawn, 7 completion notifications, 1 shutdown request, 6 shutdown responses — approximately 43 messages across 6 agents. The entire coordination happens without the user seeing anything beyond "Build a user authentication API..."</p>
+<hr />
+<h2 id="158-error-propagation">15.8 Error Propagation</h2>
+<p>Failures in multi-CLI systems cascade. One CLI's crash orphans tasks, confuses collaborators, and leaves the system in a state no single CLI can diagnose.</p>
+<h3 id="failure-taxonomy">Failure Taxonomy</h3>
+<p><strong>Agent Crash.</strong> Process terminates unexpectedly — OOM, segfault, <code>kill -9</code>. Detection: heartbeat timeout (no idle notification within 2x expected turn duration). Recovery: broadcast warning, spawn replacement, reassign orphaned task.</p>
+<p><strong>Agent Confusion.</strong> The agent is alive but doing the wrong thing — hallucinating a different task, stuck in a loop. Unique to AI agent systems. Detection: task progress monitoring. If an agent has been working too long with no status updates, the Orchestrator sends a query. Recovery: if response is incoherent, force-stop and reassign.</p>
+<p><strong>Dependency Deadlock.</strong> Circular dependencies in the task graph. Task A blocked by B, B blocked by A. Detection: periodic cycle check in the DAG. Recovery: break one edge, instruct an agent to proceed.</p>
+<p><strong>Communication Failure.</strong> Messages lost, delayed, corrupted. Detection: acknowledgment timeouts, JSON validation after reads, UDS connection error handlers. Recovery: retry with backoff, escalate to Orchestrator, switch transport.</p>
+<h3 id="error-message-format">Error Message Format</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="cp">#[derive(Debug, Serialize, Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">ErrorPayload</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">error_code</span><span class="p">:</span><span class="w"> </span><span class="nc">ErrorCode</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">severity</span><span class="p">:</span><span class="w"> </span><span class="nc">ErrorSeverity</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">task_id</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">agent_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">description</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">suggested_action</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Serialize, Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">ErrorCode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">TaskTimeout</span><span class="p">,</span>
+<span class="w">    </span><span class="n">AgentCrash</span><span class="p">,</span>
+<span class="w">    </span><span class="n">AgentConfusion</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DependencyDeadlock</span><span class="p">,</span>
+<span class="w">    </span><span class="n">CommunicationFailure</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ProtocolVersionMismatch</span><span class="p">,</span>
+<span class="w">    </span><span class="n">RecipientNotFound</span><span class="p">,</span>
+<span class="w">    </span><span class="n">UnknownMessageType</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Serialize, Deserialize)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">ErrorSeverity</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Info</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Warning</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Error</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Critical</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>suggested_action</code> field gives the receiving agent a hint about what to do, reducing the chance that the LLM chooses an inappropriate response.</p>
+<hr />
+<h2 id="158-the-complete-communication-stack">15.8 The Complete Communication Stack</h2>
+<p>From the agent's perspective down to the wire:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>+---------------------------------------------------+
+| Layer 5: Agent Decision                           |
+| LLM decides to call SendMessage tool              |
++---------------------------------------------------+
+| Layer 4: Message Envelope                         |
+| Structured payload with routing + metadata        |
++---------------------------------------------------+
+| Layer 3: Routing                                  |
+| Name resolution -&gt; transport selection            |
++---------------------------------------------------+
+| Layer 2: Transport                                |
+| Mailbox (file) | UDS (socket) | MCP | Bridge     |
++---------------------------------------------------+
+| Layer 1: Wire                                     |
+| Filesystem I/O | Unix socket | stdio | WebSocket  |
++---------------------------------------------------+
+</code></pre></div>
+
+<p>Each layer is independent and replaceable. Swap the transport without changing the envelope. Add message types without changing routing. Change routing without changing the agent's decision-making. This mirrors the OSI model — not because networking theory demands it, but because the same forces that drove network protocol designers to layer their stacks apply equally to multi-agent communication.</p>
+<h3 id="delivery-guarantees-by-transport">Delivery Guarantees by Transport</h3>
+<table>
+<thead>
+<tr>
+<th>Transport</th>
+<th>Guarantee</th>
+<th>Ordering</th>
+<th>Failure Signal</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mailbox</td>
+<td>At-most-once</td>
+<td>FIFO per sender</td>
+<td>Silent</td>
+</tr>
+<tr>
+<td>UDS</td>
+<td>Exactly-once</td>
+<td>FIFO within connection</td>
+<td>Connection error</td>
+</tr>
+<tr>
+<td>MCP (stdio)</td>
+<td>Exactly-once</td>
+<td>FIFO</td>
+<td>Process exit code</td>
+</tr>
+<tr>
+<td>MCP (HTTP/SSE)</td>
+<td>At-most-once</td>
+<td>FIFO</td>
+<td>HTTP error code</td>
+</tr>
+</tbody>
+</table>
+<p>The mailbox provides at-most-once because there is no acknowledgment. A message written may never be read if the recipient crashes. For critical messages, use UDS or require explicit acknowledgment via response message.</p>
+<h3 id="protocol-versioning">Protocol Versioning</h3>
+<p>The message envelope includes no explicit version field in Claude Code's current implementation. For production systems, add a <code>protocol_version</code> field to the envelope:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">MessageEnvelope</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">check_version_compatibility</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">supported_major</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">ProtocolError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">their_major</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">protocol_version</span>
+<span class="w">            </span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="sc">&#39;.&#39;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">next</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">and_then</span><span class="p">(</span><span class="o">|</span><span class="n">v</span><span class="o">|</span><span class="w"> </span><span class="n">v</span><span class="p">.</span><span class="n">parse</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span><span class="p">().</span><span class="n">ok</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">their_major</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">supported_major</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">ProtocolError</span><span class="p">::</span><span class="n">VersionMismatch</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">supported</span><span class="p">:</span><span class="w"> </span><span class="nc">format</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;{}.x.x&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">supported_major</span><span class="p">),</span>
+<span class="w">                </span><span class="n">received</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">protocol_version</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="p">});</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Version negotiation follows semantic versioning: patch differences are compatible, minor differences are backward-compatible (new fields ignored by older agents), major differences are incompatible and require a protocol bridge or agent upgrade.</p>
+<h3 id="message-type-registry">Message Type Registry</h3>
+<p>The complete registry of message types and their semantics:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Direction</th>
+<th>Response Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TaskAssignment</code></td>
+<td>Lead -&gt; Agent</td>
+<td>No</td>
+<td>Dispatch work</td>
+</tr>
+<tr>
+<td><code>TaskUpdate</code></td>
+<td>Agent -&gt; Lead</td>
+<td>No</td>
+<td>Progress report</td>
+</tr>
+<tr>
+<td><code>TaskCompleted</code></td>
+<td>Agent -&gt; Lead</td>
+<td>No</td>
+<td>Work finished</td>
+</tr>
+<tr>
+<td><code>Query</code></td>
+<td>Any -&gt; Any</td>
+<td>Yes</td>
+<td>Request information</td>
+</tr>
+<tr>
+<td><code>QueryResponse</code></td>
+<td>Any -&gt; Any</td>
+<td>No</td>
+<td>Answer to a query</td>
+</tr>
+<tr>
+<td><code>Broadcast</code></td>
+<td>Any -&gt; All</td>
+<td>No</td>
+<td>System-wide alert</td>
+</tr>
+<tr>
+<td><code>ShutdownRequest</code></td>
+<td>Lead -&gt; Agent</td>
+<td>Yes</td>
+<td>Graceful shutdown</td>
+</tr>
+<tr>
+<td><code>ShutdownResponse</code></td>
+<td>Agent -&gt; Lead</td>
+<td>No</td>
+<td>Shutdown ack/nak</td>
+</tr>
+<tr>
+<td><code>PlanApprovalRequest</code></td>
+<td>Agent -&gt; Lead</td>
+<td>Yes</td>
+<td>Submit plan for review</td>
+</tr>
+<tr>
+<td><code>PlanApprovalResponse</code></td>
+<td>Lead -&gt; Agent</td>
+<td>No</td>
+<td>Approve/reject</td>
+</tr>
+<tr>
+<td><code>Error</code></td>
+<td>Any -&gt; Any</td>
+<td>Depends on severity</td>
+<td>Error notification</td>
+</tr>
+<tr>
+<td><code>Heartbeat</code></td>
+<td>Lead -&gt; Agent</td>
+<td>Yes</td>
+<td>Liveness check</td>
+</tr>
+<tr>
+<td><code>HeartbeatAck</code></td>
+<td>Agent -&gt; Lead</td>
+<td>No</td>
+<td>Liveness confirmation</td>
+</tr>
+</tbody>
+</table>
+<h3 id="extensibility-points">Extensibility Points</h3>
+<p>Three mechanisms for extending the protocol without breaking existing agents:</p>
+<p><strong>1. Metadata field.</strong> Any message can carry arbitrary key-value metadata. Agents that do not understand a key ignore it. Safest extension mechanism — cannot break existing behavior.</p>
+<p><strong>2. New message types.</strong> The <code>MessageType</code> enum can be extended. An agent receiving an unknown type responds with an <code>Error</code> message containing <code>UnknownMessageType</code>. The sender falls back to a supported type.</p>
+<p><strong>3. Transport plugins.</strong> The addressing scheme is extensible. Adding a new transport (<code>mqtt:topic</code> for IoT, <code>grpc:endpoint</code> for microservices) requires: a new address parser, a transport implementation, and registration in the router.</p>
+<hr />
+<h2 id="159-non-engineering-domains">15.9 Non-Engineering Domains</h2>
+<p>The multi-transport communication stack is not specific to software engineering.</p>
+<p><strong>Surgical Teams.</strong> A surgical team has a lead surgeon, anesthesiologist, scrub nurse, circulating nurse, and surgical assistant. Communication patterns mirror multi-CLI: the surgeon dispatches tasks (fire-and-forget), the anesthesiologist broadcasts vitals changes (pub/sub), and anyone can call a timeout for safety concerns (request/response with mandatory acknowledgment). The priority system maps directly: "patient desaturating" is <code>Critical</code>, "prep the next instrument" is <code>Normal</code>.</p>
+<p><strong>Emergency Response.</strong> Incident command systems use the same layered communication: radio (broadcast), phone (request/response), and written situation reports (fire-and-forget status updates). The typed message envelope maps to ICS form types: ICS-201 (incident briefing = <code>TaskAssignment</code>), ICS-209 (situation report = <code>TaskUpdate</code>), ICS-214 (activity log = <code>Heartbeat</code>).</p>
+<p><strong>Air Traffic Control.</strong> Controllers communicate with aircraft using strict protocols with mandatory readback (request/response with correlation). Frequency changes are broadcast to all aircraft on frequency. Emergency declarations override all other traffic (priority escalation). The deadlock prevention pattern — always respond to the current query before issuing a new one — exists in aviation for the same reason it exists in multi-CLI systems.</p>
+<hr />
+<h2 id="1510-testing-the-communication-protocol">15.10 Testing the Communication Protocol</h2>
+<h3 id="test-1-mailbox-delivery">Test 1: Mailbox Delivery</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Agent A sends message to Agent B via mailbox.
+Expected: Message appears in B&#39;s inbox JSON. B&#39;s receive() returns it.
+Verify: Message text, sender, timestamp all preserved.
+</code></pre></div>
+
+<h3 id="test-2-concurrent-claim-prevention">Test 2: Concurrent Claim Prevention</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: 5 agents simultaneously try to claim the same task.
+Expected: Exactly one succeeds. Other four get AlreadyClaimed.
+Verify: No data corruption in task JSON. Lock properly released.
+</code></pre></div>
+
+<h3 id="test-3-broadcast-delivery">Test 3: Broadcast Delivery</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Agent A broadcasts to 5-agent team.
+Expected: 4 agents receive the message (sender excluded).
+Verify: All inboxes contain the broadcast. No duplicate delivery.
+</code></pre></div>
+
+<h3 id="test-4-uds-round-trip">Test 4: UDS Round-Trip</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Agent A sends Query to Agent B via UDS.
+       Agent B replies with QueryResponse.
+Expected: A receives response with matching correlation_id.
+Verify: End-to-end latency under 10ms on localhost.
+</code></pre></div>
+
+<h3 id="test-5-ttl-expiration">Test 5: TTL Expiration</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Send message with ttl_seconds: 1. Wait 2 seconds.
+Expected: Router rejects with MessageExpired error.
+Verify: Message never delivered to recipient.
+</code></pre></div>
+
+<h3 id="test-6-dependency-deadlock-detection">Test 6: Dependency Deadlock Detection</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Task A blocked by Task B. Task B blocked by Task A.
+Expected: Orchestrator detects cycle during periodic check.
+Verify: One edge broken, stuck task becomes claimable.
+</code></pre></div>
+
+<hr />
+<p><em>Chapter 15 Target Verification:</em>
+- [x] Three communication patterns (request/response, fire-and-forget, pub/sub)
+- [x] File-based mailbox with advisory locking and exponential backoff
+- [x] UDS_INBOX with zero-polling, length-prefixed framing, and Drop cleanup
+- [x] MCP as communication backbone (stdio, HTTP/SSE, WebSocket)
+- [x] Typed message envelope with correlation, causation, priority, TTL
+- [x] Message router with transport selection hierarchy
+- [x] Task coordination with atomic claim protocol and busy-check
+- [x] High water mark for ID uniqueness across swarm resets
+- [x] Four-category error taxonomy with propagation format
+- [x] Five-layer communication stack with delivery guarantee table
+- [x] Complete Rust implementations: Mailbox, UdsTransport, MessageEnvelope, MessageRouter, TaskCoordinator
+- [x] Non-engineering domains (surgical, emergency response, ATC)
+- [x] 6 test scenarios</p>
+<p>In the next chapter, we build the extension stack — hooks, skills, and the lifecycle events that let CLIs react to each other's actions automatically. Communication is what agents say to each other. Hooks are what happens without anyone having to say anything.</p>
+<div style="display:flex;justify-content:space-between;padding:2rem 0;margin-top:3rem;border-top:1px solid var(--border);"><a href="chapter-14.html" style="color:var(--accent-blue);text-decoration:none;">← Shared Memory Architecture</a><a href="chapter-16.html" style="color:var(--accent-blue);text-decoration:none;text-align:right;">Hooks, Skills, and the Extension Stack →</a></div>
+</main>
+<footer class="doc-footer" style="text-align:center;padding:2rem;color:var(--text-secondary);font-size:0.85rem;">
+  <p><a href="index.html" style="color:var(--accent-blue);">← Table of Contents</a></p>
+</footer>
+<a href="#" id="back-to-top" style="display:none;position:fixed;bottom:2rem;right:2rem;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;text-decoration:none;font-size:1.2rem;z-index:99;">↑</a>
+<script>
+(function(){
+var bar=document.querySelector('.scroll-indicator .bar');
+function updateBar(){var s=window.scrollY,h=document.documentElement.scrollHeight-window.innerHeight;if(bar)bar.style.width=h>0?(s/h*100)+'%':'0%';}
+var btt=document.getElementById('back-to-top');
+function updateBtt(){if(btt)btt.style.display=window.scrollY>400?'flex':'none';}
+window.toggleSidebar=function(){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}};
+window.copyCode=function(b){var c=b.parentElement.querySelector('code');if(!c)return;navigator.clipboard.writeText(c.textContent).then(function(){var o=b.textContent;b.textContent='\u2713 Copied';b.style.color='var(--accent-green)';setTimeout(function(){b.textContent=o;b.style.color='';},2000);});};
+document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=1024){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s)s.classList.remove('open');if(o)o.classList.remove('active');}});});
+var tk=false;window.addEventListener('scroll',function(){if(!tk){requestAnimationFrame(function(){updateBar();updateBtt();tk=false;});tk=true;}});
+updateBar();
+})();
+</script>
+</body>
+</html>

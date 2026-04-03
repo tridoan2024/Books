@@ -1,0 +1,1402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 14: Shared Memory Architecture</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-orange: #d29922;
+  --accent-red: #f85149;
+  --accent-purple: #bc8cff;
+  --code-bg: #161b22;
+  --sidebar-width: 300px;
+  --header-height: 60px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 1.5rem); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 16px; line-height: 1.7;
+  color: var(--text-primary); background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+.main { margin-left: var(--sidebar-width); padding: 5rem 3rem 4rem; max-width: 52rem; }
+h1 { font-size: 1.75rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.75rem; color: var(--accent-blue); }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+p { margin: 0.75rem 0; }
+a { color: var(--accent-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; position: relative; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 3px solid var(--accent-blue); margin: 1rem 0; padding: 0.5rem 1rem; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 0 8px 8px 0; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--bg-secondary); }
+.reading-time { color: var(--text-secondary); font-size: 0.8rem; font-weight: normal; }
+.part-heading { font-size: 1.75rem; text-align: center; color: var(--accent-green); padding: 2rem 0 1rem; margin-top: 4rem; border-top: 1px solid var(--border); letter-spacing: 1px; text-transform: uppercase; border-bottom: none; }
+.copy-btn { position: absolute; top: 8px; right: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary); padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+.copy-btn:hover { color: var(--text-primary); background: var(--bg-hover, var(--border)); }
+
+/* Sidebar */
+.sidebar { position: fixed; top: var(--header-height); left: 0; bottom: 0; width: var(--sidebar-width); background: var(--bg-secondary); border-right: 1px solid var(--border); overflow-y: auto; padding: 1.25rem 0 3rem; z-index: 50; }
+.sidebar-title { padding: 0 1rem 0.75rem; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; }
+.sidebar a { display: block; padding: 4px 1rem; font-size: 0.82rem; color: var(--text-secondary); text-decoration: none; border-left: 2px solid transparent; }
+.sidebar a:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.sidebar a.active { color: var(--accent-blue); border-left-color: var(--accent-blue); background: rgba(88,166,255,0.08); }
+.sidebar-part { font-weight: 700; color: var(--accent-green) !important; text-transform: uppercase; font-size: 0.72rem !important; letter-spacing: 0.5px; margin-top: 1rem; padding-top: 0.75rem !important; border-top: 1px solid var(--border); }
+.sidebar-chapter { font-weight: 600; color: var(--text-primary) !important; }
+
+/* Header */
+.site-header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-height); display: flex; align-items: center; padding: 0 1.5rem; z-index: 100; border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: rgba(22,27,34,0.88); }
+.hamburger { display: none; background: none; border: none; color: var(--text-primary); font-size: 1.4rem; cursor: pointer; padding: 0.25rem 0.5rem; margin-right: 0.75rem; }
+.header-nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.header-nav button { background: none; border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; }
+.header-nav button:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.header-nav button:disabled { opacity: 0.3; cursor: default; }
+
+/* Mobile */
+@media(max-width:1024px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .hamburger { display: block; }
+  .main { margin-left: 0; padding: 5rem 1.5rem 3rem; }
+  .sidebar-overlay.active { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 49; }
+}
+@media(max-width:640px) {
+  body { font-size: 15px; }
+  .main { padding: 4.5rem 1rem 2rem; }
+  h1 { font-size: 1.4rem; }
+  pre { font-size: 0.82rem; }
+}
+</style>
+</head>
+<body>
+
+
+<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<main class="main">
+<h1 id="part-iv-connecting-the-system_1">PART IV: CONNECTING THE SYSTEM</h1>
+<h1 id="chapter-14-shared-memory-architecture">Chapter 14: Shared Memory Architecture</h1>
+<h2 id="the-memory-bus-knowledge-extraction-background-consolidation-and-cross-cli-state-transfer">The Memory Bus, Knowledge Extraction, Background Consolidation, and Cross-CLI State Transfer</h2>
+<hr />
+<p>There is a moment in every multi-CLI system's evolution when you realize the agents are not learning. They execute tasks. They produce correct output. They follow their CLAUDE.md instructions with mechanical precision. But every session starts from zero. The Security CLI catches the same SQL injection pattern it caught last week — and does not recognize it. The Coder CLI reimplements a utility function it wrote three days ago in a different module. The QA CLI generates edge case tests for a boundary condition that was already tested and fixed in a previous session.</p>
+<p>Your agents have amnesia. Expensive, token-consuming, time-wasting amnesia.</p>
+<p>This chapter builds the memory infrastructure that transforms a collection of independent CLIs into a system that learns. We start with the three-dimensional memory problem that multi-agent architectures face. We dissect Claude Code's eight native memory layers from the source — from the permanent constitutional layer of CLAUDE.md down to the experimental <code>KAIROS_DREAM</code> consolidation agent that literally dreams, reviewing and organizing memories while the developer sleeps. Then we build the shared memory bus: a typed, scored, decaying knowledge substrate that connects every CLI to a common knowledge pool while preserving each agent's private memory space.</p>
+<p>By the end, the Coder's implementation decisions will inform the Security CLI's analysis. The Reviewer's feedback will shape the Coder's future output. The Architect's design constraints will propagate to every agent that touches the codebase. Your multi-CLI system will not just execute — it will remember.</p>
+<hr />
+<h2 id="141-the-memory-problem-in-multi-cli-systems">14.1 The Memory Problem in Multi-CLI Systems</h2>
+<p>Single-agent systems have a straightforward memory model: one context window, one conversation history, one set of accumulated knowledge. When Claude Code operates as a single CLI, its memory architecture serves one master. Every memory is written by the same agent that reads it. No conflicts, no synchronization issues, no questions about who knows what.</p>
+<p>Multi-agent systems shatter this simplicity along three dimensions.</p>
+<p><strong>Dimension 1: Temporal Isolation.</strong> Each CLI session is a temporal island. Knowledge generated in session A is invisible to session B, even when both involve the same CLI operating on the same codebase. Yesterday's Coder does not talk to today's Coder. The Security CLI that spent 50,000 tokens analyzing an authentication module on Monday has no way to tell Tuesday's Security CLI what it found. Every session reinvests the same tokens discovering the same patterns.</p>
+<p><strong>Dimension 2: Agent Isolation.</strong> Even within the same time window, different CLIs do not share context. The Security CLI does not know what the Coder just implemented. The Reviewer does not know what the Architect decided. Each agent operates in a private universe of information. When the Coder discovers a timing vulnerability in a token validation library and fixes it, that discovery — the vulnerability, the fix, the rationale — evaporates when the session ends. The Security CLI, scanning later, must either re-discover the vulnerability (wasting tokens on analysis the Coder already completed) or miss it entirely because the fix is already in place and there is no record of <em>why</em> the code looks the way it does.</p>
+<p><strong>Dimension 3: Granularity Mismatch.</strong> Different agents need different types of knowledge at different levels of detail. The Coder needs implementation patterns: "use <code>bcrypt</code> with cost factor 12 for password hashing." The Security CLI needs threat context: "this endpoint processes untrusted XML input — watch for XXE." The Architect needs system-level constraints: "the auth service must handle 10K concurrent sessions with sub-100ms latency." A flat shared store where every agent dumps everything creates noise. Each agent wastes tokens parsing information it does not need.</p>
+<p>Solving all three dimensions simultaneously — bridging time, bridging agents, and filtering by relevance — requires a structured architecture. That architecture is the memory bus.</p>
+<hr />
+<h2 id="142-the-memory-bus-architecture">14.2 The Memory Bus Architecture</h2>
+<p>The memory bus is the central nervous system of the multi-CLI forge. It is not a database. It is not a message queue. It is a structured knowledge substrate with well-defined read/write semantics, conflict resolution policies, and access control boundaries.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>+-----------------------------------------------------------------------+
+|                        SHARED MEMORY BUS                               |
+|                                                                        |
+|  +------------+  +------------+  +-------------+  +-------------+     |
+|  | decisions  |  | patterns   |  | threats     |  | feedback    |     |
+|  | (arch)     |  | (impl)     |  | (security)  |  | (review)    |     |
+|  +------------+  +------------+  +-------------+  +-------------+     |
+|  +------------+  +------------+  +-------------+  +-------------+     |
+|  | test_intel |  | perf_data  |  | team_prefs  |  | doc_index   |     |
+|  | (qa)       |  | (perf)     |  | (shared)    |  | (docs)      |     |
+|  +------------+  +------------+  +-------------+  +-------------+     |
+|                                                                        |
+|  +------------------------------------------------------------------+ |
+|  | memories (SQLite)                                                 | |
+|  | id | type | key | value | importance | decay | written_by        | |
+|  +------------------------------------------------------------------+ |
++------+--------+--------+--------+--------+--------+-------------------+
+       |        |        |        |        |        |
+  +----+--+ +---+---+ +--+---+ +-+-----+ ++------+ +----+--+
+  | Coder | |Securi.| |Review| |Archit.| |  QA   | | Perf  |
+  |  CLI  | |  CLI  | |  CLI | |  CLI  | |  CLI  | |  CLI  |
+  +-------+ +-------+ +------+ +-------+ +-------+ +-------+
+  |private| |private| |privat| |private| |private| |private|
+  |memory | |memory | |memory| |memory | |memory | |memory |
+  +-------+ +-------+ +------+ +-------+ +-------+ +-------+
+</code></pre></div>
+
+<p>Each CLI connects to the shared bus through a standardized interface. The bus itself is a SQLite database — the same technology Claude Code uses internally for session storage — with a schema designed for typed, scored, decaying knowledge.</p>
+<p>But the bus is not the only memory each CLI has. Every agent maintains a private memory store for agent-specific knowledge that should not pollute the shared space. The Coder's private memory might contain preferred library versions and implementation shortcuts. The Security CLI's private memory contains its threat model heuristics, CVE watchlists, and scanning strategies. This two-tier model — shared bus plus private stores — mirrors how human teams work. You share decisions with the team. You keep your personal notes to yourself.</p>
+<h3 id="the-shared-memory-schema">The Shared Memory Schema</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">memories</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">id</span><span class="w">          </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span>
+<span class="w">    </span><span class="k">type</span><span class="w">        </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">CHECK</span><span class="p">(</span><span class="k">type</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">                    </span><span class="s1">&#39;user&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;feedback&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;project&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;reference&#39;</span><span class="p">,</span>
+<span class="w">                    </span><span class="s1">&#39;decision&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pattern&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;threat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;test_intel&#39;</span><span class="p">,</span>
+<span class="w">                    </span><span class="s1">&#39;perf_baseline&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;doc_gap&#39;</span>
+<span class="w">                </span><span class="p">)),</span>
+<span class="w">    </span><span class="k">key</span><span class="w">         </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<span class="w">    </span><span class="n">value</span><span class="w">       </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<span class="w">    </span><span class="n">importance</span><span class="w">  </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="k">CHECK</span><span class="p">(</span><span class="n">importance</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="mi">5</span><span class="p">),</span>
+<span class="w">    </span><span class="n">written_by</span><span class="w">  </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<span class="w">    </span><span class="n">created_at</span><span class="w">  </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">)),</span>
+<span class="w">    </span><span class="n">updated_at</span><span class="w">  </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">)),</span>
+<span class="w">    </span><span class="n">accessed_at</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span>
+<span class="w">    </span><span class="n">access_count</span><span class="w"> </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">    </span><span class="n">decay_rate</span><span class="w">  </span><span class="nb">REAL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span>
+<span class="w">    </span><span class="n">is_archived</span><span class="w"> </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+
+<span class="w">    </span><span class="k">UNIQUE</span><span class="p">(</span><span class="k">type</span><span class="p">,</span><span class="w"> </span><span class="k">key</span><span class="p">)</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">memory_links</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">from_id</span><span class="w">     </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">REFERENCES</span><span class="w"> </span><span class="n">memories</span><span class="p">(</span><span class="n">id</span><span class="p">),</span>
+<span class="w">    </span><span class="n">to_id</span><span class="w">       </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">REFERENCES</span><span class="w"> </span><span class="n">memories</span><span class="p">(</span><span class="n">id</span><span class="p">),</span>
+<span class="w">    </span><span class="n">relation</span><span class="w">    </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">CHECK</span><span class="p">(</span><span class="n">relation</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">                    </span><span class="s1">&#39;related_to&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;evolved_from&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;caused_by&#39;</span><span class="p">,</span>
+<span class="w">                    </span><span class="s1">&#39;part_of&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;contradicts&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;supersedes&#39;</span>
+<span class="w">                </span><span class="p">)),</span>
+<span class="w">    </span><span class="n">strength</span><span class="w">    </span><span class="nb">REAL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="w"> </span><span class="k">CHECK</span><span class="p">(</span><span class="n">strength</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">0</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">),</span>
+<span class="w">    </span><span class="n">created_at</span><span class="w">  </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">)),</span>
+<span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="n">from_id</span><span class="p">,</span><span class="w"> </span><span class="n">to_id</span><span class="p">,</span><span class="w"> </span><span class="n">relation</span><span class="p">)</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">memory_access_log</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">memory_id</span><span class="w">   </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">REFERENCES</span><span class="w"> </span><span class="n">memories</span><span class="p">(</span><span class="n">id</span><span class="p">),</span>
+<span class="w">    </span><span class="n">accessed_by</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<span class="w">    </span><span class="n">accessed_at</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">)),</span>
+<span class="w">    </span><span class="n">context</span><span class="w">     </span><span class="nb">TEXT</span>
+<span class="p">);</span>
+</code></pre></div>
+
+<p>Four critical dimensions of shared knowledge are captured here:</p>
+<ol>
+<li>
+<p><strong>Typed memories</strong> with a constrained taxonomy. Types enable agents to query only what is relevant — the Security CLI reads <code>threat</code> and <code>decision</code> memories; it rarely needs <code>test_intel</code>.</p>
+</li>
+<li>
+<p><strong>Provenance tracking</strong> via <code>written_by</code>. A <code>threat</code> memory written by the Security CLI carries more authority than one written by the Coder CLI. Provenance enables trust weighting.</p>
+</li>
+<li>
+<p><strong>Temporal metadata</strong> with <code>created_at</code>, <code>updated_at</code>, and <code>accessed_at</code>. These drive the decay algorithm that keeps memory fresh. A decision from six months ago that nobody has accessed should fade. A pattern accessed daily should persist.</p>
+</li>
+<li>
+<p><strong>Relational links</strong> via <code>memory_links</code>. A <code>decision</code> about using JWT tokens is <code>related_to</code> a <code>threat</code> about token replay attacks. A <code>pattern</code> for input validation <code>evolved_from</code> an earlier pattern. A new <code>threat</code> finding <code>contradicts</code> an old assessment. These links create a knowledge graph that agents can traverse.</p>
+</li>
+</ol>
+<h3 id="readwrite-semantics">Read/Write Semantics</h3>
+<p>The bus enforces clear ownership:</p>
+<ul>
+<li><strong>Any CLI can read any shared memory.</strong> Access is logged in <code>memory_access_log</code>.</li>
+<li><strong>Any CLI can write new memories.</strong> The <code>written_by</code> field records provenance.</li>
+<li><strong>Only the writing CLI can update its own memories.</strong> If the Security CLI wrote a threat assessment, the Coder CLI cannot modify it — it writes a <em>new</em> memory that <code>contradicts</code> or <code>supersedes</code> the original, linked via <code>memory_links</code>.</li>
+<li><strong>Archival is decay-driven.</strong> A memory is archived when its relevance score drops below threshold, or when two or more CLIs agree it is obsolete.</li>
+</ul>
+<p>These semantics prevent the most dangerous failure mode in shared memory: one agent silently overwriting another agent's knowledge.</p>
+<h3 id="the-rust-memory-bus-implementation">The Rust Memory Bus Implementation</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">rusqlite</span><span class="p">::{</span><span class="n">Connection</span><span class="p">,</span><span class="w"> </span><span class="n">params</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">chrono</span><span class="p">::</span><span class="n">Utc</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">uuid</span><span class="p">::</span><span class="n">Uuid</span><span class="p">;</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MemoryBus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">conn</span><span class="p">:</span><span class="w"> </span><span class="nc">Connection</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Memory</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">memory_type</span><span class="p">:</span><span class="w"> </span><span class="nc">MemoryType</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">key</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">importance</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">written_by</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">created_at</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">updated_at</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">access_count</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">decay_rate</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">is_archived</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Clone, PartialEq)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">MemoryType</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">User</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Feedback</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Project</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Reference</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Decision</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Pattern</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Threat</span><span class="p">,</span>
+<span class="w">    </span><span class="n">TestIntel</span><span class="p">,</span>
+<span class="w">    </span><span class="n">PerfBaseline</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DocGap</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">MemoryType</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">as_str</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="bp">self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">User</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;user&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Feedback</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;feedback&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Project</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;project&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Reference</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;reference&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Decision</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;decision&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Pattern</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;pattern&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Threat</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;threat&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TestIntel</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;test_intel&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">PerfBaseline</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;perf_baseline&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">DocGap</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;doc_gap&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Default decay half-life in days for each memory type</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">decay_half_life_days</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">f64</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="bp">self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Decision</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">120.0</span><span class="p">,</span><span class="w">   </span><span class="c1">// Architectural decisions persist</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Pattern</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">90.0</span><span class="p">,</span><span class="w">     </span><span class="c1">// Implementation patterns last</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">User</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">90.0</span><span class="p">,</span><span class="w">        </span><span class="c1">// User context changes slowly</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Feedback</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">60.0</span><span class="p">,</span><span class="w">    </span><span class="c1">// Behavioral guidance</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Threat</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">60.0</span><span class="p">,</span><span class="w">      </span><span class="c1">// Security findings</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Reference</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">45.0</span><span class="p">,</span><span class="w">   </span><span class="c1">// External pointers</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">Project</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">30.0</span><span class="p">,</span><span class="w">     </span><span class="c1">// Project context changes fast</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TestIntel</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">30.0</span><span class="p">,</span><span class="w">   </span><span class="c1">// Test insights evolve</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">DocGap</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">30.0</span><span class="p">,</span><span class="w">      </span><span class="c1">// Doc gaps get filled</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">PerfBaseline</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mf">14.0</span><span class="p">,</span><span class="w"> </span><span class="c1">// Performance data goes stale fast</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">MemoryBus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">open</span><span class="p">(</span><span class="n">db_path</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">rusqlite</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">conn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="p">::</span><span class="n">open</span><span class="p">(</span><span class="n">db_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">conn</span><span class="p">.</span><span class="n">execute_batch</span><span class="p">(</span><span class="fm">include_str!</span><span class="p">(</span><span class="s">&quot;schema.sql&quot;</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conn</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">write</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">memory_type</span><span class="p">:</span><span class="w"> </span><span class="nc">MemoryType</span><span class="p">,</span>
+<span class="w">        </span><span class="n">key</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">written_by</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">importance</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Validate importance range</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="p">(</span><span class="mi">1</span><span class="o">..=</span><span class="mi">5</span><span class="p">).</span><span class="n">contains</span><span class="p">(</span><span class="o">&amp;</span><span class="n">importance</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">MemoryError</span><span class="p">::</span><span class="n">InvalidImportance</span><span class="p">(</span><span class="n">importance</span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Check for existing memory with same type+key</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">existing</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Memory</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">find_by_type_key</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory_type</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">existing</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">existing</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">existing</span><span class="p">.</span><span class="n">written_by</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">written_by</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// Same author: update in place</span>
+<span class="w">                </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">                    </span><span class="s">&quot;UPDATE memories SET value = ?1, importance = ?2,</span>
+<span class="s">                     updated_at = datetime(&#39;now&#39;) WHERE id = ?3&quot;</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">,</span><span class="w"> </span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">],</span>
+<span class="w">                </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// Different author: apply conflict resolution strategy</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">resolve_conflict</span><span class="p">(</span>
+<span class="w">                    </span><span class="o">&amp;</span><span class="n">existing</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">memory_type</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">written_by</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">,</span>
+<span class="w">                </span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// No conflict: insert new memory</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Uuid</span><span class="p">::</span><span class="n">new_v4</span><span class="p">().</span><span class="n">to_string</span><span class="p">();</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">            </span><span class="s">&quot;INSERT INTO memories (id, type, key, value, importance, written_by,</span>
+<span class="s">             decay_rate, created_at, updated_at)</span>
+<span class="s">             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime(&#39;now&#39;), datetime(&#39;now&#39;))&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="n">params</span><span class="o">!</span><span class="p">[</span>
+<span class="w">                </span><span class="n">id</span><span class="p">,</span>
+<span class="w">                </span><span class="n">memory_type</span><span class="p">.</span><span class="n">as_str</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">key</span><span class="p">,</span>
+<span class="w">                </span><span class="n">value</span><span class="p">,</span>
+<span class="w">                </span><span class="n">importance</span><span class="p">,</span>
+<span class="w">                </span><span class="n">written_by</span><span class="p">,</span>
+<span class="w">                </span><span class="n">memory_type</span><span class="p">.</span><span class="n">decay_half_life_days</span><span class="p">()</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">30.0</span><span class="p">,</span><span class="w"> </span><span class="c1">// normalize to base 30</span>
+<span class="w">            </span><span class="p">],</span>
+<span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">id</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">read</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">memory_type</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MemoryType</span><span class="p">,</span>
+<span class="w">        </span><span class="n">key</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">reader</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Memory</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">find_by_type_key</span><span class="p">(</span><span class="n">memory_type</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="k">ref</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Log access</span>
+<span class="w">            </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">                </span><span class="s">&quot;INSERT INTO memory_access_log (memory_id, accessed_by)</span>
+<span class="s">                 VALUES (?1, ?2)&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">m</span><span class="p">.</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">reader</span><span class="p">],</span>
+<span class="w">            </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="c1">// Update access count and timestamp</span>
+<span class="w">            </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">                </span><span class="s">&quot;UPDATE memories SET access_count = access_count + 1,</span>
+<span class="s">                 accessed_at = datetime(&#39;now&#39;) WHERE id = ?1&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">m</span><span class="p">.</span><span class="n">id</span><span class="p">],</span>
+<span class="w">            </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">memory</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Query memories relevant to a specific CLI, ordered by relevance</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">query_for_cli</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">cli_name</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">types</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">MemoryType</span><span class="p">],</span>
+<span class="w">        </span><span class="n">limit</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Memory</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">type_list</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="kt">str</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">types</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">as_str</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">placeholders</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">type_list</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="o">|</span><span class="w"> </span><span class="s">&quot;?&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;&gt;</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;,&quot;</span><span class="p">);</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">sql</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span>
+<span class="w">            </span><span class="s">&quot;SELECT * FROM memories</span>
+<span class="s">             WHERE is_archived = 0 AND type IN ({})</span>
+<span class="s">             ORDER BY importance DESC, updated_at DESC</span>
+<span class="s">             LIMIT ?&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="n">placeholders</span>
+<span class="w">        </span><span class="p">);</span>
+
+<span class="w">        </span><span class="c1">// Execute and collect results</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">memories</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">execute_query</span><span class="p">(</span><span class="o">&amp;</span><span class="n">sql</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">type_list</span><span class="p">,</span><span class="w"> </span><span class="n">limit</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Log all accesses</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="n">memories</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">                </span><span class="s">&quot;INSERT INTO memory_access_log (memory_id, accessed_by)</span>
+<span class="s">                 VALUES (?1, ?2)&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">m</span><span class="p">.</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">cli_name</span><span class="p">],</span>
+<span class="w">            </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">memories</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">link</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">from_id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">to_id</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">relation</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">strength</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">            </span><span class="s">&quot;INSERT OR REPLACE INTO memory_links</span>
+<span class="s">             (from_id, to_id, relation, strength, created_at)</span>
+<span class="s">             VALUES (?1, ?2, ?3, ?4, datetime(&#39;now&#39;))&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">from_id</span><span class="p">,</span><span class="w"> </span><span class="n">to_id</span><span class="p">,</span><span class="w"> </span><span class="n">relation</span><span class="p">,</span><span class="w"> </span><span class="n">strength</span><span class="p">],</span>
+<span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This implementation enforces the ownership semantics at the API level. The <code>write</code> method checks for existing memories with the same <code>type + key</code> pair and routes to the conflict resolution engine when different authors collide. The <code>read</code> method logs every access, feeding data into the relevance scoring algorithm. The <code>query_for_cli</code> method returns memories filtered by type and ordered by importance — each CLI requests only the types it cares about.</p>
+<hr />
+<h2 id="143-the-eight-memory-layers-of-claude-code">14.3 The Eight Memory Layers of Claude Code</h2>
+<p>Before building the multi-CLI memory system, we need to understand what Claude Code already provides. The source code reveals eight distinct memory layers, each serving a different purpose at a different timescale. Our shared memory bus must integrate with — not replace — this native infrastructure.</p>
+<h3 id="layer-1-claudemd-the-constitutional-layer">Layer 1: CLAUDE.md — The Constitutional Layer</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Location: ~/.claude/CLAUDE.md (user), .claude/CLAUDE.md (project)
+Lifetime: Permanent (version-controlled)
+Scope: All sessions in the project
+</code></pre></div>
+
+<p>CLAUDE.md is the oldest and most stable memory layer. It is loaded into the system prompt at every session start. For multi-CLI systems, CLAUDE.md serves as the <em>constitutional layer</em> — shared rules that all agents must follow. Each CLI loads the same project CLAUDE.md, ensuring behavioral consistency, but each can have its own overlay with agent-specific instructions that extend (never override) the project constitution. As discussed in Chapter 5, the CLAUDE.md hierarchy per CLI is: managed, user, project, local — with each layer able to add constraints but never remove them.</p>
+<h3 id="layer-2-session-persistence-the-transcript-archive">Layer 2: Session Persistence — The Transcript Archive</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Location: ~/.claude/projects/&lt;project&gt;/sessions/&lt;session-id&gt;.jsonl
+Lifetime: Indefinite (append-only JSONL)
+Scope: Single session
+</code></pre></div>
+
+<p>Every conversation turn is persisted as a JSONL entry — user messages, assistant responses, tool calls, tool results. A typical hour-long coding session produces 50-200KB of JSONL data. These transcripts serve two purposes: session restoration (resume where you left off) and cross-session knowledge mining (the <code>KAIROS_DREAM</code> system reads these during consolidation).</p>
+<h3 id="layer-3-memdir-memorymd-the-typed-memory-store">Layer 3: memdir/ (MEMORY.md) — The Typed Memory Store</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Location: ~/.claude/projects/&lt;project&gt;/memory/MEMORY.md (index)
+         ~/.claude/projects/&lt;project&gt;/memory/*.md (topic files)
+Lifetime: Persistent, pruned by consolidation
+Size cap: 200 lines / 25KB for MEMORY.md
+</code></pre></div>
+
+<p>Claude Code's primary persistent memory system. The <code>memdir/</code> module implements a file-based store with a typed taxonomy — four types: <code>user</code>, <code>feedback</code>, <code>project</code>, <code>reference</code>. Each memory file uses YAML frontmatter for structured metadata. The <code>MEMORY.md</code> entrypoint serves as an index — one line per memory, under 150 characters, linking to topic files. The hard caps (200 lines, 25KB) are enforced by <code>truncateEntrypointContent()</code> in <code>memdir.ts</code>. This is critical: MEMORY.md is injected into the system prompt every turn, so its size directly impacts available context for actual work.</p>
+<h3 id="layer-4-git-as-memory">Layer 4: Git as Memory</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Location: .git/
+Lifetime: Permanent
+Scope: All sessions, all time
+</code></pre></div>
+
+<p>Claude Code injects git context into every turn: current branch, default branch, <code>git status --short</code> (capped at 2,000 characters), and the last five commits. For multi-CLI systems, git is the ultimate source of truth. When the memory bus records that the Coder fixed a vulnerability, and git shows the actual diff, the git evidence takes precedence. Memory complements git — it never replaces it.</p>
+<h3 id="layer-5-conversation-context-the-working-set">Layer 5: Conversation Context — The Working Set</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Location: In-memory (API message array)
+Lifetime: Current session only
+Size: Up to 200K tokens
+</code></pre></div>
+
+<p>The most ephemeral layer. Managed by seven compaction strategies (auto-compact, reactive compact, context collapse, micro-compact, snip compaction, manual <code>/compact</code>, and the 1M context opt-in). For multi-CLI systems, conversation context is strictly private — no agent should access another agent's in-flight conversation.</p>
+<h3 id="layer-6-key-value-storage-session-state">Layer 6: Key-Value Storage — Session State</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Location: ~/.claude/projects/&lt;project&gt;/settings.json
+Lifetime: Persistent
+Scope: Project
+</code></pre></div>
+
+<p>Simple key-value pairs for configuration: model preferences, permission settings, feature flags. Stores per-agent configuration that persists across sessions but does not belong in the shared memory bus.</p>
+<h3 id="layer-7-extract_memories-automatic-knowledge-extraction">Layer 7: EXTRACT_MEMORIES — Automatic Knowledge Extraction</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Feature flag: feature(&#39;EXTRACT_MEMORIES&#39;)
+Trigger: Post-sampling hook (after each agent turn)
+Source: services/extractMemories/extractMemories.ts
+</code></pre></div>
+
+<p>This is where Claude Code's memory transcends simple note-taking. A background subagent runs <em>after every conversation turn</em>, scanning the dialogue for knowledge worth preserving. We dissect this system in Section 14.4.</p>
+<h3 id="layer-8-agent_memory_snapshot-cross-agent-state-transfer">Layer 8: AGENT_MEMORY_SNAPSHOT — Cross-Agent State Transfer</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Feature flag: feature(&#39;AGENT_MEMORY_SNAPSHOT&#39;)
+Trigger: Agent session end
+Source: tools/AgentTool/agentMemory.ts
+Scopes: user (~/.claude/agent-memory/), project (.claude/agent-memory/), local (.claude/agent-memory-local/)
+</code></pre></div>
+
+<p>The newest memory layer. Captures an agent's accumulated knowledge at session end and makes it available to other agents — or to the same agent in future sessions. This is the closest thing Claude Code has to inter-agent memory sharing. Section 14.5 covers it in depth.</p>
+<hr />
+<h2 id="144-extract_memories-the-automatic-knowledge-miner">14.4 EXTRACT_MEMORIES: The Automatic Knowledge Miner</h2>
+<p>Most memory systems are passive — they store what you explicitly tell them. Claude Code's <code>EXTRACT_MEMORIES</code> is active. It mines knowledge from conversations without being asked.</p>
+<h3 id="the-extraction-pipeline">The Extraction Pipeline</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>User message --&gt; Agent response --&gt; Post-sampling hook fires
+                                            |
+                                            v
+                                 +------------------------+
+                                 | EXTRACT_MEMORIES       |
+                                 | gate check:            |
+                                 |  feature flag enabled? |
+                                 |  autoMemoryEnabled?    |
+                                 +----------+-------------+
+                                            | yes
+                                            v
+                                 +------------------------+
+                                 | Count new messages     |
+                                 | since last extraction. |
+                                 | Skip if agent already  |
+                                 | wrote to memory files. |
+                                 +----------+-------------+
+                                            |
+                                            v
+                                 +------------------------+
+                                 | Fork subagent:         |
+                                 |  - conversation tail   |
+                                 |  - memory directory    |
+                                 |  - typed memory rules  |
+                                 |  - 5-turn max budget   |
+                                 +----------+-------------+
+                                            |
+                                            v
+                                 +------------------------+
+                                 | Subagent writes to     |
+                                 | memdir/ using          |
+                                 | FileEdit/FileWrite     |
+                                 | (restricted toolset)   |
+                                 +------------------------+
+</code></pre></div>
+
+<p>The extraction subagent operates under heavy constraints. From <code>createAutoMemCanUseTool</code> in the source:</p>
+<ul>
+<li><strong>Read tools:</strong> <code>GrepTool</code>, <code>GlobTool</code>, <code>ReadTool</code> — it can examine the codebase for context</li>
+<li><strong>Write tools:</strong> <code>FileEditTool</code>, <code>FileWriteTool</code> — but ONLY to paths within the memory directory</li>
+<li><strong>Shell:</strong> Read-only bash commands only (<code>ls</code>, <code>find</code>, <code>grep</code>, <code>cat</code>, <code>stat</code>, <code>wc</code>, <code>head</code>, <code>tail</code>)</li>
+<li><strong>Budget:</strong> Maximum 5 agentic turns before forced stop</li>
+</ul>
+<p>Everything else — write-access Bash, <code>WebFetchTool</code>, <code>AgentTool</code>, network operations — is denied. The subagent cannot modify code, cannot spawn other agents, cannot make external requests. It can only read the world and write to memory.</p>
+<p>This constraint model is critical for multi-CLI systems. When eight CLIs each run extraction subagents concurrently, you need absolute certainty that an extraction agent cannot accidentally modify code or interfere with another CLI's work. The restricted toolset is a security boundary.</p>
+<h3 id="the-skip-heuristic-and-coalescing-pattern">The Skip Heuristic and Coalescing Pattern</h3>
+<p>The pipeline includes an important optimization: if the main agent already wrote to memory files during the conversation (the user said "remember this"), the extraction subagent skips entirely. No double-writing.</p>
+<p>When extraction is already running and another turn completes, the new context is <em>stashed</em> rather than spawning a second extraction agent. When the current extraction finishes, it checks for stashed context and runs a trailing pass. This coalescing pattern prevents resource contention — at most one extraction subagent runs per CLI at any time.</p>
+<h3 id="multi-cli-extraction-strategy">Multi-CLI Extraction Strategy</h3>
+<p>In the forge architecture, each CLI runs its own <code>EXTRACT_MEMORIES</code> pipeline writing to its private memory store. A separate memory aggregator process periodically scans private stores and promotes high-importance memories to the shared bus:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MemoryAggregator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">bus</span><span class="p">:</span><span class="w"> </span><span class="nc">MemoryBus</span><span class="p">,</span>
+<span class="w">    </span><span class="n">private_stores</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">PrivateStore</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">promote_threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span><span class="w"> </span><span class="c1">// importance &gt;= this -&gt; shared bus</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">PrivateStore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">cli_name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="n">memory_dir</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">MemoryAggregator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Scan all private stores and promote high-importance memories</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">aggregate</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">AggregationReport</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">promoted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">skipped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">store</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">private_stores</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">memory_files</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">glob_files</span><span class="p">(</span><span class="o">&amp;</span><span class="n">store</span><span class="p">.</span><span class="n">memory_dir</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;*.md&quot;</span><span class="p">);</span>
+
+<span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="n">file_path</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">memory_files</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">content</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">file_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">metadata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_frontmatter</span><span class="p">(</span><span class="o">&amp;</span><span class="n">content</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">importance</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">metadata</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">&quot;importance&quot;</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">and_then</span><span class="p">(</span><span class="o">|</span><span class="n">v</span><span class="o">|</span><span class="w"> </span><span class="n">v</span><span class="p">.</span><span class="n">parse</span><span class="p">().</span><span class="n">ok</span><span class="p">())</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">importance</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">promote_threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="n">memory_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">metadata</span>
+<span class="w">                        </span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">&quot;type&quot;</span><span class="p">)</span>
+<span class="w">                        </span><span class="p">.</span><span class="n">and_then</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">from_str</span><span class="p">(</span><span class="n">t</span><span class="p">).</span><span class="n">ok</span><span class="p">())</span>
+<span class="w">                        </span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="n">MemoryType</span><span class="p">::</span><span class="n">Project</span><span class="p">);</span>
+
+<span class="w">                    </span><span class="kd">let</span><span class="w"> </span><span class="n">key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">metadata</span>
+<span class="w">                        </span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">&quot;title&quot;</span><span class="p">)</span>
+<span class="w">                        </span><span class="p">.</span><span class="n">cloned</span><span class="p">()</span>
+<span class="w">                        </span><span class="p">.</span><span class="n">unwrap_or_else</span><span class="p">(</span><span class="o">||</span><span class="w"> </span><span class="n">file_stem</span><span class="p">(</span><span class="o">&amp;</span><span class="n">file_path</span><span class="p">));</span>
+
+<span class="w">                    </span><span class="c1">// Check if this memory already exists on the bus</span>
+<span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">bus</span><span class="p">.</span><span class="n">find_by_type_key</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory_type</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">key</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="n">is_none</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="bp">self</span><span class="p">.</span><span class="n">bus</span><span class="p">.</span><span class="n">write</span><span class="p">(</span>
+<span class="w">                            </span><span class="n">memory_type</span><span class="p">,</span>
+<span class="w">                            </span><span class="o">&amp;</span><span class="n">key</span><span class="p">,</span>
+<span class="w">                            </span><span class="o">&amp;</span><span class="n">strip_frontmatter</span><span class="p">(</span><span class="o">&amp;</span><span class="n">content</span><span class="p">),</span>
+<span class="w">                            </span><span class="o">&amp;</span><span class="n">store</span><span class="p">.</span><span class="n">cli_name</span><span class="p">,</span>
+<span class="w">                            </span><span class="n">importance</span><span class="p">,</span>
+<span class="w">                        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                        </span><span class="n">promoted</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">                    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                        </span><span class="n">skipped</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">                    </span><span class="p">}</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">AggregationReport</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">promoted</span><span class="p">,</span><span class="w"> </span><span class="n">skipped</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This two-phase model — extract privately, promote selectively — keeps the shared bus clean. Low-importance observations stay in private stores. Only knowledge scoring importance 4 or higher reaches the bus where all CLIs can access it.</p>
+<hr />
+<h2 id="145-agent_memory_snapshot-cross-agent-state-transfer">14.5 AGENT_MEMORY_SNAPSHOT: Cross-Agent State Transfer</h2>
+<p>While <code>EXTRACT_MEMORIES</code> mines knowledge from conversations, <code>AGENT_MEMORY_SNAPSHOT</code> captures the <em>state</em> of an agent — its accumulated understanding, active context, working hypotheses — and persists it for future use.</p>
+<p>The feature is gated behind <code>feature('AGENT_MEMORY_SNAPSHOT')</code> and operates at session boundaries. The key insight is the three-scope memory model from <code>agentMemory.ts</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>Location</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user</code></td>
+<td><code>~/.claude/agent-memory/&lt;agentType&gt;/MEMORY.md</code></td>
+<td>Cross-project expertise, global preferences</td>
+</tr>
+<tr>
+<td><code>project</code></td>
+<td><code>.claude/agent-memory/&lt;agentType&gt;/MEMORY.md</code></td>
+<td>Project-specific decisions, conventions</td>
+</tr>
+<tr>
+<td><code>local</code></td>
+<td><code>.claude/agent-memory-local/&lt;agentType&gt;/MEMORY.md</code></td>
+<td>Machine-specific configs (git-ignored)</td>
+</tr>
+</tbody>
+</table>
+<p>For multi-CLI systems, the <strong>project scope</strong> is the bridge between agents. When the Coder CLI writes a snapshot to <code>.claude/agent-memory/coder/MEMORY.md</code>, the Security CLI can read it at the same path. Every agent's project-scope memory is readable by every other agent.</p>
+<h3 id="snapshot-merge-strategy">Snapshot Merge Strategy</h3>
+<p>When an agent session ends with a pending snapshot update, Claude Code runs a reasoning-based merge:</p>
+<ol>
+<li>Read current MEMORY.md</li>
+<li>Compare with knowledge gained in the just-completed session</li>
+<li>Update MEMORY.md with new learnings, resolving conflicts</li>
+<li>Prune outdated entries that the session's work superseded</li>
+</ol>
+<p>This is not a blind append. If yesterday's snapshot says "the billing module uses Stripe v2 API" and today's session revealed a migration to Stripe v3, the agent updates — not duplicates — the memory.</p>
+<h3 id="the-rust-snapshot-manager">The Rust Snapshot Manager</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">SnapshotManager</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">agent_type</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="n">scopes</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">SnapshotScope</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">SnapshotScope</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">scope</span><span class="p">:</span><span class="w"> </span><span class="nc">ScopeType</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">memory_dir</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[derive(Debug, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">ScopeType</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">User</span><span class="p">,</span><span class="w">    </span><span class="c1">// ~/.claude/agent-memory/&lt;agent&gt;/</span>
+<span class="w">    </span><span class="n">Project</span><span class="p">,</span><span class="w"> </span><span class="c1">// .claude/agent-memory/&lt;agent&gt;/</span>
+<span class="w">    </span><span class="n">Local</span><span class="p">,</span><span class="w">   </span><span class="c1">// .claude/agent-memory-local/&lt;agent&gt;/</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">SnapshotManager</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">load_snapshot_prompt</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">prompt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">String</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">scope</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">scopes</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">memory_md</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">scope</span><span class="p">.</span><span class="n">memory_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;MEMORY.md&quot;</span><span class="p">);</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">memory_md</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">content</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory_md</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">unwrap_or_default</span><span class="p">();</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">scope_note</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="n">scope</span><span class="p">.</span><span class="n">scope</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">ScopeType</span><span class="p">::</span><span class="n">User</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;General learnings (all projects):&quot;</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">ScopeType</span><span class="p">::</span><span class="n">Project</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;Project-specific learnings:&quot;</span><span class="p">,</span>
+<span class="w">                    </span><span class="n">ScopeType</span><span class="p">::</span><span class="n">Local</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s">&quot;Local machine context:&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="p">};</span>
+<span class="w">                </span><span class="n">prompt</span><span class="p">.</span><span class="n">push_str</span><span class="p">(</span><span class="o">&amp;</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;</span><span class="se">\n</span><span class="s">## {}</span><span class="se">\n</span><span class="s">{}</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">scope_note</span><span class="p">,</span><span class="w"> </span><span class="n">content</span><span class="p">));</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">prompt</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Merge new session knowledge into the snapshot</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">merge_snapshot</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">scope</span><span class="p">:</span><span class="w"> </span><span class="nc">ScopeType</span><span class="p">,</span>
+<span class="w">        </span><span class="n">session_learnings</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">scopes</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">find</span><span class="p">(</span><span class="o">|</span><span class="n">s</span><span class="o">|</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">discriminant</span><span class="p">(</span><span class="o">&amp;</span><span class="n">s</span><span class="p">.</span><span class="n">scope</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">discriminant</span><span class="p">(</span><span class="o">&amp;</span><span class="n">scope</span><span class="p">))</span>
+<span class="w">            </span><span class="p">.</span><span class="n">ok_or</span><span class="p">(</span><span class="n">MemoryError</span><span class="p">::</span><span class="n">ScopeNotFound</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">memory_md</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">target</span><span class="p">.</span><span class="n">memory_dir</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s">&quot;MEMORY.md&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">create_dir_all</span><span class="p">(</span><span class="o">&amp;</span><span class="n">target</span><span class="p">.</span><span class="n">memory_dir</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">existing</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">memory_md</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory_md</span><span class="p">)</span><span class="o">?</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">String</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">        </span><span class="p">};</span>
+
+<span class="w">        </span><span class="c1">// The merge is LLM-assisted: we build a prompt that asks the agent</span>
+<span class="w">        </span><span class="c1">// to reconcile old and new knowledge, resolve contradictions,</span>
+<span class="w">        </span><span class="c1">// and prune superseded entries.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">merge_prompt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span>
+<span class="w">            </span><span class="s">&quot;## Current memory:</span><span class="se">\n</span><span class="s">{}</span><span class="se">\n\n</span><span class="s">## New session learnings:</span><span class="se">\n</span><span class="s">{}</span><span class="se">\n\n</span><span class="s">\</span>
+<span class="s">             Merge these. Update existing entries when new information supersedes \</span>
+<span class="s">             old. Remove contradicted facts. Keep total under 200 lines.&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="n">existing</span><span class="p">,</span><span class="w"> </span><span class="n">session_learnings</span>
+<span class="w">        </span><span class="p">);</span>
+
+<span class="w">        </span><span class="c1">// This would be sent to the LLM for reasoning-based merge</span>
+<span class="w">        </span><span class="c1">// For now, we append with a timestamp separator</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span>
+<span class="w">            </span><span class="s">&quot;{}</span><span class="se">\n\n</span><span class="s">---</span><span class="se">\n</span><span class="s">*Updated: {}*</span><span class="se">\n\n</span><span class="s">{}&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="n">existing</span><span class="p">,</span>
+<span class="w">            </span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">().</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;%Y-%m-%d %H:%M&quot;</span><span class="p">),</span>
+<span class="w">            </span><span class="n">session_learnings</span>
+<span class="w">        </span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory_md</span><span class="p">,</span><span class="w"> </span><span class="n">merged</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="146-kairos_dream-background-memory-consolidation">14.6 KAIROS_DREAM: Background Memory Consolidation</h2>
+<p><code>KAIROS_DREAM</code> is the most ambitious feature in Claude Code's memory stack. It is a background consolidation agent that reviews accumulated session transcripts, extracts cross-session patterns, prunes stale knowledge, and reorganizes memories for optimal retrieval. It literally dreams — running as a forked subagent while the main session continues.</p>
+<h3 id="the-four-stage-pipeline">The Four-Stage Pipeline</h3>
+<p>From the consolidation prompt in <code>services/autoDream/consolidationPrompt.ts</code>:</p>
+<p><strong>Phase 1 — ORIENT.</strong> List the memory directory, read MEMORY.md, skim existing topic files, assess current state of knowledge.</p>
+<p><strong>Phase 2 — GATHER.</strong> Scan daily logs (<code>logs/YYYY/MM/YYYY-MM-DD.md</code>), check for drifted facts (memories contradicted by current code), grep session transcripts for narrow terms, identify new information worth persisting.</p>
+<p><strong>Phase 3 — CONSOLIDATE.</strong> Merge new signal into existing topic files, convert relative dates to absolute dates, delete contradicted facts, write new memories using typed format.</p>
+<p><strong>Phase 4 — PRUNE AND INDEX.</strong> Update MEMORY.md to stay under 200 lines / 25KB, remove pointers to stale memories, demote verbose entries (&gt;200 chars) to topic files, add pointers to newly important memories, resolve contradictions between files.</p>
+<h3 id="trigger-conditions">Trigger Conditions</h3>
+<p>The dream agent does not run on every session. Three gates checked in order of computational cost:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DreamScheduler</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">min_hours_between</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w">     </span><span class="c1">// default: 24</span>
+<span class="w">    </span><span class="n">min_sessions_since</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w">  </span><span class="c1">// default: 5</span>
+<span class="w">    </span><span class="n">lock_path</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">DreamScheduler</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">should_dream</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">DreamDecision</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Gate 1: Time — enough hours since last consolidation?</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">hours_since</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">hours_since_last_consolidation</span><span class="p">();</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">hours_since</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">min_hours_between</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">DreamDecision</span><span class="p">::</span><span class="n">Skip</span><span class="p">(</span><span class="s">&quot;Too soon since last consolidation&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Gate 2: Volume — enough new sessions to justify consolidation?</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">new_sessions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">sessions_since_last_consolidation</span><span class="p">();</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">new_sessions</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">min_sessions_since</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">DreamDecision</span><span class="p">::</span><span class="n">Skip</span><span class="p">(</span><span class="s">&quot;Not enough new sessions&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Gate 3: Lock — no other process mid-consolidation?</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">try_acquire_lock</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">lock</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">DreamDecision</span><span class="p">::</span><span class="n">Proceed</span><span class="p">(</span><span class="n">lock</span><span class="p">),</span>
+<span class="w">            </span><span class="nb">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">DreamDecision</span><span class="p">::</span><span class="n">Skip</span><span class="p">(</span><span class="s">&quot;Another consolidation in progress&quot;</span><span class="p">),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">try_acquire_lock</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DreamLock</span><span class="p">,</span><span class="w"> </span><span class="n">LockError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// File-based lock checked by PID to detect stale locks</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">lock_path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_content</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">read_to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">lock_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">lock_pid</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lock_content</span><span class="p">.</span><span class="n">parse</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">process_alive</span><span class="p">(</span><span class="n">lock_pid</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">LockError</span><span class="p">::</span><span class="n">Held</span><span class="p">(</span><span class="n">lock_pid</span><span class="p">));</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="c1">// Stale lock from crashed process — remove it</span>
+<span class="w">            </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">remove_file</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">lock_path</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">lock_path</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">process</span><span class="p">::</span><span class="n">id</span><span class="p">().</span><span class="n">to_string</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DreamLock</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">path</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">lock_path</span><span class="p">.</span><span class="n">clone</span><span class="p">()</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DreamLock</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">path</span><span class="p">:</span><span class="w"> </span><span class="nc">PathBuf</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="nb">Drop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">DreamLock</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">remove_file</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">path</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Like the extraction subagent, the dream agent operates under restricted permissions: read-only bash, read tools, and write access only to the memory directory. The prompt explicitly instructs it to grep narrowly: "Don't exhaustively read transcripts. Look only for things you already suspect matter." A week's worth of transcripts could be megabytes — the dream agent has a finite context window.</p>
+<h3 id="multi-cli-dream-coordination">Multi-CLI Dream Coordination</h3>
+<p>In the forge architecture, each CLI <em>could</em> trigger its own dream cycle. But eight simultaneous dream agents thrashing the same memory store is a recipe for conflicts. The solution: a single forge-level dream coordinator.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">ForgeDreamCoordinator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">coordinator_cli</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">      </span><span class="c1">// &quot;architect-cli&quot; — broadest view</span>
+<span class="w">    </span><span class="n">scheduler</span><span class="p">:</span><span class="w"> </span><span class="nc">DreamScheduler</span><span class="p">,</span>
+<span class="w">    </span><span class="n">private_stores</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">PathBuf</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="c1">// All CLI private stores</span>
+<span class="w">    </span><span class="n">shared_bus</span><span class="p">:</span><span class="w"> </span><span class="nc">MemoryBus</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">ForgeDreamCoordinator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Run by the Architect CLI only</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">consolidate</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ConsolidationReport</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">lock</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">scheduler</span><span class="p">.</span><span class="n">should_dream</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">DreamDecision</span><span class="p">::</span><span class="n">Proceed</span><span class="p">(</span><span class="n">lock</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">lock</span><span class="p">,</span>
+<span class="w">            </span><span class="n">DreamDecision</span><span class="p">::</span><span class="n">Skip</span><span class="p">(</span><span class="n">reason</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ConsolidationReport</span><span class="p">::</span><span class="n">skipped</span><span class="p">(</span><span class="n">reason</span><span class="p">)),</span>
+<span class="w">        </span><span class="p">};</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">report</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ConsolidationReport</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Phase 1: Orient — read all private stores</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">private_memories</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">gather_private_memories</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Phase 2: Gather — identify cross-CLI patterns</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">cross_cutting</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">find_cross_cutting_patterns</span><span class="p">(</span><span class="o">&amp;</span><span class="n">private_memories</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Phase 3: Consolidate — merge into shared bus</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">pattern</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">cross_cutting</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="bp">self</span><span class="p">.</span><span class="n">shared_bus</span><span class="p">.</span><span class="n">write</span><span class="p">(</span>
+<span class="w">                </span><span class="n">pattern</span><span class="p">.</span><span class="n">memory_type</span><span class="p">,</span>
+<span class="w">                </span><span class="o">&amp;</span><span class="n">pattern</span><span class="p">.</span><span class="n">key</span><span class="p">,</span>
+<span class="w">                </span><span class="o">&amp;</span><span class="n">pattern</span><span class="p">.</span><span class="n">synthesized_value</span><span class="p">,</span>
+<span class="w">                </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">coordinator_cli</span><span class="p">,</span>
+<span class="w">                </span><span class="n">pattern</span><span class="p">.</span><span class="n">importance</span><span class="p">,</span>
+<span class="w">            </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="n">report</span><span class="p">.</span><span class="n">consolidated</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Phase 4: Prune — archive low-relevance shared memories</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">pruned</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">prune_shared_bus</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">report</span><span class="p">.</span><span class="n">pruned</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pruned</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Resolve contradictions between CLI findings</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">resolve_contradictions</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="n">report</span><span class="p">.</span><span class="n">contradictions_resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resolved</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// lock is automatically released when dropped</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">report</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The Architect CLI owns the dream cycle because it has the broadest view of the system. It reads all eight private stores plus the shared bus, consolidates cross-cutting patterns, resolves inter-agent contradictions, and updates the shared bus with synthesized knowledge.</p>
+<hr />
+<h2 id="147-conflict-resolution">14.7 Conflict Resolution</h2>
+<p>Two CLIs write to the shared memory bus simultaneously. Both target the same <code>type + key</code> pair. What happens?</p>
+<p>The forge implements a three-tier resolution hierarchy.</p>
+<h3 id="tier-1-last-write-wins-low-stakes-memories">Tier 1: Last-Write-Wins (Low-Stakes Memories)</h3>
+<p>For memory types where recency matters more than completeness — <code>project</code> status updates, <code>reference</code> pointers, <code>perf_baseline</code> measurements — the most recent write wins. The previous value is preserved in an audit log.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">resolve_last_write_wins</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">existing</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Memory</span><span class="p">,</span>
+<span class="w">    </span><span class="n">new_value</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="n">new_writer</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="n">importance</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Audit trail: save the old value</span>
+<span class="w">    </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;INSERT INTO memory_audit (memory_id, previous_value, previous_written_by,</span>
+<span class="s">         replaced_at, replaced_by)</span>
+<span class="s">         VALUES (?1, ?2, ?3, datetime(&#39;now&#39;), ?4)&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">existing</span><span class="p">.</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">existing</span><span class="p">.</span><span class="n">written_by</span><span class="p">,</span><span class="w"> </span><span class="n">new_writer</span><span class="p">],</span>
+<span class="w">    </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Overwrite</span>
+<span class="w">    </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;UPDATE memories SET value = ?1, written_by = ?2, importance = ?3,</span>
+<span class="s">         updated_at = datetime(&#39;now&#39;) WHERE id = ?4&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">new_value</span><span class="p">,</span><span class="w"> </span><span class="n">new_writer</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">,</span><span class="w"> </span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">],</span>
+<span class="w">    </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="tier-2-merge-accumulative-memories">Tier 2: Merge (Accumulative Memories)</h3>
+<p>For types where both contributions have value — <code>pattern</code> libraries, <code>test_intel</code> collections, <code>doc_gap</code> inventories — conflicts are merged by appending with authorship markers:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">resolve_merge</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">existing</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Memory</span><span class="p">,</span>
+<span class="w">    </span><span class="n">new_value</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="n">new_writer</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="n">importance</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;{}</span><span class="se">\n\n</span><span class="s">---</span><span class="se">\n</span><span class="s">*Added by {} on {}:*</span><span class="se">\n\n</span><span class="s">{}&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">existing</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
+<span class="w">        </span><span class="n">new_writer</span><span class="p">,</span>
+<span class="w">        </span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">().</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;%Y-%m-%d&quot;</span><span class="p">),</span>
+<span class="w">        </span><span class="n">new_value</span>
+<span class="w">    </span><span class="p">);</span>
+
+<span class="w">    </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;UPDATE memories SET value = ?1, importance = MAX(importance, ?2),</span>
+<span class="s">         updated_at = datetime(&#39;now&#39;) WHERE id = ?3&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">merged</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">,</span><span class="w"> </span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">],</span>
+<span class="w">    </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="tier-3-explicit-contradiction-high-stakes-memories">Tier 3: Explicit Contradiction (High-Stakes Memories)</h3>
+<p>For types where disagreement is meaningful — <code>decision</code> rationales, <code>threat</code> assessments — conflicts create a <code>contradicts</code> link rather than overwriting:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">resolve_contradiction</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">existing</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Memory</span><span class="p">,</span>
+<span class="w">    </span><span class="n">memory_type</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MemoryType</span><span class="p">,</span>
+<span class="w">    </span><span class="n">key</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="n">new_value</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="n">new_writer</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">    </span><span class="n">importance</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Create the new memory with a modified key</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">new_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}__alt_{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">new_writer</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">new_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Uuid</span><span class="p">::</span><span class="n">new_v4</span><span class="p">().</span><span class="n">to_string</span><span class="p">();</span>
+
+<span class="w">    </span><span class="bp">self</span><span class="p">.</span><span class="n">conn</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;INSERT INTO memories (id, type, key, value, importance, written_by,</span>
+<span class="s">         created_at, updated_at)</span>
+<span class="s">         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime(&#39;now&#39;), datetime(&#39;now&#39;))&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">params</span><span class="o">!</span><span class="p">[</span><span class="n">new_id</span><span class="p">,</span><span class="w"> </span><span class="n">memory_type</span><span class="p">.</span><span class="n">as_str</span><span class="p">(),</span><span class="w"> </span><span class="n">new_key</span><span class="p">,</span><span class="w"> </span><span class="n">new_value</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">,</span><span class="w"> </span><span class="n">new_writer</span><span class="p">],</span>
+<span class="w">    </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Link as contradiction</span>
+<span class="w">    </span><span class="bp">self</span><span class="p">.</span><span class="n">link</span><span class="p">(</span><span class="o">&amp;</span><span class="n">new_id</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">existing</span><span class="p">.</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;contradicts&quot;</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">new_id</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>When the Security CLI rates an endpoint as "high risk" and the Coder CLI rates it as "mitigated," both assessments persist with a <code>contradicts</code> link. The next agent to query sees both and can make an informed judgment.</p>
+<h3 id="the-conflict-resolution-matrix">The Conflict Resolution Matrix</h3>
+<table>
+<thead>
+<tr>
+<th>Memory Type</th>
+<th>Same Author</th>
+<th>Different Author</th>
+<th>Authority CLI</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>user</td>
+<td>Overwrite</td>
+<td>N/A (private)</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td>feedback</td>
+<td>Overwrite</td>
+<td>Merge</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td>project</td>
+<td>Overwrite</td>
+<td>Last-write-wins</td>
+<td>Architect</td>
+</tr>
+<tr>
+<td>reference</td>
+<td>Overwrite</td>
+<td>Last-write-wins</td>
+<td>Any</td>
+</tr>
+<tr>
+<td>decision</td>
+<td>Update+audit</td>
+<td>Contradiction</td>
+<td>Architect</td>
+</tr>
+<tr>
+<td>pattern</td>
+<td>Update</td>
+<td>Merge</td>
+<td>Reviewer</td>
+</tr>
+<tr>
+<td>threat</td>
+<td>Update+audit</td>
+<td>Contradiction</td>
+<td>Security</td>
+</tr>
+<tr>
+<td>test_intel</td>
+<td>Update</td>
+<td>Merge</td>
+<td>QA</td>
+</tr>
+<tr>
+<td>perf_baseline</td>
+<td>Overwrite</td>
+<td>Last-write-wins</td>
+<td>Perf</td>
+</tr>
+<tr>
+<td>doc_gap</td>
+<td>Update</td>
+<td>Merge</td>
+<td>Docs</td>
+</tr>
+</tbody>
+</table>
+<p>The "Authority CLI" column identifies which agent has final say when contradictions need resolution. This authority model prevents deadlocks where contradictions accumulate without resolution.</p>
+<p>The conflict resolution strategy is selected by the <code>resolve_conflict</code> method:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">MemoryBus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">resolve_conflict</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">existing</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Memory</span><span class="p">,</span>
+<span class="w">        </span><span class="n">memory_type</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MemoryType</span><span class="p">,</span>
+<span class="w">        </span><span class="n">key</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">writer</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">importance</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">memory_type</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Tier 1: Last-write-wins</span>
+<span class="w">            </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">Project</span>
+<span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">Reference</span>
+<span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">PerfBaseline</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="bp">self</span><span class="p">.</span><span class="n">resolve_last_write_wins</span><span class="p">(</span><span class="n">existing</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">writer</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Tier 2: Merge</span>
+<span class="w">            </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">Feedback</span>
+<span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">Pattern</span>
+<span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">TestIntel</span>
+<span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">DocGap</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="bp">self</span><span class="p">.</span><span class="n">resolve_merge</span><span class="p">(</span><span class="n">existing</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">writer</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Tier 3: Contradiction</span>
+<span class="w">            </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">Decision</span>
+<span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">Threat</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="bp">self</span><span class="p">.</span><span class="n">resolve_contradiction</span><span class="p">(</span>
+<span class="w">                    </span><span class="n">existing</span><span class="p">,</span><span class="w"> </span><span class="n">memory_type</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">writer</span><span class="p">,</span><span class="w"> </span><span class="n">importance</span><span class="p">,</span>
+<span class="w">                </span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Private types — should not reach shared bus</span>
+<span class="w">            </span><span class="n">MemoryType</span><span class="p">::</span><span class="n">User</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">MemoryError</span><span class="p">::</span><span class="n">PrivateType</span><span class="p">),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="148-memory-relevance-scoring-and-decay">14.8 Memory Relevance Scoring and Decay</h2>
+<p>Memory without decay is a hoarder's attic. Every fact ever recorded competing for tokens in the system prompt. Claude Code's 200-line / 25KB cap on MEMORY.md is a hard boundary against this. In a multi-CLI system where eight agents each generate memories at every turn, the problem is amplified eightfold.</p>
+<h3 id="the-relevance-score">The Relevance Score</h3>
+<p>Every memory carries a dynamic relevance score computed from five factors:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">compute_relevance</span><span class="p">(</span><span class="n">memory</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Memory</span><span class="p">,</span><span class="w"> </span><span class="n">now</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">DateTime</span><span class="o">&lt;</span><span class="n">Utc</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">f64</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Factor 1: Importance (user-assigned, 1-5)</span>
+<span class="w">    </span><span class="c1">// Importance 5 gets 2x multiplier</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">importance_score</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="p">.</span><span class="n">importance</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span>
+<span class="w">        </span><span class="o">*</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">memory</span><span class="p">.</span><span class="n">importance</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="mf">2.0</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="mf">1.0</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">    </span><span class="c1">// Factor 2: Recency — exponential decay from last update</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">days_since</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">memory</span><span class="p">.</span><span class="n">updated_at</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">num_seconds</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">86400.0</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">half_life</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">30.0</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">memory</span><span class="p">.</span><span class="n">decay_rate</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">recency_score</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">2.0_</span><span class="k">f64</span><span class="p">.</span><span class="n">powf</span><span class="p">(</span><span class="o">-</span><span class="n">days_since</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">half_life</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Factor 3: Access frequency</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">access_score</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">memory</span><span class="p">.</span><span class="n">access_count</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">10.0</span><span class="p">).</span><span class="n">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Factor 4: Link density — well-connected memories are more valuable</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">link_count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="p">.</span><span class="n">outgoing_links</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">memory</span><span class="p">.</span><span class="n">incoming_links</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">link_score</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">link_count</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">5.0</span><span class="p">).</span><span class="n">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Factor 5: Cross-agent access — memories read by multiple CLIs</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">cross_agent_score</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">memory</span><span class="p">.</span><span class="n">unique_readers</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">f64</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">4.0</span><span class="p">).</span><span class="n">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Weighted combination (range: 0.0 to 10.0)</span>
+<span class="w">    </span><span class="p">(</span><span class="n">importance_score</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">0.30</span>
+<span class="w">        </span><span class="o">+</span><span class="w"> </span><span class="n">recency_score</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">0.25</span>
+<span class="w">        </span><span class="o">+</span><span class="w"> </span><span class="n">access_score</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">0.20</span>
+<span class="w">        </span><span class="o">+</span><span class="w"> </span><span class="n">link_score</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">0.10</span>
+<span class="w">        </span><span class="o">+</span><span class="w"> </span><span class="n">cross_agent_score</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">0.15</span><span class="p">)</span>
+<span class="w">        </span><span class="o">*</span><span class="w"> </span><span class="mf">10.0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>cross_agent_score</code> factor is unique to multi-CLI systems. It captures a signal that does not exist in single-agent architectures: if the Coder, Security CLI, and Reviewer all read the same decision memory, that decision is load-bearing knowledge that should resist decay.</p>
+<h3 id="the-pruning-cycle">The Pruning Cycle</h3>
+<p>Pruning runs as part of the <code>KAIROS_DREAM</code> consolidation:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">prune_shared_bus</span><span class="p">(</span>
+<span class="w">    </span><span class="n">bus</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MemoryBus</span><span class="p">,</span>
+<span class="w">    </span><span class="n">threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">PruneReport</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryError</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">candidates</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bus</span><span class="p">.</span><span class="n">query_all_active</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">archived</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">demoted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">memory</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="n">candidates</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">score</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_relevance</span><span class="p">(</span><span class="n">memory</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">now</span><span class="p">);</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">score</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Check: does any other memory depend on this one?</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">dependents</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bus</span><span class="p">.</span><span class="n">count_dependents</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory</span><span class="p">.</span><span class="n">id</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">dependents</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// Don&#39;t archive — reduce importance to slow future decay</span>
+<span class="w">                </span><span class="n">bus</span><span class="p">.</span><span class="n">reduce_importance</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory</span><span class="p">.</span><span class="n">id</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="n">demoted</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// Safe to archive (removed from system prompt, kept in DB)</span>
+<span class="w">                </span><span class="n">bus</span><span class="p">.</span><span class="n">archive</span><span class="p">(</span><span class="o">&amp;</span><span class="n">memory</span><span class="p">.</span><span class="n">id</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="n">archived</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">PruneReport</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">archived</span><span class="p">,</span><span class="w"> </span><span class="n">demoted</span><span class="w"> </span><span class="p">})</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The dependency check is critical. If Memory A ("SQL injection in user search") is referenced by Memory B ("all search endpoints must use parameterized queries"), archiving A would leave B without justification. The algorithm reduces A's importance instead, slowing its decay while preserving the reference chain.</p>
+<p>Archived memories are not deleted. They are removed from system prompt injection (saving tokens) but remain in the database, queryable through explicit search. If a future conversation matches an archived memory, it can be <em>resurrected</em> — its <code>is_archived</code> flag cleared and timestamps refreshed, restarting the decay clock.</p>
+<hr />
+<h2 id="149-system-prompt-injection-top-n-memory-loading">14.9 System Prompt Injection: Top-N Memory Loading</h2>
+<p>The shared bus automatically injects the highest-relevance memories into each CLI's system prompt at session start. This is the auto-sync pattern: each CLI begins every session with the most important shared knowledge already in context — no explicit memory queries needed.</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MemoryInjector</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">bus</span><span class="p">:</span><span class="w"> </span><span class="nc">MemoryBus</span><span class="p">,</span>
+<span class="w">    </span><span class="n">injection_limit</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="c1">// default: 30</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">MemoryInjector</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Build the memory block for a CLI&#39;s system prompt</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">build_injection</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">cli_name</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span>
+<span class="w">        </span><span class="n">readable_types</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">MemoryType</span><span class="p">],</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Query all non-archived memories of readable types</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">memories</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">bus</span>
+<span class="w">            </span><span class="p">.</span><span class="n">query_for_cli</span><span class="p">(</span><span class="n">cli_name</span><span class="p">,</span><span class="w"> </span><span class="n">readable_types</span><span class="p">,</span><span class="w"> </span><span class="mi">500</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">unwrap_or_default</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Score and sort by relevance</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">scored</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="kt">f64</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">Memory</span><span class="p">)</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memories</span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">m</span><span class="o">|</span><span class="w"> </span><span class="p">(</span><span class="n">compute_relevance</span><span class="p">(</span><span class="n">m</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">now</span><span class="p">),</span><span class="w"> </span><span class="n">m</span><span class="p">))</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
+<span class="w">        </span><span class="n">scored</span><span class="p">.</span><span class="n">sort_by</span><span class="p">(</span><span class="o">|</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="o">|</span><span class="w"> </span><span class="n">b</span><span class="p">.</span><span class="mf">0.</span><span class="n">partial_cmp</span><span class="p">(</span><span class="o">&amp;</span><span class="n">a</span><span class="p">.</span><span class="mi">0</span><span class="p">).</span><span class="n">unwrap</span><span class="p">());</span>
+
+<span class="w">        </span><span class="c1">// Take top N</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">top_n</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">scored</span><span class="p">.</span><span class="n">into_iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">take</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">injection_limit</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">top_n</span><span class="p">.</span><span class="n">is_empty</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">String</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">String</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="s">&quot;&lt;shared-memory&gt;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">);</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">score</span><span class="p">,</span><span class="w"> </span><span class="n">memory</span><span class="p">)</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">&amp;</span><span class="n">top_n</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">output</span><span class="p">.</span><span class="n">push_str</span><span class="p">(</span><span class="o">&amp;</span><span class="fm">format!</span><span class="p">(</span>
+<span class="w">                </span><span class="s">&quot;## [{}] {} (by {}, relevance: {:.1})</span><span class="se">\n</span><span class="s">{}</span><span class="se">\n\n</span><span class="s">&quot;</span><span class="p">,</span>
+<span class="w">                </span><span class="n">memory</span><span class="p">.</span><span class="n">memory_type</span><span class="p">.</span><span class="n">as_str</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">memory</span><span class="p">.</span><span class="n">key</span><span class="p">,</span>
+<span class="w">                </span><span class="n">memory</span><span class="p">.</span><span class="n">written_by</span><span class="p">,</span>
+<span class="w">                </span><span class="n">score</span><span class="p">,</span>
+<span class="w">                </span><span class="n">memory</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
+<span class="w">            </span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">output</span><span class="p">.</span><span class="n">push_str</span><span class="p">(</span><span class="s">&quot;&lt;/shared-memory&gt;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="n">output</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Each CLI's system prompt is seeded with the highest-relevance memories from the shared bus, filtered to only the types that CLI is configured to read. The Coder starts every session knowing the most important decisions, patterns, and threats. The Security CLI starts every session knowing the most critical vulnerabilities and their current status.</p>
+<hr />
+<h2 id="1410-scenario-memory-in-action">14.10 Scenario: Memory in Action</h2>
+<p>Let us trace a complete scenario through the memory architecture.</p>
+<p><strong>Day 1, 2:00 PM — The Coder implements authentication.</strong></p>
+<p>The Coder CLI writes a JWT authentication module. During implementation, it discovers a timing vulnerability in the existing token validation library — string comparison instead of constant-time comparison for signature verification.</p>
+<p>The Coder fixes it. The <code>EXTRACT_MEMORIES</code> subagent fires and captures two memories:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Private store (coder/patterns/auth-timing-fix.md):
+  type: pattern, importance: 4
+  Use crypto.timingSafeEqual() for signature comparison, never === or ==.
+  Fixed in commit abc123.
+
+Promoted to shared bus (importance &gt;= 4):
+  type: threat
+  key: timing-vuln-token-validation
+  value: Token validation used string comparison for signature verification.
+         Vulnerable to timing attacks. Fixed with constant-time comparison.
+  written_by: coder-cli
+  importance: 4
+</code></pre></div>
+
+<p><strong>Day 1, 3:00 PM — The Architect records the policy.</strong></p>
+<p>The Architect CLI reviews the auth module. It writes a <code>decision</code> memory:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>  type: decision
+  key: auth-constant-time-comparison-policy
+  value: All cryptographic comparisons must use constant-time operations.
+         No string equality operators for secrets, tokens, hashes, or signatures.
+  rationale: Timing attack found in token validation (coder-cli, Day 1).
+  written_by: architect-cli
+  importance: 5
+</code></pre></div>
+
+<p>The bus creates a link: <code>architect-decision --caused_by--&gt; coder-threat</code>.</p>
+<p><strong>Day 2, 10:00 AM — The Security CLI scans.</strong></p>
+<p>The Security CLI starts its session. The top-30 memory injection includes both the Coder's threat finding and the Architect's policy. The Security CLI <em>does not re-discover the timing vulnerability.</em> It knows about it from memory.</p>
+<p>Instead, it scans for <em>other</em> instances of the same pattern. It finds one in webhook signature verification. It writes a new threat memory linked to the original:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>  type: threat
+  key: timing-vuln-webhook-verification
+  value: Webhook signature verification in src/webhooks/verify.rs:89
+         uses == for HMAC comparison. Same class as token validation finding.
+  written_by: security-cli
+  importance: 5
+  link: --related_to--&gt; timing-vuln-token-validation
+</code></pre></div>
+
+<p><strong>Day 2, 11:00 AM — The Coder fixes the second instance.</strong></p>
+<p>The Coder's injection includes both vulnerabilities and the policy. It immediately sees the unresolved webhook finding and fixes it — no investigation needed, no re-discovery. It writes a pattern memory:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>  type: pattern
+  key: constant-time-comparison-helper
+  value: Created src/utils/crypto.rs with safe_compare() wrapper.
+         All crypto comparisons should use this helper.
+  written_by: coder-cli
+  importance: 4
+</code></pre></div>
+
+<p><strong>Day 3, 2:00 AM — KAIROS_DREAM consolidates.</strong></p>
+<p>The Architect CLI's dream agent fires. It reviews all stores and:</p>
+<ol>
+<li>Merges the two timing vulnerability findings into a consolidated threat assessment</li>
+<li>Links the Coder's helper pattern to the Architect's policy decision</li>
+<li>Updates the MEMORY.md index with one line: <code>[Constant-time crypto policy](threat/timing-vuln-consolidated.md)</code></li>
+<li>Archives the individual finding memories (superseded by the consolidated version)</li>
+</ol>
+<p>Four sessions across three CLIs distilled into three tightly linked memories. Any new CLI session gets this knowledge automatically.</p>
+<hr />
+<h2 id="1411-the-memory-configuration">14.11 The Memory Configuration</h2>
+<p>The complete memory configuration for a multi-CLI forge:</p>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code><span class="c1"># .forge/memory-config.toml</span>
+
+<span class="k">[bus]</span>
+<span class="n">database</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/shared-memory.db&quot;</span>
+<span class="n">max_memories</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10000</span>
+<span class="n">archive_threshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0</span><span class="w">          </span><span class="c1"># relevance below this -&gt; archive</span>
+<span class="n">injection_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span><span class="w">             </span><span class="c1"># top N memories in system prompt</span>
+
+<span class="k">[extraction]</span>
+<span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">max_turns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
+<span class="n">promote_threshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="w">            </span><span class="c1"># importance &gt;= 4 -&gt; shared bus</span>
+<span class="n">coalesce</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">                  </span><span class="c1"># stash pending when extraction running</span>
+
+<span class="k">[consolidation]</span>
+<span class="n">coordinator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;architect-cli&quot;</span>
+<span class="n">min_hours</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">12</span>
+<span class="n">min_sessions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span>
+<span class="n">max_turns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+
+<span class="k">[conflict_resolution]</span>
+<span class="n">default</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;last_write_wins&quot;</span>
+
+<span class="k">[conflict_resolution.overrides]</span>
+<span class="n">decision</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;contradiction&quot;</span>
+<span class="n">threat</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;contradiction&quot;</span>
+<span class="n">pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;merge&quot;</span>
+<span class="n">test_intel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;merge&quot;</span>
+<span class="n">feedback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;merge&quot;</span>
+<span class="n">doc_gap</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;merge&quot;</span>
+
+<span class="k">[agents.coder]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/coder/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;threat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;feedback&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reference&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reference&quot;</span><span class="p">]</span>
+
+<span class="k">[agents.security]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/security/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;threat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;test_intel&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;threat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;decision&quot;</span><span class="p">]</span>
+
+<span class="k">[agents.reviewer]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/reviewer/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;threat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;feedback&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;doc_gap&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;feedback&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;doc_gap&quot;</span><span class="p">]</span>
+
+<span class="k">[agents.architect]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/architect/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;all&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reference&quot;</span><span class="p">]</span>
+
+<span class="k">[agents.qa]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/qa/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;threat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;test_intel&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;test_intel&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">]</span>
+
+<span class="k">[agents.perf]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/perf/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;perf_baseline&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;perf_baseline&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">]</span>
+
+<span class="k">[agents.docs]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/docs/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reference&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;doc_gap&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;doc_gap&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reference&quot;</span><span class="p">]</span>
+
+<span class="k">[agents.deploy]</span>
+<span class="n">private_store</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.forge/memory/deploy/&quot;</span>
+<span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;threat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;project&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reference&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;perf_baseline&quot;</span><span class="p">]</span>
+<span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;project&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reference&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<hr />
+<h2 id="1412-non-engineering-domains">14.12 Non-Engineering Domains</h2>
+<p>The shared memory bus pattern is not specific to software engineering. Any domain where multiple specialists collaborate over time on the same body of work faces the same three-dimensional memory problem.</p>
+<p><strong>Medical Research Teams.</strong> A clinical research team has specialists — biostatisticians, principal investigators, data safety monitoring boards, regulatory affairs. The biostatistician's analysis of adverse event data should inform the PI's dosing decisions. The DSMB's safety findings should propagate to every team member. The memory bus maps directly: <code>threat</code> becomes <code>safety_signal</code>, <code>decision</code> becomes <code>protocol_amendment</code>, <code>pattern</code> becomes <code>statistical_method</code>. The conflict resolution hierarchy ensures the DSMB's safety assessment overrides the PI's efficacy optimism — authority based on role, not recency.</p>
+<p><strong>Legal Case Teams.</strong> Paralegals research precedent, associates draft motions, partners review strategy. Each specialist discovers facts that affect the others' work. The paralegal's discovery of a key deposition excerpt should inform the associate's brief. The partner's strategic decision to pursue a particular theory of liability should constrain the paralegal's research focus. The <code>KAIROS_DREAM</code> pattern maps to weekly case review meetings — consolidating findings, resolving contradictions between witnesses, pruning superseded theories.</p>
+<p><strong>Intelligence Analysis.</strong> Multiple analysts examine the same situation from different specializations — signals intelligence, human intelligence, open-source intelligence. Each analyst's findings inform the others' interpretations. The explicit contradiction pattern (Tier 3 conflict resolution) is critical: when SIGINT suggests one conclusion and HUMINT suggests another, the disagreement itself is the most important intelligence product. Silently resolving conflicts in intelligence analysis gets people killed.</p>
+<hr />
+<h2 id="1413-testing-the-memory-architecture">14.13 Testing the Memory Architecture</h2>
+<h3 id="test-1-cross-cli-memory-propagation">Test 1: Cross-CLI Memory Propagation</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Coder CLI writes a pattern memory with importance 4.
+Expected: Memory appears on shared bus. Security CLI&#39;s next session
+includes this memory in system prompt injection.
+Verify: Security CLI prompt contains pattern key and value.
+</code></pre></div>
+
+<h3 id="test-2-conflict-resolution-contradiction">Test 2: Conflict Resolution — Contradiction</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Coder writes threat assessment &quot;low risk&quot; for endpoint X.
+       Security writes threat assessment &quot;high risk&quot; for same endpoint.
+Expected: Both assessments persist. memory_links contains a
+&quot;contradicts&quot; entry linking them.
+Verify: Neither assessment is overwritten. Both appear in queries.
+</code></pre></div>
+
+<h3 id="test-3-decay-and-archival">Test 3: Decay and Archival</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Create memory with importance 1, decay_rate 0.5.
+       Advance clock 60 days with no access.
+Expected: relevance score drops below 1.0.
+Verify: Memory is_archived = 1 after prune cycle. Not in system prompt.
+       Still queryable via explicit search.
+</code></pre></div>
+
+<h3 id="test-4-kairos_dream-consolidation">Test 4: KAIROS_DREAM Consolidation</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: 5 CLI sessions generate 20 private memories across 3 stores.
+       12 hours pass.
+Expected: Dream coordinator fires. Cross-cutting patterns promoted
+to shared bus. Low-value memories stay private. Contradictions
+between stores resolved with explicit links.
+</code></pre></div>
+
+<h3 id="test-5-resurrection">Test 5: Resurrection</h3>
+<div class="codehilite"><pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><span></span><code>Setup: Memory archived 30 days ago. New conversation references
+       the archived memory&#39;s topic.
+Expected: Memory resurrected — is_archived cleared, accessed_at
+refreshed, relevance score recalculated from current state.
+</code></pre></div>
+
+<hr />
+<h2 id="1414-the-memory-manifesto">14.14 The Memory Manifesto</h2>
+<p>We close with the principles that should guide every memory architecture decision in the multi-CLI forge.</p>
+<p><strong>Principle 1: Memory is a tax.</strong> Every memory injected into the system prompt consumes tokens that could be used for reasoning. The best memory system is the smallest one that preserves essential knowledge. If a memory can be derived from the codebase, do not store it — <code>git log</code> and <code>grep</code> are faster and more accurate than recalled facts.</p>
+<p><strong>Principle 2: Conflicts are signal, not noise.</strong> When two agents disagree, the disagreement is information. Never silently resolve conflicts. Surface them. Link them. Let the next agent — or the human — decide.</p>
+<p><strong>Principle 3: Decay is a feature.</strong> Knowledge that is not accessed is knowledge that is not needed. Aggressive decay with easy resurrection beats permanent storage with token-wasting clutter.</p>
+<p><strong>Principle 4: Provenance matters.</strong> A threat finding from the Security CLI carries more weight than one from the Docs CLI. Track who wrote what. Use provenance to weight trust.</p>
+<p><strong>Principle 5: Private before shared.</strong> Not every observation deserves a place on the shared bus. Extract privately, promote selectively. The shared bus should contain knowledge that changes behavior across multiple agents.</p>
+<p><strong>Principle 6: The dream is essential.</strong> Without consolidation, memory grows without bound. The <code>KAIROS_DREAM</code> pattern — periodic review, synthesis, pruning — is infrastructure, not overhead.</p>
+<p><strong>Principle 7: Memory serves the mission.</strong> Every memory should pass one question: "Does this change what an agent would do?" If the answer is no, do not store it.</p>
+<hr />
+<p><em>Chapter 14 Target Verification:</em>
+- [x] 8 memory systems from Claude Code source fully mapped (Layers 1-8)
+- [x] Shared vs private memory design with two-tier model
+- [x] EXTRACT_MEMORIES pipeline with skip heuristic and coalescing pattern
+- [x] AGENT_MEMORY_SNAPSHOT with three-scope model and merge strategy
+- [x] KAIROS_DREAM 4-stage consolidation with trigger gates and lock management
+- [x] Typed memory schemas for cross-CLI exchange (10 types with authority CLIs)
+- [x] Three-tier conflict resolution (last-write-wins, merge, contradiction)
+- [x] Relevance scoring with 5-factor algorithm and cross-agent signal
+- [x] System prompt injection (top-N auto-sync)
+- [x] Complete Rust implementation of memory bus, aggregator, and snapshot manager
+- [x] Worked scenario tracing memory across 4 sessions and 3 CLIs
+- [x] TOML configuration for full forge memory setup
+- [x] Non-engineering domains (medical, legal, intelligence)
+- [x] 5 test scenarios</p>
+<p>In the next chapter, we connect the memory bus to the communication layer — building the inter-CLI messaging protocol that lets agents react to each other's actions in real time. Memory gives the system knowledge. Communication gives it reflexes.</p>
+<div style="display:flex;justify-content:space-between;padding:2rem 0;margin-top:3rem;border-top:1px solid var(--border);"><a href="chapter-13.html" style="color:var(--accent-blue);text-decoration:none;">← The Documentation CLI — The Chronicler</a><a href="chapter-15.html" style="color:var(--accent-blue);text-decoration:none;text-align:right;">Inter-CLI Communication Protocol →</a></div>
+</main>
+<footer class="doc-footer" style="text-align:center;padding:2rem;color:var(--text-secondary);font-size:0.85rem;">
+  <p><a href="index.html" style="color:var(--accent-blue);">← Table of Contents</a></p>
+</footer>
+<a href="#" id="back-to-top" style="display:none;position:fixed;bottom:2rem;right:2rem;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;text-decoration:none;font-size:1.2rem;z-index:99;">↑</a>
+<script>
+(function(){
+var bar=document.querySelector('.scroll-indicator .bar');
+function updateBar(){var s=window.scrollY,h=document.documentElement.scrollHeight-window.innerHeight;if(bar)bar.style.width=h>0?(s/h*100)+'%':'0%';}
+var btt=document.getElementById('back-to-top');
+function updateBtt(){if(btt)btt.style.display=window.scrollY>400?'flex':'none';}
+window.toggleSidebar=function(){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s){s.classList.toggle('open');if(o)o.classList.toggle('active');}};
+window.copyCode=function(b){var c=b.parentElement.querySelector('code');if(!c)return;navigator.clipboard.writeText(c.textContent).then(function(){var o=b.textContent;b.textContent='\u2713 Copied';b.style.color='var(--accent-green)';setTimeout(function(){b.textContent=o;b.style.color='';},2000);});};
+document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=1024){var s=document.getElementById('sidebar'),o=document.querySelector('.sidebar-overlay');if(s)s.classList.remove('open');if(o)o.classList.remove('active');}});});
+var tk=false;window.addEventListener('scroll',function(){if(!tk){requestAnimationFrame(function(){updateBar();updateBtt();tk=false;});tk=true;}});
+updateBar();
+})();
+</script>
+</body>
+</html>
