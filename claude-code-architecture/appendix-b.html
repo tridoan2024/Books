@@ -123,230 +123,601 @@ hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
 </nav>
 <div class="container">
 <h1 id="appendix-b-component-dependency-map">Appendix B: Component Dependency Map</h1>
-<p>This appendix provides a complete visual map of the AI CLI agent's component architecture, showing how every major subsystem connects to every other.</p>
+<h2 id="reading-this-map">Reading This Map</h2>
+<p>The chapters of this book examine subsystems individually --- the tool system in Part V, the permission system in Part VI, the streaming pipeline in Part IV. But production systems do not run in isolation. Every request flows through multiple subsystems, and understanding the dependencies between them is essential for reasoning about change propagation, failure modes, and performance bottlenecks.</p>
+<p>This appendix presents the full component dependency map for an AI CLI agent architecture. It covers all 12 major subsystems, their dependency relationships, the layered architecture that organizes them, a component interaction matrix, critical path analysis, and strategies for preventing the circular dependencies that plague large TypeScript codebases.</p>
 <hr />
-<h2 id="the-full-system-architecture">The Full System Architecture</h2>
-<p>The following diagram shows all twelve major subsystems and their primary dependency relationships:</p>
-<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TB</span>
-<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;UI Layer&quot;</span>
-<span class="w">        </span><span class="n">UI</span><span class="p">[</span><span class="n">Terminal</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Ink</span><span class="p">]</span>
-<span class="w">        </span><span class="n">INPUT</span><span class="p">[</span><span class="n">Input</span><span class="w"> </span><span class="n">Processing</span><span class="p">]</span>
-<span class="w">        </span><span class="n">RENDER</span><span class="p">[</span><span class="n">Markdown</span><span class="w"> </span><span class="n">Renderer</span><span class="p">]</span>
-<span class="w">    </span><span class="n">end</span>
-
-<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Application Layer&quot;</span>
-<span class="w">        </span><span class="n">LOOP</span><span class="p">[</span><span class="n">Agent</span><span class="w"> </span><span class="n">Loop</span><span class="p">]</span>
-<span class="w">        </span><span class="n">SKILLS</span><span class="p">[</span><span class="n">Skill</span><span class="w"> </span><span class="n">System</span><span class="p">]</span>
-<span class="w">        </span><span class="n">HOOKS</span><span class="p">[</span><span class="n">Hook</span><span class="w"> </span><span class="n">Engine</span><span class="p">]</span>
-<span class="w">        </span><span class="n">SCHED</span><span class="p">[</span><span class="n">Scheduler</span><span class="p">]</span>
-<span class="w">    </span><span class="n">end</span>
-
-<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Domain Layer&quot;</span>
-<span class="w">        </span><span class="n">TOOLS</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Registry</span><span class="p">]</span>
-<span class="w">        </span><span class="n">PERMS</span><span class="p">[</span><span class="n">Permission</span><span class="w"> </span><span class="n">System</span><span class="p">]</span>
-<span class="w">        </span><span class="n">CTX</span><span class="p">[</span><span class="n">Context</span><span class="w"> </span><span class="n">Engine</span><span class="p">]</span>
-<span class="w">        </span><span class="n">AGENTS</span><span class="p">[</span><span class="n">Subagent</span><span class="w"> </span><span class="n">Manager</span><span class="p">]</span>
-<span class="w">    </span><span class="n">end</span>
-
-<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Infrastructure Layer&quot;</span>
-<span class="w">        </span><span class="n">API</span><span class="p">[</span><span class="n">API</span><span class="w"> </span><span class="n">Client</span><span class="p">]</span>
-<span class="w">        </span><span class="n">MCP</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Client</span><span class="p">]</span>
-<span class="w">        </span><span class="n">STORE</span><span class="p">[</span><span class="n">Session</span><span class="w"> </span><span class="n">Storage</span><span class="p">]</span>
-<span class="w">        </span><span class="n">CONFIG</span><span class="p">[</span><span class="n">Configuration</span><span class="p">]</span>
-<span class="w">        </span><span class="n">STATE</span><span class="p">[</span><span class="n">Global</span><span class="w"> </span><span class="n">State</span><span class="p">]</span>
-<span class="w">    </span><span class="n">end</span>
-
-<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP</span>
-<span class="w">    </span><span class="n">INPUT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">UI</span>
-<span class="w">    </span><span class="n">RENDER</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">UI</span>
-<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOLS</span>
-<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CTX</span>
-<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
-<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">HOOKS</span>
-<span class="w">    </span><span class="n">SKILLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP</span>
-<span class="w">    </span><span class="n">SCHED</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP</span>
-<span class="w">    </span><span class="n">TOOLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERMS</span>
-<span class="w">    </span><span class="n">TOOLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MCP</span>
-<span class="w">    </span><span class="n">AGENTS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP</span>
-<span class="w">    </span><span class="n">AGENTS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOLS</span>
-<span class="w">    </span><span class="n">CTX</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">STATE</span>
-<span class="w">    </span><span class="n">CTX</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">STORE</span>
-<span class="w">    </span><span class="n">PERMS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONFIG</span>
-<span class="w">    </span><span class="n">PERMS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">STATE</span>
-<span class="w">    </span><span class="n">API</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONFIG</span>
-<span class="w">    </span><span class="n">API</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">STATE</span>
-<span class="w">    </span><span class="n">MCP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONFIG</span>
-<span class="w">    </span><span class="n">HOOKS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONFIG</span>
-<span class="w">    </span><span class="n">STORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">STATE</span>
-<span class="w">    </span><span class="n">CONFIG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">STATE</span>
-</code></pre></div>
-
-<hr />
-<h2 id="layer-architecture">Layer Architecture</h2>
-<p>The system follows a four-layer architecture where each layer may only depend on layers below it:</p>
+<h2 id="the-12-major-subsystems">The 12 Major Subsystems</h2>
+<p>Before examining dependencies, here is a catalog of the subsystems referenced throughout this book. Each maps to one or more chapters where its architecture is discussed in detail.</p>
 <table>
 <thead>
 <tr>
-<th>Layer</th>
-<th>Components</th>
+<th>#</th>
+<th>Subsystem</th>
 <th>Responsibility</th>
+<th>Primary Chapters</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>UI</strong></td>
-<td>Terminal UI, Input Processing, Markdown Renderer</td>
-<td>User interaction, display, input capture</td>
+<td>1</td>
+<td><strong>Bootstrap</strong></td>
+<td>Multi-phase startup, fast-path exits, argument parsing</td>
+<td>Ch. 4</td>
 </tr>
 <tr>
-<td><strong>Application</strong></td>
-<td>Agent Loop, Skill System, Hook Engine, Scheduler</td>
-<td>Workflow orchestration, lifecycle management</td>
+<td>2</td>
+<td><strong>Configuration</strong></td>
+<td>7-layer settings cascade, schema validation, merge semantics</td>
+<td>Ch. 5</td>
 </tr>
 <tr>
-<td><strong>Domain</strong></td>
-<td>Tool Registry, Permission System, Context Engine, Subagent Manager</td>
-<td>Core agent logic, security, tool execution</td>
+<td>3</td>
+<td><strong>Session Manager</strong></td>
+<td>Session creation, persistence, resume, crash recovery</td>
+<td>Ch. 6</td>
 </tr>
 <tr>
-<td><strong>Infrastructure</strong></td>
-<td>API Client, MCP Client, Session Storage, Configuration, Global State</td>
-<td>External communication, persistence, config</td>
+<td>4</td>
+<td><strong>Agent Loop</strong></td>
+<td>prompt-think-act-observe cycle, convergence detection, exit conditions</td>
+<td>Ch. 7</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>Message Assembler</strong></td>
+<td>System prompt assembly, context injection, message role semantics</td>
+<td>Ch. 8-9</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>API Client</strong></td>
+<td>Provider abstraction, streaming, retry logic, circuit breakers</td>
+<td>Ch. 10-12</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>Tool System</strong></td>
+<td>Registry, dispatch, validation, schema generation, result formatting</td>
+<td>Ch. 13-16</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>Permission System</strong></td>
+<td>6 modes, 8 rule sources, rule evaluation, auto-mode classifier</td>
+<td>Ch. 17-18</td>
+</tr>
+<tr>
+<td>9</td>
+<td><strong>Security Engine</strong></td>
+<td>Bash parser, AST analysis, dangerous pattern detection, sandboxing</td>
+<td>Ch. 19-20</td>
+</tr>
+<tr>
+<td>10</td>
+<td><strong>MCP Runtime</strong></td>
+<td>Protocol handling, server lifecycle, tool discovery, capability negotiation</td>
+<td>Ch. 21-23</td>
+</tr>
+<tr>
+<td>11</td>
+<td><strong>Multi-Agent</strong></td>
+<td>Subagent orchestration, context isolation, result aggregation</td>
+<td>Ch. 24-26</td>
+</tr>
+<tr>
+<td>12</td>
+<td><strong>Terminal UI</strong></td>
+<td>React/Ink rendering, input processing, streaming markdown, command routing</td>
+<td>Ch. 27-28</td>
 </tr>
 </tbody>
 </table>
-<h3 id="the-dependency-rule">The Dependency Rule</h3>
-<p>Each layer depends <strong>only</strong> on layers below it:</p>
-<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TB</span>
-<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="s">&quot;UI Layer&lt;br/&gt;(React/Ink components)&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="s">&quot;Application Layer&lt;br/&gt;(Agent loop, hooks, skills)&quot;</span><span class="p">]</span>
-<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="s">&quot;Domain Layer&lt;br/&gt;(Tools, permissions, context)&quot;</span><span class="p">]</span>
-<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="s">&quot;Infrastructure Layer&lt;br/&gt;(API, MCP, storage, config)&quot;</span><span class="p">]</span>
+<hr />
+<h2 id="full-system-component-diagram">Full System Component Diagram</h2>
+<p>The following diagram shows all 12 subsystems and their primary dependency arrows. An arrow from A to B means "A depends on B" --- A calls functions in B, reads state managed by B, or uses types defined by B.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s2">&quot;UI Layer&quot;</span>
+<span class="w">        </span><span class="n">UI</span><span class="p">[</span><span class="s2">&quot;12. Terminal UI&lt;br/&gt;(React/Ink, input processing,&lt;br/&gt;streaming markdown)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s2">&quot;Application Layer&quot;</span>
+<span class="w">        </span><span class="n">BOOT</span><span class="p">[</span><span class="s2">&quot;1. Bootstrap&lt;br/&gt;(startup, arg parsing,&lt;br/&gt;fast-path exits)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">LOOP</span><span class="p">[</span><span class="s2">&quot;4. Agent Loop&lt;br/&gt;(prompt→think→act→observe,&lt;br/&gt;convergence detection)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">MSG</span><span class="p">[</span><span class="s2">&quot;5. Message Assembler&lt;br/&gt;(system prompt, context&lt;br/&gt;injection, token budgeting)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">MULTI</span><span class="p">[</span><span class="s2">&quot;11. Multi-Agent&lt;br/&gt;(subagent orchestration,&lt;br/&gt;context isolation)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s2">&quot;Domain Layer&quot;</span>
+<span class="w">        </span><span class="n">TOOL</span><span class="p">[</span><span class="s2">&quot;7. Tool System&lt;br/&gt;(registry, dispatch,&lt;br/&gt;validation, schemas)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PERM</span><span class="p">[</span><span class="s2">&quot;8. Permission System&lt;br/&gt;(modes, rules, evaluation,&lt;br/&gt;auto-mode classifier)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SEC</span><span class="p">[</span><span class="s2">&quot;9. Security Engine&lt;br/&gt;(shell parser, AST analysis,&lt;br/&gt;pattern detection)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">MCP</span><span class="p">[</span><span class="s2">&quot;10. MCP Runtime&lt;br/&gt;(protocol, server lifecycle,&lt;br/&gt;tool discovery)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s2">&quot;Infrastructure Layer&quot;</span>
+<span class="w">        </span><span class="n">CONF</span><span class="p">[</span><span class="s2">&quot;2. Configuration&lt;br/&gt;(7-layer cascade,&lt;br/&gt;schema validation)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SESS</span><span class="p">[</span><span class="s2">&quot;3. Session Manager&lt;br/&gt;(persistence, resume,&lt;br/&gt;crash recovery)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">API</span><span class="p">[</span><span class="s2">&quot;6. API Client&lt;br/&gt;(provider abstraction,&lt;br/&gt;streaming, retry)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="o">%%</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="n">Layer</span><span class="w"> </span><span class="n">dependencies</span>
+<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP</span>
+<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOL</span>
+<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERM</span>
+<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MSG</span>
+<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+
+<span class="w">    </span><span class="o">%%</span><span class="w"> </span><span class="n">Application</span><span class="w"> </span><span class="n">Layer</span><span class="w"> </span><span class="n">dependencies</span>
+<span class="w">    </span><span class="n">BOOT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+<span class="w">    </span><span class="n">BOOT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SESS</span>
+<span class="w">    </span><span class="n">BOOT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">UI</span>
+<span class="w">    </span><span class="n">BOOT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MCP</span>
+
+<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MSG</span>
+<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOL</span>
+<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERM</span>
+<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">UI</span>
+<span class="w">    </span><span class="n">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SESS</span>
+
+<span class="w">    </span><span class="n">MULTI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP</span>
+<span class="w">    </span><span class="n">MULTI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERM</span>
+<span class="w">    </span><span class="n">MULTI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOL</span>
+<span class="w">    </span><span class="n">MULTI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SESS</span>
+
+<span class="w">    </span><span class="n">MSG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+<span class="w">    </span><span class="n">MSG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOL</span>
+<span class="w">    </span><span class="n">MSG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SESS</span>
+<span class="w">    </span><span class="n">MSG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MCP</span>
+
+<span class="w">    </span><span class="o">%%</span><span class="w"> </span><span class="n">Domain</span><span class="w"> </span><span class="n">Layer</span><span class="w"> </span><span class="n">dependencies</span>
+<span class="w">    </span><span class="n">TOOL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERM</span>
+<span class="w">    </span><span class="n">TOOL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SEC</span>
+<span class="w">    </span><span class="n">TOOL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MCP</span>
+<span class="w">    </span><span class="n">TOOL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+
+<span class="w">    </span><span class="n">PERM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+<span class="w">    </span><span class="n">PERM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SEC</span>
+
+<span class="w">    </span><span class="n">SEC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+
+<span class="w">    </span><span class="n">MCP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+<span class="w">    </span><span class="n">MCP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERM</span>
+
+<span class="w">    </span><span class="o">%%</span><span class="w"> </span><span class="n">Infrastructure</span><span class="w"> </span><span class="n">Layer</span><span class="w"> </span><span class="n">dependencies</span>
+<span class="w">    </span><span class="n">API</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+<span class="w">    </span><span class="n">SESS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span>
+
+<span class="w">    </span><span class="o">%%</span><span class="w"> </span><span class="n">Styling</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#d4edda,stroke:#155724</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">BOOT</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#cce5ff,stroke:#004085</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">LOOP</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#cce5ff,stroke:#004085</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MSG</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#cce5ff,stroke:#004085</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MULTI</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#cce5ff,stroke:#004085</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">TOOL</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3cd,stroke:#856404</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">PERM</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3cd,stroke:#856404</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SEC</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3cd,stroke:#856404</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3cd,stroke:#856404</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">CONF</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#f8d7da,stroke:#721c24</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SESS</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#f8d7da,stroke:#721c24</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#f8d7da,stroke:#721c24</span>
 </code></pre></div>
 
-<p>The UI layer never calls the API client directly — it goes through the agent loop. The permission system never renders UI — it returns a decision that the UI layer displays. This strict layering prevents circular dependencies and keeps each component testable in isolation.</p>
+<hr />
+<h2 id="the-four-layer-architecture">The Four-Layer Architecture</h2>
+<p>The subsystems organize into four layers, each with a strict dependency rule: layers may depend on layers below them, never on layers above. This is the Dependency Rule from Clean Architecture, adapted for an AI agent system.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">L1</span><span class="p">[</span><span class="s">&quot;Layer 4: UI Layer&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">        </span><span class="n">L1A</span><span class="p">[</span><span class="s">&quot;Terminal UI&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">L2</span><span class="p">[</span><span class="s">&quot;Layer 3: Application Layer&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">        </span><span class="n">L2A</span><span class="p">[</span><span class="s">&quot;Bootstrap&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L2B</span><span class="p">[</span><span class="s">&quot;Agent Loop&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L2C</span><span class="p">[</span><span class="s">&quot;Message Assembler&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L2D</span><span class="p">[</span><span class="s">&quot;Multi-Agent&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">L3</span><span class="p">[</span><span class="s">&quot;Layer 2: Domain Layer&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">        </span><span class="n">L3A</span><span class="p">[</span><span class="s">&quot;Tool System&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L3B</span><span class="p">[</span><span class="s">&quot;Permission System&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L3C</span><span class="p">[</span><span class="s">&quot;Security Engine&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L3D</span><span class="p">[</span><span class="s">&quot;MCP Runtime&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">L4</span><span class="p">[</span><span class="s">&quot;Layer 1: Infrastructure Layer&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">        </span><span class="n">L4A</span><span class="p">[</span><span class="s">&quot;Configuration&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L4B</span><span class="p">[</span><span class="s">&quot;Session Manager&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L4C</span><span class="p">[</span><span class="s">&quot;API Client&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">L1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L2</span>
+<span class="w">    </span><span class="n">L1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L3</span>
+<span class="w">    </span><span class="n">L1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L4</span>
+<span class="w">    </span><span class="n">L2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L3</span>
+<span class="w">    </span><span class="n">L2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L4</span>
+<span class="w">    </span><span class="n">L3</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L4</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L1</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">d4edda</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">155724</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L2</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">cce5ff</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mo">0040</span><span class="mi">85</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L3</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3cd</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">856404</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L4</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">f8d7da</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">721</span><span class="n">c24</span>
+</code></pre></div>
+
+<h3 id="layer-1-infrastructure">Layer 1: Infrastructure</h3>
+<p><strong>Components:</strong> Configuration, Session Manager, API Client</p>
+<p><strong>Dependency rule:</strong> Depends only on standard library and external packages. Never depends on domain or application logic.</p>
+<p>The infrastructure layer provides the primitives that every other layer needs: configuration values, persistent session state, and API communication. These components have no knowledge of tools, permissions, or the agent loop. They expose generic interfaces: "read a config value," "persist a transcript entry," "send a message to the model."</p>
+<p>This layer changes least frequently. A new configuration source, a new API provider, or a new persistence backend can be added without touching the agent loop or tool system.</p>
+<h3 id="layer-2-domain">Layer 2: Domain</h3>
+<p><strong>Components:</strong> Tool System, Permission System, Security Engine, MCP Runtime</p>
+<p><strong>Dependency rule:</strong> Depends on Infrastructure. Never depends on Application or UI.</p>
+<p>The domain layer contains the core business logic of the AI agent: what tools exist, what permissions govern them, how security analysis works, and how external tool servers are managed. These components define the <em>rules</em> of the system --- what the agent can do, what it is allowed to do, and what is considered dangerous.</p>
+<p>The domain layer depends on configuration (to read permission rules, tool settings, security thresholds) and session state (to track tool usage, permission grants). It does not depend on the agent loop --- the tool system does not know <em>when</em> it will be called, only <em>how</em> to execute when it is.</p>
+<h3 id="layer-3-application">Layer 3: Application</h3>
+<p><strong>Components:</strong> Bootstrap, Agent Loop, Message Assembler, Multi-Agent</p>
+<p><strong>Dependency rule:</strong> Depends on Domain and Infrastructure. Never depends on UI.</p>
+<p>The application layer orchestrates the domain components into workflows. The agent loop calls the message assembler, sends messages through the API client, dispatches tool calls through the tool system, checks permissions through the permission system, and persists state through the session manager. It is the conductor of the orchestra.</p>
+<p>The Multi-Agent component sits here because subagent orchestration is an application concern --- it decides <em>when</em> to delegate and <em>how</em> to aggregate results, using domain components for the actual work.</p>
+<h3 id="layer-4-ui">Layer 4: UI</h3>
+<p><strong>Components:</strong> Terminal UI</p>
+<p><strong>Dependency rule:</strong> Depends on all lower layers. Nothing depends on UI.</p>
+<p>The UI layer renders state changes to the terminal and processes user input. It depends on the agent loop (to display progress), the tool system (to render tool results), the permission system (to display permission prompts), and configuration (to read display preferences).</p>
+<p>The critical property: removing the UI layer entirely produces a headless agent that still functions. This is not hypothetical --- the SDK build does exactly this, replacing the Terminal UI with a programmatic interface. The layered architecture makes this possible because no lower layer depends on the UI.</p>
 <hr />
 <h2 id="component-interaction-matrix">Component Interaction Matrix</h2>
-<p>This matrix shows which components directly communicate with which:</p>
+<p>The following matrix shows which components interact directly. An X indicates a direct function call or state read between the row component and the column component. The matrix is not symmetric --- A calling B does not imply B calls A.</p>
+<table>
+<thead>
+<tr>
+<th>Caller / Callee</th>
+<th>Boot</th>
+<th>Conf</th>
+<th>Sess</th>
+<th>Loop</th>
+<th>Msg</th>
+<th>API</th>
+<th>Tool</th>
+<th>Perm</th>
+<th>Sec</th>
+<th>MCP</th>
+<th>Multi</th>
+<th>UI</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Bootstrap</strong></td>
+<td>---</td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td>X</td>
+</tr>
+<tr>
+<td><strong>Configuration</strong></td>
+<td></td>
+<td>---</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Session Manager</strong></td>
+<td></td>
+<td>X</td>
+<td>---</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Agent Loop</strong></td>
+<td></td>
+<td></td>
+<td>X</td>
+<td>---</td>
+<td>X</td>
+<td>X</td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td>X</td>
+</tr>
+<tr>
+<td><strong>Message Assembler</strong></td>
+<td></td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td>---</td>
+<td></td>
+<td>X</td>
+<td></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>API Client</strong></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td>---</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Tool System</strong></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>---</td>
+<td>X</td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Permission System</strong></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>---</td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Security Engine</strong></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>---</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>MCP Runtime</strong></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td>---</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Multi-Agent</strong></td>
+<td></td>
+<td></td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td></td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td></td>
+<td>---</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Terminal UI</strong></td>
+<td></td>
+<td>X</td>
+<td></td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td>X</td>
+<td>X</td>
+<td></td>
+<td></td>
+<td></td>
+<td>---</td>
+</tr>
+</tbody>
+</table>
+<h3 id="reading-the-matrix">Reading the Matrix</h3>
+<p><strong>Column analysis</strong> reveals coupling: Configuration (column 2) is called by 9 of 11 other components. It is the most depended-upon component. Changes to the Configuration API have the widest blast radius.</p>
+<p><strong>Row analysis</strong> reveals coordination: the Agent Loop (row 4) calls 6 other components. It is the most coordinating component. Bugs in the agent loop can manifest as failures in any downstream component.</p>
+<p><strong>Diagonal emptiness</strong> confirms: no component calls itself recursively through another component (no circular dependencies at the component level).</p>
+<h3 id="dependency-counts">Dependency Counts</h3>
 <table>
 <thead>
 <tr>
 <th>Component</th>
-<th>Reads From</th>
-<th>Writes To</th>
-<th>Calls</th>
+<th>Depends On (outgoing)</th>
+<th>Depended On By (incoming)</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>Agent Loop</strong></td>
-<td>Context Engine, State</td>
-<td>State, Storage</td>
-<td>API Client, Tool Registry, Hook Engine</td>
+<td>Configuration</td>
+<td>0</td>
+<td>9</td>
 </tr>
 <tr>
-<td><strong>API Client</strong></td>
-<td>Config, State</td>
-<td>State (cost counters)</td>
-<td>External API</td>
+<td>Security Engine</td>
+<td>1</td>
+<td>2</td>
 </tr>
 <tr>
-<td><strong>Tool Registry</strong></td>
-<td>Config</td>
-<td>—</td>
-<td>Permission System, individual tools</td>
+<td>Session Manager</td>
+<td>1</td>
+<td>4</td>
 </tr>
 <tr>
-<td><strong>Permission System</strong></td>
-<td>Config, State, Rules</td>
-<td>Decision cache</td>
-<td>AI Classifier (side-query)</td>
+<td>API Client</td>
+<td>1</td>
+<td>1</td>
 </tr>
 <tr>
-<td><strong>Context Engine</strong></td>
-<td>State, Storage, Config</td>
-<td>State (token counts)</td>
-<td>Compaction service</td>
+<td>Permission System</td>
+<td>2</td>
+<td>4</td>
 </tr>
 <tr>
-<td><strong>Hook Engine</strong></td>
-<td>Config (hook definitions)</td>
-<td>State (hook counters)</td>
-<td>Shell (command hooks), HTTP (webhook hooks)</td>
+<td>MCP Runtime</td>
+<td>2</td>
+<td>3</td>
 </tr>
 <tr>
-<td><strong>MCP Client</strong></td>
-<td>Config (server definitions)</td>
-<td>State (connection status)</td>
-<td>External MCP servers</td>
+<td>Message Assembler</td>
+<td>4</td>
+<td>2</td>
 </tr>
 <tr>
-<td><strong>Subagent Manager</strong></td>
-<td>—</td>
-<td>—</td>
-<td>Agent Loop (recursive), Tool Registry</td>
+<td>Tool System</td>
+<td>4</td>
+<td>4</td>
 </tr>
 <tr>
-<td><strong>Session Storage</strong></td>
-<td>State (session ID)</td>
-<td>Filesystem (JSONL)</td>
-<td>—</td>
+<td>Bootstrap</td>
+<td>4</td>
+<td>0</td>
 </tr>
 <tr>
-<td><strong>Skill System</strong></td>
-<td>Config, filesystem</td>
-<td>Context (injection)</td>
-<td>—</td>
+<td>Multi-Agent</td>
+<td>4</td>
+<td>0</td>
 </tr>
 <tr>
-<td><strong>Terminal UI</strong></td>
-<td>State (messages, status)</td>
-<td>State (user input)</td>
-<td>Input Processing, Renderer</td>
+<td>Agent Loop</td>
+<td>6</td>
+<td>2</td>
 </tr>
 <tr>
-<td><strong>Configuration</strong></td>
-<td>Filesystem, env vars, MDM</td>
-<td>State (merged config)</td>
-<td>—</td>
+<td>Terminal UI</td>
+<td>5</td>
+<td>1</td>
 </tr>
 </tbody>
 </table>
+<p>Configuration has the highest fan-in (9 incoming dependencies) and zero fan-out. This is correct --- it is a pure provider of data. The Agent Loop has the highest fan-out (6 outgoing dependencies), reflecting its role as the orchestration hub.</p>
 <hr />
 <h2 id="critical-path-analysis">Critical Path Analysis</h2>
-<p>The <strong>hot path</strong> is the sequence of components involved in every agent turn. Latency on this path directly impacts user experience:</p>
-<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">U</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">User</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Terminal</span><span class="w"> </span><span class="n">UI</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">L</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">Loop</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">Engine</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">Client</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Tool</span><span class="w"> </span><span class="n">Registry</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">P</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Permission</span><span class="w"> </span><span class="n">System</span>
-<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">H</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Hook</span><span class="w"> </span><span class="n">Engine</span>
+<p>Not all components are on the hot path. Understanding which components execute on every agent turn --- and which execute only during startup or on specific triggers --- is essential for performance optimization.</p>
+<h3 id="the-hot-path-every-agent-turn">The Hot Path: Every Agent Turn</h3>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">INPUT</span><span class="p">[</span><span class="s">&quot;User Input&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">LOOP</span><span class="p">[</span><span class="s">&quot;Agent Loop&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nf">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MSG</span><span class="p">[</span><span class="s">&quot;Message&lt;br/&gt;Assembler&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">MSG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span><span class="p">[</span><span class="s">&quot;API Client&lt;br/&gt;(streaming)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">API</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">LOOP</span>
+<span class="w">    </span><span class="nf">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOL</span><span class="p">[</span><span class="s">&quot;Tool System&lt;br/&gt;(dispatch)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">TOOL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERM</span><span class="p">[</span><span class="s">&quot;Permission&lt;br/&gt;System&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PERM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOL</span>
+<span class="w">    </span><span class="n">TOOL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SEC</span><span class="p">[</span><span class="s">&quot;Security&lt;br/&gt;Engine&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">SEC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOOL</span>
+<span class="w">    </span><span class="n">TOOL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">LOOP</span>
+<span class="w">    </span><span class="nf">LOOP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">UI</span><span class="p">[</span><span class="s">&quot;Terminal UI&lt;br/&gt;(render)&quot;</span><span class="p">]</span>
 
-<span class="w">    </span><span class="n">U</span><span class="o">-&gt;&gt;</span><span class="n">UI</span><span class="p">:</span><span class="w"> </span><span class="n">Type</span><span class="w"> </span><span class="n">prompt</span>
-<span class="w">    </span><span class="n">UI</span><span class="o">-&gt;&gt;</span><span class="n">L</span><span class="p">:</span><span class="w"> </span><span class="n">Submit</span><span class="w"> </span><span class="n">message</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">C</span><span class="p">:</span><span class="w"> </span><span class="n">Assemble</span><span class="w"> </span><span class="n">context</span>
-<span class="w">    </span><span class="n">C</span><span class="o">-&gt;&gt;</span><span class="n">L</span><span class="p">:</span><span class="w"> </span><span class="n">Token</span><span class="o">-</span><span class="n">budgeted</span><span class="w"> </span><span class="n">messages</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">A</span><span class="p">:</span><span class="w"> </span><span class="n">Send</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">request</span>
-<span class="w">    </span><span class="n">A</span><span class="o">-&gt;&gt;</span><span class="n">L</span><span class="p">:</span><span class="w"> </span><span class="n">Stream</span><span class="w"> </span><span class="n">response</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">H</span><span class="p">:</span><span class="w"> </span><span class="n">PreToolUse</span><span class="w"> </span><span class="n">hook</span>
-<span class="w">    </span><span class="n">H</span><span class="o">-&gt;&gt;</span><span class="n">L</span><span class="p">:</span><span class="w"> </span><span class="n">Allow</span><span class="o">/</span><span class="n">Block</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">P</span><span class="p">:</span><span class="w"> </span><span class="n">Check</span><span class="w"> </span><span class="n">permission</span>
-<span class="w">    </span><span class="n">P</span><span class="o">-&gt;&gt;</span><span class="n">L</span><span class="p">:</span><span class="w"> </span><span class="n">Decision</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="n">Execute</span><span class="w"> </span><span class="k">tool</span>
-<span class="w">    </span><span class="n">T</span><span class="o">-&gt;&gt;</span><span class="n">L</span><span class="p">:</span><span class="w"> </span><span class="n">Tool</span><span class="w"> </span><span class="n">result</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">C</span><span class="p">:</span><span class="w"> </span><span class="n">Update</span><span class="w"> </span><span class="n">context</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">A</span><span class="p">:</span><span class="w"> </span><span class="n">Continue</span><span class="w"> </span><span class="p">(</span><span class="n">loop</span><span class="p">)</span>
-<span class="w">    </span><span class="n">A</span><span class="o">-&gt;&gt;</span><span class="n">L</span><span class="p">:</span><span class="w"> </span><span class="n">Final</span><span class="w"> </span><span class="n">response</span>
-<span class="w">    </span><span class="n">L</span><span class="o">-&gt;&gt;</span><span class="n">UI</span><span class="p">:</span><span class="w"> </span><span class="n">Render</span><span class="w"> </span><span class="n">output</span>
-<span class="w">    </span><span class="n">UI</span><span class="o">-&gt;&gt;</span><span class="n">U</span><span class="p">:</span><span class="w"> </span><span class="n">Display</span><span class="w"> </span><span class="n">result</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="nf">LOOP</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ff6b6b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">c0392b</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MSG</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ff6b6b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">c0392b</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ff6b6b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">c0392b</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">TOOL</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ff6b6b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">c0392b</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">PERM</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffa502</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">e67e22</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SEC</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffa502</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">e67e22</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffa502</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">e67e22</span>
 </code></pre></div>
 
-<p><strong>Latency budget per turn:</strong></p>
+<p><strong>Always on the hot path (every turn):</strong>
+- Agent Loop --- orchestrates each turn
+- Message Assembler --- builds the prompt for each API call
+- API Client --- sends the request and processes the streaming response</p>
+<p><strong>On the hot path when tools are invoked (most turns):</strong>
+- Tool System --- dispatches tool calls
+- Permission System --- evaluates whether the tool call is allowed
+- Security Engine --- analyzes Bash commands (only for Bash tool invocations)
+- Terminal UI --- renders tool results and streaming output</p>
+<p><strong>Performance implications:</strong> Optimizations in the Agent Loop, Message Assembler, and API Client have the highest impact because they execute on every turn. The streaming pipeline (Chapter 11) is particularly critical --- token-by-token processing latency directly affects perceived responsiveness.</p>
+<h3 id="the-cold-path-startup-only">The Cold Path: Startup Only</h3>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">START</span><span class="p">[</span><span class="s">&quot;Process Start&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">BOOT</span><span class="p">[</span><span class="s">&quot;Bootstrap&lt;br/&gt;(400ms budget)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">BOOT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONF</span><span class="p">[</span><span class="s">&quot;Configuration&lt;br/&gt;(cascade resolution)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">BOOT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SESS</span><span class="p">[</span><span class="s">&quot;Session Manager&lt;br/&gt;(resume check)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">BOOT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MCP</span><span class="p">[</span><span class="s">&quot;MCP Runtime&lt;br/&gt;(server discovery)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">MCP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DISC</span><span class="p">[</span><span class="s">&quot;Tool Discovery&lt;br/&gt;(capability negotiation)&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">BOOT</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">74</span><span class="n">b9ff</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mf">0984e3</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">CONF</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">74</span><span class="n">b9ff</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mf">0984e3</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SESS</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">74</span><span class="n">b9ff</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mf">0984e3</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">74</span><span class="n">b9ff</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mf">0984e3</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">DISC</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">74</span><span class="n">b9ff</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mf">0984e3</span>
+</code></pre></div>
+
+<p><strong>Startup only:</strong>
+- Bootstrap --- runs once, then hands off to the agent loop
+- Configuration --- cascade resolution happens once at startup, then values are cached
+- Session Manager --- resume check and session creation happen once
+- MCP Runtime --- server discovery and connection happen once (with reconnection on failure)</p>
+<p><strong>Performance implications:</strong> These components compete for the 400ms startup budget (Chapter 4). Startup optimization focuses here: parallel I/O for configuration and MCP discovery, deferred imports for large modules, fast-path exits for non-interactive invocations.</p>
+<h3 id="the-rare-path-triggered-by-specific-events">The Rare Path: Triggered by Specific Events</h3>
+<ul>
+<li><strong>Multi-Agent</strong> --- only when the agent decides to delegate to subagents (Chapter 24)</li>
+<li><strong>Session Manager (persistence)</strong> --- periodically during long sessions, not on every turn</li>
+<li><strong>MCP Runtime (reconnection)</strong> --- only on server failure</li>
+</ul>
+<h3 id="latency-budget-by-path">Latency Budget by Path</h3>
 <table>
 <thead>
 <tr>
+<th>Path</th>
 <th>Component</th>
 <th>Typical Latency</th>
 <th>Budget</th>
@@ -354,172 +725,162 @@ hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
 </thead>
 <tbody>
 <tr>
+<td>Hot</td>
 <td>Context assembly</td>
 <td>5-20ms</td>
 <td>50ms max</td>
 </tr>
 <tr>
+<td>Hot</td>
 <td>API round trip (first token)</td>
 <td>200-500ms</td>
 <td>2000ms max</td>
 </tr>
 <tr>
-<td>Hook execution</td>
-<td>10-50ms per hook</td>
-<td>5000ms timeout</td>
-</tr>
-<tr>
+<td>Hot</td>
 <td>Permission check (cached)</td>
 <td>&lt;1ms</td>
-<td>—</td>
+<td>---</td>
 </tr>
 <tr>
+<td>Hot</td>
 <td>Permission check (AI classifier)</td>
 <td>500-2000ms</td>
 <td>5000ms timeout</td>
 </tr>
 <tr>
+<td>Hot</td>
 <td>Tool execution</td>
 <td>10ms-10min</td>
 <td>120s default timeout</td>
 </tr>
 <tr>
-<td>UI render</td>
+<td>Hot</td>
+<td>UI render frame</td>
+<td>5-15ms</td>
+<td>50ms max</td>
+</tr>
+<tr>
+<td>Cold</td>
+<td>Full configuration cascade</td>
+<td>10-30ms</td>
+<td>100ms max</td>
+</tr>
+<tr>
+<td>Cold</td>
+<td>MCP server discovery + connect</td>
+<td>50-200ms</td>
+<td>300ms max</td>
+</tr>
+<tr>
+<td>Cold</td>
+<td>Session resume check</td>
 <td>5-15ms</td>
 <td>50ms max</td>
 </tr>
 </tbody>
 </table>
-<p>The API round trip dominates latency. Everything else should be negligible by comparison.</p>
+<p>The API round trip dominates hot path latency. Everything else on the hot path should be negligible by comparison. On the cold path, MCP server discovery is the largest contributor --- parallelizing server connections (Chapter 22) is the primary startup optimization.</p>
 <hr />
 <h2 id="circular-dependency-prevention">Circular Dependency Prevention</h2>
-<p>Several design patterns prevent circular dependencies in the architecture:</p>
-<h3 id="1-the-event-pattern-hooks">1. The Event Pattern (Hooks)</h3>
-<p>Instead of the Hook Engine calling back into the Agent Loop, hooks communicate through <strong>exit codes and stderr</strong>:</p>
-<div class="codehilite"><pre><span></span><code><span class="nv">Agent</span><span class="w"> </span><span class="k">Loop</span><span class="w"> </span>→<span class="w"> </span><span class="nv">Hook</span><span class="w"> </span><span class="nv">Engine</span><span class="w"> </span>→<span class="w"> </span><span class="nv">Shell</span><span class="w"> </span><span class="nv">Script</span><span class="w"> </span>→<span class="w"> </span><span class="k">Exit</span><span class="w"> </span><span class="nv">Code</span><span class="w"> </span>→<span class="w"> </span><span class="nv">Agent</span><span class="w"> </span><span class="k">Loop</span>
+<p>Circular dependencies are the silent killer of large TypeScript codebases. When module A imports module B and module B imports module A, the result is undefined behavior at runtime: one module sees an incomplete export object. In a 500,000-line codebase with hundreds of modules, circular dependencies are easy to introduce and hard to detect.</p>
+<h3 id="why-ai-agent-systems-are-susceptible">Why AI Agent Systems Are Susceptible</h3>
+<p>AI agent architectures create natural pressure toward circular dependencies:</p>
+<ol>
+<li>
+<p><strong>The tool-permission cycle.</strong> The Tool System needs the Permission System (to check if a tool call is allowed). The Permission System needs the Tool System (to look up tool metadata for rule matching). Without intervention, this becomes a circular import.</p>
+</li>
+<li>
+<p><strong>The loop-UI cycle.</strong> The Agent Loop needs the UI (to display progress). The UI needs the Agent Loop (to know current state). Naive implementation creates a circular dependency.</p>
+</li>
+<li>
+<p><strong>The config-everything cycle.</strong> Every component reads configuration. If the Configuration component imports types from other components (for validation), the cycle closes.</p>
+</li>
+</ol>
+<h3 id="strategy-1-interface-segregation-at-layer-boundaries">Strategy 1: Interface Segregation at Layer Boundaries</h3>
+<p>Define interfaces in a shared types module that both layers import. Neither imports the other directly.</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">graph</span><span class="w"> </span><span class="nx">TB</span>
+<span class="w">    </span><span class="nx">subgraph</span><span class="w"> </span><span class="s">&quot;Shared Types (no logic)&quot;</span>
+<span class="w">        </span><span class="nx">TYPES</span><span class="p">[</span><span class="s">&quot;types/&lt;br/&gt;ToolMetadata, PermissionRule,&lt;br/&gt;ToolResult, PermissionCheck&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">end</span>
+
+<span class="w">    </span><span class="nx">subgraph</span><span class="w"> </span><span class="s">&quot;Domain Layer&quot;</span>
+<span class="w">        </span><span class="nx">TOOL</span><span class="p">[</span><span class="s">&quot;Tool System&lt;br/&gt;implements ToolProvider&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">PERM</span><span class="p">[</span><span class="s">&quot;Permission System&lt;br/&gt;implements PermissionChecker&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">end</span>
+
+<span class="w">    </span><span class="nx">TOOL</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">TYPES</span>
+<span class="w">    </span><span class="nx">PERM</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">TYPES</span>
+
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">TYPES</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">e2e3e5</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="mi">383</span><span class="nx">d41</span>
 </code></pre></div>
 
-<p>The hook returns data, not control flow. This breaks what would otherwise be a circular dependency.</p>
-<h3 id="2-the-callback-pattern-permissions">2. The Callback Pattern (Permissions)</h3>
-<p>The AI auto-mode classifier needs to call the API client, but the permission system is called FROM the agent loop which also calls the API client. Solution: The classifier uses a <strong>separate API call</strong> (side-query) that bypasses the normal agent loop entirely. It is a direct API client call with its own context, not a recursive agent turn.</p>
-<h3 id="3-the-state-pattern-global-state">3. The State Pattern (Global State)</h3>
-<p>Instead of components depending on each other for shared data, both depend on Global State. The State singleton breaks potential circular chains by serving as a shared data hub that any component can read from and write to.</p>
-<h3 id="4-the-registry-pattern-tools">4. The Registry Pattern (Tools)</h3>
-<p>Tools do not call the Tool Registry — the Registry calls tools. Tools are registered at startup and invoked through a uniform interface. No tool ever imports or calls the registry, maintaining a strict one-way dependency.</p>
-<hr />
-<h2 id="subsystem-size-map">Subsystem Size Map</h2>
-<p>The size of each subsystem (in lines of code) correlates with its architectural complexity:</p>
-<table>
-<thead>
-<tr>
-<th>Subsystem</th>
-<th>Approximate Lines</th>
-<th>Key Files</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Terminal UI</strong></td>
-<td>~15,000</td>
-<td>REPL.tsx, print.ts, components/</td>
-</tr>
-<tr>
-<td><strong>Tool System</strong></td>
-<td>~12,000</td>
-<td>tools/, tool registry, tool schemas</td>
-</tr>
-<tr>
-<td><strong>Bash Security</strong></td>
-<td>~10,000</td>
-<td>bashParser.ts, ast.ts, bashSecurity.ts, bashPermissions.ts</td>
-</tr>
-<tr>
-<td><strong>Hook Engine</strong></td>
-<td>~5,000</td>
-<td>hooks.ts</td>
-</tr>
-<tr>
-<td><strong>Session Storage</strong></td>
-<td>~5,000</td>
-<td>sessionStorage.ts</td>
-</tr>
-<tr>
-<td><strong>API Client</strong></td>
-<td>~4,500</td>
-<td>claude.ts, streaming handlers</td>
-</tr>
-<tr>
-<td><strong>MCP Client</strong></td>
-<td>~4,000</td>
-<td>mcp/client.ts, transports</td>
-</tr>
-<tr>
-<td><strong>Permission System</strong></td>
-<td>~3,500</td>
-<td>permissions/, yoloClassifier.ts</td>
-</tr>
-<tr>
-<td><strong>Context Engine</strong></td>
-<td>~3,000</td>
-<td>context.ts, compaction/</td>
-</tr>
-<tr>
-<td><strong>Configuration</strong></td>
-<td>~3,000</td>
-<td>settings/, config cascade</td>
-</tr>
-<tr>
-<td><strong>Global State</strong></td>
-<td>~1,800</td>
-<td>bootstrap/state.ts</td>
-</tr>
-<tr>
-<td><strong>Plugin System</strong></td>
-<td>~3,300</td>
-<td>pluginLoader.ts</td>
-</tr>
-</tbody>
-</table>
-<p>Notice that the Bash security subsystem alone (10,000 lines) is larger than most entire web applications. This is the cost of securing a shell execution tool — as discussed in Chapter 15.</p>
-<hr />
-<h2 id="integration-points">Integration Points</h2>
-<p>External system integration points, each a potential failure boundary:</p>
-<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">LR</span>
-<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;AI CLI Agent&quot;</span>
-<span class="w">        </span><span class="n">CORE</span><span class="p">[</span><span class="n">Core</span><span class="w"> </span><span class="n">System</span><span class="p">]</span>
-<span class="w">    </span><span class="n">end</span>
+<p>The Tool System depends on <code>PermissionChecker</code> (an interface), not on the Permission System (a module). The Permission System depends on <code>ToolMetadata</code> (a type), not on the Tool System. Both modules are independent --- they share types, not implementations.</p>
+<h3 id="strategy-2-event-based-decoupling">Strategy 2: Event-Based Decoupling</h3>
+<p>When two components need to notify each other, use an event bus instead of direct imports.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// The agent loop emits events, the UI subscribes</span>
+<span class="nx">eventBus</span><span class="p">.</span><span class="nx">emit</span><span class="p">(</span><span class="s1">&#39;tool:started&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">toolName</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="p">});</span>
+<span class="nx">eventBus</span><span class="p">.</span><span class="nx">emit</span><span class="p">(</span><span class="s1">&#39;tool:completed&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">toolName</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="p">});</span>
 
-<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;External Systems&quot;</span>
-<span class="w">        </span><span class="n">CLAUDE</span><span class="p">[</span><span class="n">Claude</span><span class="w"> </span><span class="n">API</span><span class="p">]</span>
-<span class="w">        </span><span class="n">BEDROCK</span><span class="p">[</span><span class="n">AWS</span><span class="w"> </span><span class="n">Bedrock</span><span class="p">]</span>
-<span class="w">        </span><span class="n">VERTEX</span><span class="p">[</span><span class="n">Google</span><span class="w"> </span><span class="n">Vertex</span><span class="p">]</span>
-<span class="w">        </span><span class="n">MCP1</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="mi">1</span><span class="p">]</span>
-<span class="w">        </span><span class="n">MCP2</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="mi">2</span><span class="p">]</span>
-<span class="w">        </span><span class="n">FS</span><span class="p">[</span><span class="n">File</span><span class="w"> </span><span class="n">System</span><span class="p">]</span>
-<span class="w">        </span><span class="n">GIT</span><span class="p">[</span><span class="n">Git</span><span class="p">]</span>
-<span class="w">        </span><span class="n">SHELL</span><span class="p">[</span><span class="n">Shell</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">OS</span><span class="p">]</span>
-<span class="w">        </span><span class="n">NET</span><span class="p">[</span><span class="n">Network</span><span class="p">]</span>
-<span class="w">        </span><span class="n">KB</span><span class="p">[</span><span class="n">Keychain</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Credential</span><span class="w"> </span><span class="n">Store</span><span class="p">]</span>
-<span class="w">    </span><span class="n">end</span>
-
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CLAUDE</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">BEDROCK</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VERTEX</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MCP1</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MCP2</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">FS</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">GIT</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SHELL</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">NET</span>
-<span class="w">    </span><span class="n">CORE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">KB</span>
+<span class="c1">// The UI subscribes without importing the agent loop</span>
+<span class="nx">eventBus</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;tool:started&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">renderToolProgress</span><span class="p">);</span>
+<span class="nx">eventBus</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;tool:completed&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">renderToolResult</span><span class="p">);</span>
 </code></pre></div>
 
-<p>Each integration point needs:
-- <strong>Timeout handling</strong> — external systems may not respond
-- <strong>Retry logic</strong> — transient failures are normal
-- <strong>Graceful degradation</strong> — agent continues if a non-critical system fails
-- <strong>Security boundaries</strong> — external data is untrusted</p>
-<p>This map is the starting point for threat modeling (Chapter 17) and observability design (Chapter 32).</p>
+<p>The Agent Loop and the Terminal UI never import each other. They communicate through a shared event bus that both depend on (a downward dependency to infrastructure).</p>
+<h3 id="strategy-3-dependency-inversion-at-the-api-client-boundary">Strategy 3: Dependency Inversion at the API Client Boundary</h3>
+<p>The API Client needs to know about tool schemas (to send them to the model). But the Tool System is in a higher layer. Dependency inversion resolves this:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Infrastructure layer defines the interface</span>
+<span class="kd">interface</span><span class="w"> </span><span class="nx">ToolSchemaProvider</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">getSchemas</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="nx">ToolSchema</span><span class="p">[];</span>
+<span class="p">}</span>
+
+<span class="c1">// API Client depends on the interface</span>
+<span class="kd">class</span><span class="w"> </span><span class="nx">ApiClient</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kr">constructor</span><span class="p">(</span><span class="k">private</span><span class="w"> </span><span class="nx">tools</span><span class="o">:</span><span class="w"> </span><span class="kt">ToolSchemaProvider</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+<span class="p">}</span>
+
+<span class="c1">// Application layer wires them together</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">apiClient</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">ApiClient</span><span class="p">(</span><span class="nx">toolRegistry</span><span class="p">);</span>
+</code></pre></div>
+
+<p>The API Client depends on an abstraction it defines (in its own layer). The Tool System implements that abstraction. The wiring happens in the Application layer, which depends on both. No upward dependency exists.</p>
+<h3 id="strategy-4-build-time-cycle-detection">Strategy 4: Build-Time Cycle Detection</h3>
+<p>Prevention is better than cure. Run cycle detection as part of the build:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Using madge for TypeScript cycle detection</span>
+npx<span class="w"> </span>madge<span class="w"> </span>--circular<span class="w"> </span>--extensions<span class="w"> </span>ts<span class="w"> </span>src/
+
+<span class="c1"># Or as a pre-commit hook</span>
+<span class="k">if</span><span class="w"> </span>npx<span class="w"> </span>madge<span class="w"> </span>--circular<span class="w"> </span>--extensions<span class="w"> </span>ts<span class="w"> </span>src/<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-q<span class="w"> </span><span class="s2">&quot;Circular&quot;</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Circular dependency detected. Fix before committing.&quot;</span>
+<span class="w">  </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="k">fi</span>
+</code></pre></div>
+
+<p>This catches cycles before they reach the main branch. As discussed in Chapter 34, the build system is architecture enforcement --- if the build rejects circular dependencies, they cannot exist in production.</p>
+<h3 id="strategy-5-barrel-file-discipline">Strategy 5: Barrel File Discipline</h3>
+<p>Barrel files (<code>index.ts</code> that re-export everything from a directory) are the most common source of accidental circular dependencies. A barrel file creates an implicit dependency from the barrel to every module in the directory, and from every consumer to every module in the directory.</p>
+<p>The rule: barrel files should only exist at layer boundaries, and they should export types and interfaces, not implementations. Internal modules import each other directly, bypassing the barrel.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">src</span><span class="o">/</span>
+<span class="w">  </span><span class="n">tools</span><span class="o">/</span>
+<span class="w">    </span><span class="n">index</span><span class="o">.</span><span class="n">ts</span><span class="w">          </span><span class="o">//</span><span class="w"> </span><span class="n">Barrel</span><span class="p">:</span><span class="w"> </span><span class="n">exports</span><span class="w"> </span><span class="n">ToolSchema</span><span class="p">,</span><span class="w"> </span><span class="n">ToolResult</span><span class="w"> </span><span class="n">types</span>
+<span class="w">    </span><span class="n">registry</span><span class="o">.</span><span class="n">ts</span><span class="w">       </span><span class="o">//</span><span class="w"> </span><span class="n">Internal</span><span class="p">:</span><span class="w"> </span><span class="n">imports</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">permission</span><span class="o">/</span><span class="n">types</span><span class="w"> </span><span class="n">directly</span>
+<span class="w">    </span><span class="n">dispatch</span><span class="o">.</span><span class="n">ts</span><span class="w">       </span><span class="o">//</span><span class="w"> </span><span class="n">Internal</span><span class="p">:</span><span class="w"> </span><span class="n">imports</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">registry</span><span class="o">.</span><span class="n">ts</span><span class="w"> </span><span class="n">directly</span>
+<span class="w">    </span><span class="n">bash</span><span class="o">-</span><span class="k">tool</span><span class="o">.</span><span class="n">ts</span><span class="w">      </span><span class="o">//</span><span class="w"> </span><span class="n">Internal</span><span class="p">:</span><span class="w"> </span><span class="n">imports</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">security</span><span class="o">/</span><span class="n">parser</span><span class="o">.</span><span class="n">ts</span><span class="w"> </span><span class="n">directly</span>
+</code></pre></div>
+
+<p>This keeps the barrel thin and prevents it from becoming a dependency magnet.</p>
+<hr />
+<h2 id="using-this-map">Using This Map</h2>
+<h3 id="for-change-impact-analysis">For Change Impact Analysis</h3>
+<p>When modifying a component, trace its outgoing and incoming dependencies in the matrix. Outgoing dependencies tell you what your changes might break. Incoming dependencies tell you who calls your code and might be affected by API changes.</p>
+<p>Example: changing the Permission System's rule evaluation order affects the Tool System, the MCP Runtime, the Agent Loop, and the Multi-Agent system (all incoming dependencies). It does not affect the API Client or Session Manager (no dependency relationship).</p>
+<h3 id="for-testing-strategy">For Testing Strategy</h3>
+<p>Components with high fan-in (Configuration, Permission System) need the most comprehensive unit tests, because bugs propagate to the most consumers. Components with high fan-out (Agent Loop, Terminal UI) need integration tests that verify the orchestration of their dependencies works correctly.</p>
+<h3 id="for-performance-profiling">For Performance Profiling</h3>
+<p>Start with the hot path. Profile the Agent Loop, Message Assembler, and API Client first. Then profile Tool System and Permission System for tool-heavy workloads. Do not optimize cold-path components (Bootstrap, MCP discovery) unless startup time exceeds the budget.</p>
+<h3 id="for-onboarding">For Onboarding</h3>
+<p>New engineers should read the subsystems in layer order, bottom to top: Configuration first (it has no dependencies --- the simplest to understand in isolation), then Session Manager and API Client, then the Domain layer, then the Application layer, and finally the UI. Each layer builds on the concepts from the layer below.</p>
 <div class="chapter-nav">
   <a href="appendix-a.html">&larr; Previous</a>
   <a href="index.html">Table of Contents</a>
