@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 31: Testing Non-Deterministic Systems — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-32.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-31-testing-non-deterministic-systems">Chapter 31: Testing Non-Deterministic Systems</h1>
+<p>Every testing strategy you learned in school assumes determinism. Given the same input, the function produces the same output. If the test passed yesterday, it passes today. If it fails, you have a reproducible bug. AI agents destroy all three assumptions. The same prompt can produce different tool call sequences on consecutive runs. A test that passed at 2pm fails at 3pm because the model's sampling temperature introduced a different reasoning path. And when it fails, you cannot reproduce the failure because the model's internal state is opaque and the API response is gone.</p>
+<p>This chapter lays out the architectural patterns for testing systems where the core computation -- the LLM inference -- is fundamentally non-deterministic. We will cover the testing pyramid adapted for AI agents, VCR recording and replay for deterministic test reproduction, eval frameworks that measure agent quality at scale, snapshot testing strategies that tolerate controlled drift, and techniques for testing everything around the LLM without involving it at all. The goal is a testing architecture that gives you confidence in production correctness without requiring every test to be perfectly repeatable.</p>
+<hr />
+<h2 id="311-the-fundamental-challenge">31.1 The Fundamental Challenge</h2>
+<p>Traditional software testing relies on a simple contract: function(input) returns output. You write an assertion that output equals expected, and if the assertion holds across your test suite, you ship. The test is a proof by example.</p>
+<p>AI agents break this contract at the most fundamental level. The LLM is a stochastic system. Even with temperature set to zero, floating-point arithmetic in the attention mechanism can produce different token selections across hardware, batch sizes, and API versions. The model might call <code>Read</code> then <code>Grep</code> on one run and <code>Grep</code> then <code>Read</code> on the next -- both valid paths to the same answer.</p>
+<p>This creates three distinct testing problems:</p>
+<p><strong>The reproducibility problem.</strong> You cannot reproduce a bug by re-running the test. The model will take a different path and might not hit the bug at all. Traditional debugging -- "reproduce the failure, then bisect" -- does not work.</p>
+<p><strong>The assertion problem.</strong> You cannot assert on exact output. The model might say "The function has a bug on line 42" or "Line 42 contains a defect" or "There's an issue at config.py:42." All three are correct. String equality fails. Substring matching is fragile. Semantic equivalence requires another LLM call, which is itself non-deterministic.</p>
+<p><strong>The cost problem.</strong> Every test that involves the LLM costs money and takes seconds. A 500-test suite that each makes one API call costs $5-50 per run and takes 10-30 minutes. You cannot run this on every commit. You cannot run it in a developer's inner loop. The economics of testing change fundamentally.</p>
+<p>These problems do not make testing impossible. They make it an architectural decision. You need a testing strategy that acknowledges non-determinism rather than fighting it, that isolates the deterministic parts for fast feedback, and that uses statistical methods for the non-deterministic parts.</p>
+<hr />
+<h2 id="312-the-testing-pyramid-for-ai-agents">31.2 The Testing Pyramid for AI Agents</h2>
+<p>The classic testing pyramid -- many unit tests, fewer integration tests, even fewer end-to-end tests -- needs reinterpretation for AI agents. The key insight is that most of the agent's code is deterministic. The tool implementations, the permission system, the configuration cascade, the context assembly algorithm -- all of these are pure functions or predictable state machines. Only the query loop, where the LLM decides what to do next, introduces non-determinism.</p>
+<p>The adapted pyramid looks like this:</p>
+<div class="codehilite"><pre><span></span><code><span class="nv">graph</span><span class="w"> </span><span class="nv">TB</span>
+<span class="w">    </span><span class="nv">subgraph</span><span class="w"> </span><span class="s2">&quot;Cost &amp; Flakiness&quot;</span>
+<span class="w">        </span><span class="nv">direction</span><span class="w"> </span><span class="nv">TB</span>
+<span class="w">        </span><span class="nv">E</span>[<span class="s2">&quot;Eval Tests&lt;br/&gt;Non-deterministic, expensive&lt;br/&gt;Run: nightly/weekly&quot;</span>]
+<span class="w">        </span><span class="nv">I</span>[<span class="s2">&quot;Integration Tests&lt;br/&gt;Mostly deterministic&lt;br/&gt;Run: per-PR&quot;</span>]
+<span class="w">        </span><span class="nv">U</span>[<span class="s2">&quot;Unit Tests&lt;br/&gt;Fully deterministic&lt;br/&gt;Run: every commit&quot;</span>]
+<span class="w">    </span><span class="k">end</span>
+
+<span class="w">    </span><span class="nv">U</span><span class="w"> </span><span class="o">---</span><span class="w"> </span><span class="nv">I</span><span class="w"> </span><span class="o">---</span><span class="w"> </span><span class="nv">E</span>
+
+<span class="w">    </span><span class="nv">style</span><span class="w"> </span><span class="nv">E</span><span class="w"> </span><span class="nv">fill</span>:#<span class="nv">ff6b6b</span>,<span class="nv">stroke</span>:#<span class="nv">c92a2a</span>,<span class="nv">color</span>:#<span class="nv">fff</span>
+<span class="w">    </span><span class="nv">style</span><span class="w"> </span><span class="nv">I</span><span class="w"> </span><span class="nv">fill</span>:#<span class="nv">ffd43b</span>,<span class="nv">stroke</span>:#<span class="nv">e67700</span>,<span class="nv">color</span>:<span class="sc">#000</span>
+<span class="w">    </span><span class="nv">style</span><span class="w"> </span><span class="nv">U</span><span class="w"> </span><span class="nv">fill</span>:<span class="sc">#51</span><span class="nv">cf66</span>,<span class="nv">stroke</span>:<span class="sc">#2</span><span class="nv">b8a3e</span>,<span class="nv">color</span>:<span class="sc">#000</span>
+</code></pre></div>
+
+<h3 id="unit-tests-the-deterministic-foundation">Unit Tests: The Deterministic Foundation</h3>
+<p>Unit tests cover everything that does not touch the LLM. This is the vast majority of the codebase:</p>
+<ul>
+<li>
+<p><strong>Tool logic.</strong> Does the Read tool correctly read a file and return its contents? Does the Bash tool parse a command string into an AST? Does the Edit tool apply a string replacement correctly? These are pure functions with deterministic inputs and outputs.</p>
+</li>
+<li>
+<p><strong>Permission rules.</strong> Given a tool name and input, does the permission evaluator return allow, deny, or ask? The rule evaluation is a deterministic function: rules in, decision out. You can test every rule pattern, every edge case in glob matching, and every precedence interaction without any LLM involvement.</p>
+</li>
+<li>
+<p><strong>Configuration parsing.</strong> Does the settings cascade merge correctly? Does CLAUDE.md parsing extract the right directives? Do environment variable expansions work?</p>
+</li>
+<li>
+<p><strong>Context assembly.</strong> Given a conversation history and a token budget, does the context assembler produce the right set of messages? This is deterministic once you fix the conversation state.</p>
+</li>
+<li>
+<p><strong>Message formatting.</strong> Does the markdown renderer produce correct ANSI output? Does the diff engine produce correct unified diffs? Does the collapsing algorithm preserve error lines?</p>
+</li>
+</ul>
+<p>Unit tests run in milliseconds, cost nothing, and should cover the overwhelming majority of your code paths. In a well-designed agent, 80-90% of the codebase is testable at this level.</p>
+<h3 id="integration-tests-tool-execution-and-mcp">Integration Tests: Tool Execution and MCP</h3>
+<p>Integration tests verify that components work together correctly, with real I/O but without the LLM:</p>
+<ul>
+<li>
+<p><strong>Tool execution.</strong> Spawn a real Bash process, execute a command, verify the output. Create a real temporary file, read it with the Read tool, verify the contents match.</p>
+</li>
+<li>
+<p><strong>MCP server communication.</strong> Start a real MCP server, connect over stdio, call a tool, verify the result. This tests the transport layer, the JSON-RPC serialization, the handshake, and the tool invocation path end to end.</p>
+</li>
+<li>
+<p><strong>Hook execution.</strong> Write a file that triggers the auto-lint hook, verify the hook runs and the file is formatted. Attempt a blocked command, verify the destructive-command hook returns exit code 2.</p>
+</li>
+<li>
+<p><strong>Session persistence.</strong> Create a session, write conversation state to disk, reload it, verify the state is intact.</p>
+</li>
+</ul>
+<p>Integration tests take seconds, may require filesystem or network access, and should run on every pull request. They are mostly deterministic -- the only flakiness comes from environmental factors (port conflicts, filesystem timing), not from the LLM.</p>
+<h3 id="eval-tests-measuring-agent-behavior">Eval Tests: Measuring Agent Behavior</h3>
+<p>Eval tests are the only level that involves the LLM. They are expensive, slow, non-deterministic, and absolutely essential. They answer the question: "Does the agent actually solve problems correctly?"</p>
+<p>An eval test defines a task, runs the agent against it, and measures the result across multiple dimensions. We cover eval frameworks in detail in Section 31.4.</p>
+<h3 id="the-testing-strategy-matrix">The Testing Strategy Matrix</h3>
+<table>
+<thead>
+<tr>
+<th>Test Level</th>
+<th>Deterministic?</th>
+<th>Cost per test</th>
+<th>Run time</th>
+<th>Run frequency</th>
+<th>Coverage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unit</td>
+<td>Yes</td>
+<td>$0</td>
+<td>&lt;10ms</td>
+<td>Every commit</td>
+<td>Tool logic, permissions, parsing, formatting</td>
+</tr>
+<tr>
+<td>Integration</td>
+<td>Mostly</td>
+<td>$0</td>
+<td>1-10s</td>
+<td>Every PR</td>
+<td>Tool execution, MCP, hooks, persistence</td>
+</tr>
+<tr>
+<td>VCR replay</td>
+<td>Yes (recorded)</td>
+<td>$0</td>
+<td>&lt;100ms</td>
+<td>Every commit</td>
+<td>Full agent paths with frozen API responses</td>
+</tr>
+<tr>
+<td>Eval (statistical)</td>
+<td>No</td>
+<td>$0.01-0.10</td>
+<td>10-60s</td>
+<td>Nightly/weekly</td>
+<td>Agent behavior, quality, safety</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="313-vcr-recording-and-replay">31.3 VCR Recording and Replay</h2>
+<p>VCR (Video Cassette Recorder) testing is the single most important technique for testing non-deterministic systems. The idea is simple: record every API request and response during a test run, then replay the recorded responses on subsequent runs. The test becomes deterministic because the LLM's responses are frozen in the recording.</p>
+<h3 id="the-recording-architecture">The Recording Architecture</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Test</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Agent</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">VCR</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">VCR</span><span class="w"> </span><span class="n">Layer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">API</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">VCR</span><span class="o">:</span><span class="w"> </span><span class="n">Mode</span><span class="o">:</span><span class="w"> </span><span class="kd">RECORD</span>
+
+<span class="w">    </span><span class="n">Test</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="n">Run</span><span class="w"> </span><span class="n">task</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">VCR</span><span class="o">:</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">request</span>
+<span class="w">    </span><span class="n">VCR</span><span class="o">-&gt;&gt;</span><span class="n">API</span><span class="o">:</span><span class="w"> </span><span class="n">Forward</span><span class="w"> </span><span class="n">request</span>
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">VCR</span><span class="o">:</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">response</span>
+<span class="w">    </span><span class="n">VCR</span><span class="o">-&gt;&gt;</span><span class="n">VCR</span><span class="o">:</span><span class="w"> </span><span class="n">Save</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">cassette</span><span class="w"> </span><span class="n">file</span>
+<span class="w">    </span><span class="n">VCR</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="kr">Return</span><span class="w"> </span><span class="n">response</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">--&gt;&gt;</span><span class="n">Test</span><span class="o">:</span><span class="w"> </span><span class="n">Task</span><span class="w"> </span><span class="n">result</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">VCR</span><span class="o">:</span><span class="w"> </span><span class="n">Mode</span><span class="o">:</span><span class="w"> </span><span class="n">REPLAY</span>
+
+<span class="w">    </span><span class="n">Test</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="n">Run</span><span class="w"> </span><span class="n">task</span><span class="w"> </span><span class="p">(</span><span class="n">same</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">VCR</span><span class="o">:</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">request</span>
+<span class="w">    </span><span class="n">VCR</span><span class="o">-&gt;&gt;</span><span class="n">VCR</span><span class="o">:</span><span class="w"> </span><span class="n">Match</span><span class="w"> </span><span class="n">against</span><span class="w"> </span><span class="n">cassette</span>
+<span class="w">    </span><span class="n">VCR</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="kr">Return</span><span class="w"> </span><span class="kd">recorde</span><span class="n">d</span><span class="w"> </span><span class="n">response</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">--&gt;&gt;</span><span class="n">Test</span><span class="o">:</span><span class="w"> </span><span class="n">Task</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="p">(</span><span class="n">deterministic</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The VCR layer sits between the agent's API client and the actual API. In record mode, it passes requests through and saves the request-response pairs. In replay mode, it matches incoming requests against the saved pairs and returns the recorded response without making a network call.</p>
+<h3 id="cassette-file-design">Cassette File Design</h3>
+<p>Each recording -- called a cassette -- is a JSON or YAML file containing the sequence of API interactions:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;cassette_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;test_read_file_and_summarize&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;recorded_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-01T14:30:00Z&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claude-sonnet-4-6&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;interactions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;request&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/v1/messages&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claude-sonnet-4-6&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">            </span><span class="p">{</span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Read config.py and summarize it&quot;</span><span class="p">}</span>
+<span class="w">          </span><span class="p">],</span>
+<span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;Read&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;Grep&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;Glob&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;response&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">            </span><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Read&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;config.py&quot;</span><span class="p">}}</span>
+<span class="w">          </span><span class="p">],</span>
+<span class="w">          </span><span class="nt">&quot;stop_reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;input_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1200</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;output_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="request-matching-strategies">Request Matching Strategies</h3>
+<p>The hardest part of VCR testing is matching requests. If the test changes anything about the request -- a timestamp, a session ID, a slightly different system prompt -- the match fails and the cassette is useless. There are three matching strategies, each with different trade-offs:</p>
+<p><strong>Strict matching</strong> compares the full request body byte-for-byte. This is the most reliable (no false positives) but the most brittle. Any change to the system prompt, tool list, or message format breaks all cassettes.</p>
+<p><strong>Structural matching</strong> compares the semantic content: the messages, the model, and the tools, ignoring metadata fields like timestamps, request IDs, and system prompt variations. This tolerates cosmetic changes but may miss meaningful differences.</p>
+<p><strong>Sequence matching</strong> ignores request content entirely and replays responses in order. The first API call gets the first recorded response, the second gets the second, and so on. This is the most tolerant but the most dangerous -- if the agent's behavior changes and it makes calls in a different order, the responses will be mismatched.</p>
+<p>The recommended approach is structural matching with a fallback to sequence matching. Match on (model, user messages, tool names) and ignore (system prompt, metadata, timestamps). If structural matching fails, fall back to sequence order with a warning that the cassette may need re-recording.</p>
+<h3 id="when-cassettes-go-stale">When Cassettes Go Stale</h3>
+<p>Cassettes become stale when:</p>
+<ol>
+<li>
+<p><strong>The model changes.</strong> A new model version produces different tool call sequences. The structural match fails because the agent now calls Grep before Read instead of Read before Grep.</p>
+</li>
+<li>
+<p><strong>The system prompt changes.</strong> Adding a new rule to CLAUDE.md changes the system prompt, which changes the model's behavior, which changes the tool call sequence.</p>
+</li>
+<li>
+<p><strong>The tool schema changes.</strong> Adding a new parameter to a tool changes the request body.</p>
+</li>
+<li>
+<p><strong>The test itself changes.</strong> A modified test prompt triggers a different code path.</p>
+</li>
+</ol>
+<p>Stale cassettes must be re-recorded. The architecture should make re-recording easy: a single command (<code>npm test -- --record</code>) or an environment variable (<code>VCR_MODE=record npm test</code>) switches all VCR-backed tests to record mode. The new cassettes are committed alongside the code change, creating a clear audit trail.</p>
+<h3 id="the-re-recording-workflow">The Re-recording Workflow</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Developer</span><span class="w"> </span><span class="n">changes</span><span class="w"> </span><span class="n">code</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">VCR</span><span class="w"> </span><span class="n">tests</span><span class="w"> </span><span class="n">pass</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Ship</span><span class="w"> </span><span class="n">it</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Check</span><span class="w"> </span><span class="n">failure</span><span class="w"> </span><span class="n">reason</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">{</span><span class="n">Cassette</span><span class="w"> </span><span class="n">stale</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">record</span><span class="o">:</span><span class="w"> </span><span class="n">VCR_MODE</span><span class="o">=</span><span class="n">record</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Real</span><span class="w"> </span><span class="n">bug</span><span class="w"> </span><span class="o">--</span><span class="w"> </span><span class="n">fix</span><span class="w"> </span><span class="n">code</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="n">Review</span><span class="w"> </span><span class="n">new</span><span class="w"> </span><span class="n">cassettes</span><span class="p">]</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">{</span><span class="n">Behavior</span><span class="w"> </span><span class="n">acceptable</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">J</span><span class="p">[</span><span class="n">Commit</span><span class="w"> </span><span class="n">new</span><span class="w"> </span><span class="n">cassettes</span><span class="p">]</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">G</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">A</span>
+</code></pre></div>
+
+<p>The review step is critical. When you re-record, you must inspect the new cassettes to verify the agent's behavior is still correct. Blindly committing re-recorded cassettes defeats the purpose of the test -- you are asserting that the new behavior is acceptable, not just that it is different.</p>
+<hr />
+<h2 id="314-eval-frameworks-measuring-agent-quality-at-scale">31.4 Eval Frameworks: Measuring Agent Quality at Scale</h2>
+<p>Eval tests go beyond "did it work?" to measure how well the agent works across multiple dimensions. An eval framework runs the agent against a corpus of tasks and aggregates metrics.</p>
+<h3 id="the-four-dimensions-of-agent-quality">The Four Dimensions of Agent Quality</h3>
+<p><strong>Task completion rate.</strong> Did the agent solve the problem? For a coding task, did the resulting code pass the test suite? For a research task, did the summary contain the key facts? This is the primary metric -- nothing else matters if the agent does not accomplish the goal.</p>
+<p><strong>Tool efficiency.</strong> How many tool calls did the agent make to reach the answer? An agent that reads 15 files to find a bug that only required reading 2 files is correct but wasteful. Fewer tool calls mean less cost, less latency, and less context consumption. Track both the total count and the count of "productive" calls (calls whose result contributed to the final answer).</p>
+<p><strong>Safety metrics.</strong> Did the agent attempt anything dangerous? Did it try to execute <code>rm -rf</code>? Did it try to read <code>/etc/shadow</code>? Did it attempt to modify files outside the project directory? Safety is a hard constraint -- a single safety violation should fail the eval regardless of task completion.</p>
+<p><strong>Cost efficiency.</strong> How many tokens did the agent consume per task? This includes input tokens (context), output tokens (responses), and cache hits (savings). Cost directly impacts scalability -- an agent that costs $0.50 per task is viable; one that costs $5.00 per task is not.</p>
+<h3 id="eval-task-structure">Eval Task Structure</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># evals/fix-off-by-one.yaml</span>
+<span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fix-off-by-one</span>
+<span class="nt">category</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bug-fix</span>
+<span class="nt">difficulty</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">easy</span>
+<span class="nt">setup</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">files</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">src/counter.py</span>
+<span class="w">      </span><span class="nt">content</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<span class="w">        </span><span class="no">def count_items(items):</span>
+<span class="w">            </span><span class="no">total = 0</span>
+<span class="w">            </span><span class="no">for i in range(len(items) - 1):  # Bug: should be len(items)</span>
+<span class="w">                </span><span class="no">total += items[i]</span>
+<span class="w">            </span><span class="no">return total</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tests/test_counter.py</span>
+<span class="w">      </span><span class="nt">content</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<span class="w">        </span><span class="no">from src.counter import count_items</span>
+<span class="w">        </span><span class="no">def test_count_all():</span>
+<span class="w">            </span><span class="no">assert count_items([1, 2, 3]) == 6</span>
+<span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The</span><span class="nv"> </span><span class="s">test</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">tests/test_counter.py</span><span class="nv"> </span><span class="s">is</span><span class="nv"> </span><span class="s">failing.</span><span class="nv"> </span><span class="s">Fix</span><span class="nv"> </span><span class="s">the</span><span class="nv"> </span><span class="s">bug.&quot;</span>
+<span class="nt">assertions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">test_passes</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;python</span><span class="nv"> </span><span class="s">-m</span><span class="nv"> </span><span class="s">pytest</span><span class="nv"> </span><span class="s">tests/test_counter.py&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">file_contains</span>
+<span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">src/counter.py</span>
+<span class="w">    </span><span class="nt">pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;range(len(items))&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">no_dangerous_commands</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">max_tool_calls</span>
+<span class="w">    </span><span class="nt">limit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</code></pre></div>
+
+<h3 id="scoring-architecture">Scoring Architecture</h3>
+<p>Each eval produces a structured score:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Weight</th>
+<th>Measurement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Task completion</td>
+<td>0.50</td>
+<td>Binary: did assertions pass?</td>
+</tr>
+<tr>
+<td>Tool efficiency</td>
+<td>0.20</td>
+<td>Ratio: optimal tool calls / actual tool calls</td>
+</tr>
+<tr>
+<td>Safety</td>
+<td>0.20</td>
+<td>Binary: no dangerous actions?</td>
+</tr>
+<tr>
+<td>Cost efficiency</td>
+<td>0.10</td>
+<td>Ratio: budget / actual tokens</td>
+</tr>
+</tbody>
+</table>
+<p>The composite score is a weighted sum. But the weighting is less important than the decomposition -- knowing that task completion is 85% but tool efficiency is only 40% tells you exactly where to focus optimization.</p>
+<h3 id="statistical-confidence">Statistical Confidence</h3>
+<p>Because evals are non-deterministic, a single run tells you little. An agent that scores 90% on one run might score 70% on the next. You need multiple runs to establish confidence:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Run</span><span class="w"> </span><span class="n">each</span><span class="w"> </span><span class="n">eval</span><span class="w"> </span><span class="k">task</span><span class="w"> </span><span class="n">N</span><span class="w"> </span><span class="n">times</span><span class="w"> </span><span class="p">(</span><span class="n">typically</span><span class="w"> </span><span class="n">N</span><span class="o">=</span><span class="mh">5</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">N</span><span class="o">=</span><span class="mh">20</span><span class="p">).</span>
+<span class="nl">Report:</span><span class="w"> </span><span class="n">mean</span><span class="w"> </span><span class="n">score</span><span class="p">,</span><span class="w"> </span><span class="n">standard</span><span class="w"> </span><span class="n">deviation</span><span class="p">,</span><span class="w"> </span><span class="n">min</span><span class="p">,</span><span class="w"> </span><span class="n">max</span><span class="p">.</span>
+<span class="n">Flag</span><span class="w"> </span><span class="n">as</span><span class="w"> </span><span class="n">regression</span><span class="w"> </span><span class="k">if</span><span class="o">:</span><span class="w"> </span><span class="n">new_mean</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">old_mean</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mh">2</span><span class="o">*</span><span class="n">old_stddev</span>
+</code></pre></div>
+
+<p>The "2 standard deviations" threshold is a practical choice. It corresponds roughly to a 95% confidence level, meaning you will flag a regression about 5% of the time when there is no actual regression (false positive rate). This is acceptable for nightly runs where a human reviews the results.</p>
+<h3 id="eval-corpus-design">Eval Corpus Design</h3>
+<p>A good eval corpus covers:</p>
+<ul>
+<li><strong>Breadth.</strong> Tasks across all tool types (Read, Write, Bash, Edit, Grep) and all difficulty levels (trivial, easy, medium, hard).</li>
+<li><strong>Edge cases.</strong> Empty files, binary files, files with special characters, extremely large outputs, ambiguous prompts.</li>
+<li><strong>Safety scenarios.</strong> Prompts that subtly encourage dangerous actions. "Delete all temporary files" should not result in <code>rm -rf /tmp/*</code>.</li>
+<li><strong>Regression markers.</strong> Tasks specifically designed to catch known past failures. When you fix a bug, add an eval task that would have caught it.</li>
+</ul>
+<hr />
+<h2 id="315-snapshot-testing-detecting-behavioral-regressions">31.5 Snapshot Testing: Detecting Behavioral Regressions</h2>
+<p>Snapshot testing records the agent's behavior -- specifically its tool call sequence -- and alerts you when it changes. Unlike VCR testing (which freezes responses for deterministic replay), snapshot testing runs the agent live and compares the behavior against a previous baseline.</p>
+<h3 id="what-to-snapshot">What to Snapshot</h3>
+<p>Do not snapshot the text output. Text is the most variable part of the response -- the model will rephrase, reorder, and restructure its prose across runs. Snapshot the structural behavior:</p>
+<ul>
+<li><strong>Tool call sequence.</strong> The ordered list of (tool_name, key_input_fields) tuples.</li>
+<li><strong>File modifications.</strong> Which files were created, modified, or deleted, and the key content changes.</li>
+<li><strong>Permission decisions.</strong> Which permission evaluations occurred and what the decisions were.</li>
+</ul>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;snapshot_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fix_off_by_one&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;tool_calls&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Read&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tests/test_counter.py&quot;</span><span class="p">}},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Read&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;src/counter.py&quot;</span><span class="p">}},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Edit&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;src/counter.py&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;old_string&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;range(len(items) - 1)&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;new_string&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;range(len(items))&quot;</span><span class="p">}}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;files_modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;src/counter.py&quot;</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;permission_decisions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Read&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;allow&quot;</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Read&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;allow&quot;</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Edit&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;allow&quot;</span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="controlled-drift-with-approval-workflows">Controlled Drift with Approval Workflows</h3>
+<p>Snapshots will drift as the model improves. The agent might find a more efficient path -- reading one file instead of two. This is good, but it still triggers a snapshot diff. The approval workflow handles this:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Run</span><span class="w"> </span><span class="n">snapshot</span><span class="w"> </span><span class="n">test</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">Matches</span><span class="w"> </span><span class="n">baseline</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Pass</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Generate</span><span class="w"> </span><span class="n">diff</span><span class="w"> </span><span class="n">report</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">{</span><span class="n">Automated</span><span class="w"> </span><span class="n">check</span><span class="p">}</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Same</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">fewer</span><span class="w"> </span><span class="n">tools</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Auto</span><span class="o">-</span><span class="n">approve</span><span class="o">:</span><span class="w"> </span><span class="n">efficiency</span><span class="w"> </span><span class="n">improvement</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Same</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">more</span><span class="w"> </span><span class="n">tools</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Flag</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">review</span><span class="o">:</span><span class="w"> </span><span class="n">possible</span><span class="w"> </span><span class="n">regression</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Different</span><span class="w"> </span><span class="n">result</span><span class="o">|</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="n">Flag</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">review</span><span class="o">:</span><span class="w"> </span><span class="n">behavioral</span><span class="w"> </span><span class="n">change</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">[</span><span class="n">Update</span><span class="w"> </span><span class="n">baseline</span><span class="p">]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">J</span><span class="p">[</span><span class="n">Human</span><span class="w"> </span><span class="n">review</span><span class="p">]</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">J</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">K</span><span class="p">{</span><span class="n">Approve</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">K</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">I</span>
+<span class="w">    </span><span class="n">K</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">L</span><span class="p">[</span><span class="n">Investigate</span><span class="w"> </span><span class="n">regression</span><span class="p">]</span>
+</code></pre></div>
+
+<p>The automated check can approve changes that are clearly improvements (same outcome with fewer tool calls) and flag everything else for human review. This reduces the approval burden while maintaining oversight.</p>
+<hr />
+<h2 id="316-testing-without-the-llm">31.6 Testing Without the LLM</h2>
+<p>The most powerful testing strategy is removing the LLM entirely. If you architect the agent so that the LLM is a single, replaceable component behind an abstraction boundary, you can mock it and test everything downstream.</p>
+<h3 id="the-mock-api-layer">The Mock API Layer</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Agent Code Under Test&quot;</span>
+<span class="w">        </span><span class="n">A</span><span class="p">[</span><span class="n">Query</span><span class="w"> </span><span class="n">Loop</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Dispatcher</span><span class="p">]</span>
+<span class="w">        </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Implementations</span><span class="p">]</span>
+<span class="w">        </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Permission</span><span class="w"> </span><span class="n">Evaluator</span><span class="p">]</span>
+<span class="w">        </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Context</span><span class="w"> </span><span class="n">Assembler</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Test Infrastructure&quot;</span>
+<span class="w">        </span><span class="n">F</span><span class="p">[</span><span class="n">Mock</span><span class="w"> </span><span class="n">API</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">A</span>
+<span class="w">        </span><span class="n">G</span><span class="p">[</span><span class="n">Mock</span><span class="w"> </span><span class="n">Filesystem</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span>
+<span class="w">        </span><span class="n">H</span><span class="p">[</span><span class="n">Test</span><span class="w"> </span><span class="n">Fixtures</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffd43b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">e67700</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">G</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffd43b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">e67700</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">H</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffd43b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">e67700</span>
+</code></pre></div>
+
+<p>The mock API returns scripted responses. You define the sequence of responses the "model" will produce, and the agent processes them exactly as it would process real API responses. This lets you test:</p>
+<ul>
+<li><strong>Tool dispatch.</strong> When the mock returns a tool_use block, does the dispatcher call the right tool with the right arguments?</li>
+<li><strong>Result handling.</strong> When the tool returns a result, does the agent format it correctly and include it in the next API request?</li>
+<li><strong>Error recovery.</strong> When a tool returns an error, does the agent retry, try a different approach, or report the failure?</li>
+<li><strong>Loop termination.</strong> When the mock returns an end_turn stop reason, does the loop terminate cleanly?</li>
+</ul>
+<h3 id="permission-testing-as-pure-functions">Permission Testing as Pure Functions</h3>
+<p>The permission system is the easiest subsystem to test without the LLM because it is a pure function:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">evaluate_permission</span><span class="p">(</span><span class="n">tool_name</span><span class="p">,</span><span class="w"> </span><span class="n">tool_input</span><span class="p">,</span><span class="w"> </span><span class="n">rules</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Decision</span>
+</code></pre></div>
+
+<p>Given a set of rules, a tool name, and an input, the evaluator always returns the same decision. You can test every rule combination, every precedence interaction, and every edge case in glob matching:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Test: deny overrides allow for the same pattern</span>
+<span class="n">rules</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">Rule</span><span class="p">(</span><span class="n">action</span><span class="o">=</span><span class="s2">&quot;allow&quot;</span><span class="p">,</span> <span class="n">pattern</span><span class="o">=</span><span class="s2">&quot;Bash(git *)&quot;</span><span class="p">),</span>
+    <span class="n">Rule</span><span class="p">(</span><span class="n">action</span><span class="o">=</span><span class="s2">&quot;deny&quot;</span><span class="p">,</span> <span class="n">pattern</span><span class="o">=</span><span class="s2">&quot;Bash(git push --force *)&quot;</span><span class="p">),</span>
+<span class="p">]</span>
+<span class="k">assert</span> <span class="n">evaluate</span><span class="p">(</span><span class="n">rules</span><span class="p">,</span> <span class="s2">&quot;Bash&quot;</span><span class="p">,</span> <span class="s2">&quot;git push --force main&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">Decision</span><span class="o">.</span><span class="n">DENY</span>
+<span class="k">assert</span> <span class="n">evaluate</span><span class="p">(</span><span class="n">rules</span><span class="p">,</span> <span class="s2">&quot;Bash&quot;</span><span class="p">,</span> <span class="s2">&quot;git push origin main&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">Decision</span><span class="o">.</span><span class="n">ALLOW</span>
+
+<span class="c1"># Test: first matching rule wins within the same precedence</span>
+<span class="n">rules</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">Rule</span><span class="p">(</span><span class="n">action</span><span class="o">=</span><span class="s2">&quot;deny&quot;</span><span class="p">,</span> <span class="n">pattern</span><span class="o">=</span><span class="s2">&quot;Read(.env*)&quot;</span><span class="p">),</span>
+    <span class="n">Rule</span><span class="p">(</span><span class="n">action</span><span class="o">=</span><span class="s2">&quot;allow&quot;</span><span class="p">,</span> <span class="n">pattern</span><span class="o">=</span><span class="s2">&quot;Read(*)&quot;</span><span class="p">),</span>
+<span class="p">]</span>
+<span class="k">assert</span> <span class="n">evaluate</span><span class="p">(</span><span class="n">rules</span><span class="p">,</span> <span class="s2">&quot;Read&quot;</span><span class="p">,</span> <span class="s2">&quot;.env.local&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">Decision</span><span class="o">.</span><span class="n">DENY</span>
+<span class="k">assert</span> <span class="n">evaluate</span><span class="p">(</span><span class="n">rules</span><span class="p">,</span> <span class="s2">&quot;Read&quot;</span><span class="p">,</span> <span class="s2">&quot;config.py&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">Decision</span><span class="o">.</span><span class="n">ALLOW</span>
+</code></pre></div>
+
+<p>These tests are fast (microseconds), deterministic, and comprehensive. You can easily have hundreds of permission tests running on every commit.</p>
+<h3 id="tool-implementation-testing">Tool Implementation Testing</h3>
+<p>Tool implementations are deterministic once you control their I/O. The Read tool reads a file -- give it a known file and verify the output. The Edit tool applies a replacement -- give it a known string and verify the result. The Bash tool executes a command -- give it a simple command and verify the output.</p>
+<p>For filesystem tools, use temporary directories:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_read_tool_returns_file_contents</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">):</span>
+    <span class="c1"># Arrange</span>
+    <span class="n">test_file</span> <span class="o">=</span> <span class="n">tmp_path</span> <span class="o">/</span> <span class="s2">&quot;test.py&quot;</span>
+    <span class="n">test_file</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;def hello(): pass&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Act</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">read_tool</span><span class="o">.</span><span class="n">execute</span><span class="p">({</span><span class="s2">&quot;file_path&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">test_file</span><span class="p">)})</span>
+
+    <span class="c1"># Assert</span>
+    <span class="k">assert</span> <span class="s2">&quot;def hello(): pass&quot;</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">content</span>
+    <span class="k">assert</span> <span class="n">result</span><span class="o">.</span><span class="n">is_success</span>
+</code></pre></div>
+
+<p>For the Bash tool, test the command parsing and AST analysis independently from command execution:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_bash_parser_detects_pipe_chain</span><span class="p">():</span>
+    <span class="n">ast</span> <span class="o">=</span> <span class="n">parse_command</span><span class="p">(</span><span class="s2">&quot;cat file.txt | grep error | wc -l&quot;</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">ast</span><span class="o">.</span><span class="n">is_pipe_chain</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">ast</span><span class="o">.</span><span class="n">commands</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span>
+    <span class="k">assert</span> <span class="n">ast</span><span class="o">.</span><span class="n">commands</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">program</span> <span class="o">==</span> <span class="s2">&quot;cat&quot;</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">test_bash_security_blocks_rm_rf</span><span class="p">():</span>
+    <span class="n">classification</span> <span class="o">=</span> <span class="n">classify_command</span><span class="p">(</span><span class="s2">&quot;rm -rf /&quot;</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">classification</span> <span class="o">==</span> <span class="n">CommandClass</span><span class="o">.</span><span class="n">DANGEROUS</span>
+    <span class="k">assert</span> <span class="s2">&quot;recursive deletion at root&quot;</span> <span class="ow">in</span> <span class="n">classification</span><span class="o">.</span><span class="n">reason</span>
+</code></pre></div>
+
+<hr />
+<h2 id="317-testing-the-context-assembly-algorithm">31.7 Testing the Context Assembly Algorithm</h2>
+<p>The context assembler determines what goes into the prompt. Given a conversation history, a token budget, and priority rules, it produces a set of messages that fit within the budget. This is a deterministic algorithm that deserves its own test suite.</p>
+<h3 id="priority-based-allocation-testing">Priority-Based Allocation Testing</h3>
+<p>The assembler allocates tokens by priority:</p>
+<ol>
+<li>System prompt (always included)</li>
+<li>Most recent N user messages (always included)</li>
+<li>Tool results referenced by recent messages</li>
+<li>Older conversation history (included if budget allows)</li>
+<li>Background context (lowest priority)</li>
+</ol>
+<p>Test each priority level:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_system_prompt_always_included</span><span class="p">():</span>
+    <span class="n">history</span> <span class="o">=</span> <span class="n">make_long_history</span><span class="p">(</span><span class="n">token_count</span><span class="o">=</span><span class="mi">150_000</span><span class="p">)</span>
+    <span class="n">budget</span> <span class="o">=</span> <span class="mi">10_000</span>  <span class="c1"># Tiny budget</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">assemble_context</span><span class="p">(</span><span class="n">history</span><span class="p">,</span> <span class="n">budget</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="nb">any</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;system&quot;</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">messages</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">test_recent_messages_survive_tight_budget</span><span class="p">():</span>
+    <span class="n">history</span> <span class="o">=</span> <span class="n">make_long_history</span><span class="p">(</span><span class="n">token_count</span><span class="o">=</span><span class="mi">150_000</span><span class="p">)</span>
+    <span class="n">budget</span> <span class="o">=</span> <span class="mi">5_000</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">assemble_context</span><span class="p">(</span><span class="n">history</span><span class="p">,</span> <span class="n">budget</span><span class="p">)</span>
+    <span class="c1"># Last 3 user messages should always be present</span>
+    <span class="n">recent</span> <span class="o">=</span> <span class="p">[</span><span class="n">m</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">messages</span> <span class="k">if</span> <span class="n">m</span><span class="o">.</span><span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;user&quot;</span><span class="p">][</span><span class="o">-</span><span class="mi">3</span><span class="p">:]</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">recent</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">test_old_messages_dropped_first</span><span class="p">():</span>
+    <span class="n">history</span> <span class="o">=</span> <span class="n">make_history_with_timestamps</span><span class="p">()</span>
+    <span class="n">budget</span> <span class="o">=</span> <span class="mi">50_000</span>  <span class="c1"># Medium budget</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">assemble_context</span><span class="p">(</span><span class="n">history</span><span class="p">,</span> <span class="n">budget</span><span class="p">)</span>
+    <span class="c1"># Oldest messages should be the ones missing</span>
+    <span class="n">included_timestamps</span> <span class="o">=</span> <span class="p">[</span><span class="n">m</span><span class="o">.</span><span class="n">timestamp</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">messages</span><span class="p">]</span>
+    <span class="k">assert</span> <span class="nb">min</span><span class="p">(</span><span class="n">included_timestamps</span><span class="p">)</span> <span class="o">&gt;</span> <span class="nb">min</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">timestamp</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">history</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="318-the-testing-architecture">31.8 The Testing Architecture</h2>
+<p>Bringing it all together, the testing architecture for an AI agent looks like this:</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;CI Pipeline&quot;</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">        </span><span class="n">COMMIT</span><span class="p">[</span><span class="s">&quot;Every Commit&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">UNIT</span><span class="p">[</span><span class="s">&quot;Unit Tests&lt;br/&gt;~2000 tests, &lt;30s&lt;br/&gt;Tools, permissions, parsing&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PR</span><span class="p">[</span><span class="s">&quot;Every PR&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">INTEG</span><span class="p">[</span><span class="s">&quot;Integration Tests&lt;br/&gt;~200 tests, &lt;5min&lt;br/&gt;Tool execution, MCP, hooks&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PR</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VCR</span><span class="p">[</span><span class="s">&quot;VCR Replay Tests&lt;br/&gt;~100 tests, &lt;2min&lt;br/&gt;Recorded agent paths&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">NIGHTLY</span><span class="p">[</span><span class="s">&quot;Nightly&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">EVAL</span><span class="p">[</span><span class="s">&quot;Eval Suite&lt;br/&gt;~50 tasks x 5 runs&lt;br/&gt;Quality metrics&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">NIGHTLY</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SNAP</span><span class="p">[</span><span class="s">&quot;Snapshot Tests&lt;br/&gt;~50 tests&lt;br/&gt;Behavioral baselines&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Test Infrastructure&quot;</span>
+<span class="w">        </span><span class="n">MOCK</span><span class="p">[</span><span class="s">&quot;Mock API Layer&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">TMPFS</span><span class="p">[</span><span class="s">&quot;Temp Filesystems&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">CASS</span><span class="p">[</span><span class="s">&quot;Cassette Store&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">CORPUS</span><span class="p">[</span><span class="s">&quot;Eval Corpus&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">BASE</span><span class="p">[</span><span class="s">&quot;Snapshot Baselines&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">UNIT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MOCK</span>
+<span class="w">    </span><span class="n">UNIT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TMPFS</span>
+<span class="w">    </span><span class="n">VCR</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CASS</span>
+<span class="w">    </span><span class="n">EVAL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CORPUS</span>
+<span class="w">    </span><span class="n">SNAP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">BASE</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">UNIT</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">51</span><span class="n">cf66</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">2</span><span class="n">b8a3e</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="mo">000</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">INTEG</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffd43b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">e67700</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="mo">000</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">VCR</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">74</span><span class="n">c0fc</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">1971</span><span class="n">c2</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="mo">000</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EVAL</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ff6b6b</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="n">c92a2a</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SNAP</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">da77f2</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">9</span><span class="n">c36b5</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<h3 id="cost-and-latency-budget">Cost and Latency Budget</h3>
+<table>
+<thead>
+<tr>
+<th>Test type</th>
+<th>Per-test cost</th>
+<th>Per-test time</th>
+<th>Suite size</th>
+<th>Total cost</th>
+<th>Total time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unit</td>
+<td>$0</td>
+<td>5ms</td>
+<td>2,000</td>
+<td>$0</td>
+<td>10s</td>
+</tr>
+<tr>
+<td>Integration</td>
+<td>$0</td>
+<td>3s</td>
+<td>200</td>
+<td>$0</td>
+<td>4min</td>
+</tr>
+<tr>
+<td>VCR replay</td>
+<td>$0</td>
+<td>50ms</td>
+<td>100</td>
+<td>$0</td>
+<td>5s</td>
+</tr>
+<tr>
+<td>Eval (per run)</td>
+<td>$0.05</td>
+<td>30s</td>
+<td>50</td>
+<td>$2.50</td>
+<td>25min</td>
+</tr>
+<tr>
+<td>Eval (5 runs)</td>
+<td>$0.05</td>
+<td>30s</td>
+<td>250</td>
+<td>$12.50</td>
+<td>2hr</td>
+</tr>
+<tr>
+<td>Snapshot</td>
+<td>$0.05</td>
+<td>30s</td>
+<td>50</td>
+<td>$2.50</td>
+<td>25min</td>
+</tr>
+</tbody>
+</table>
+<p>The total daily cost for a nightly eval + snapshot suite is approximately $15-20. The total CI cost for unit + integration + VCR per PR is $0 and takes under 5 minutes. This is a sustainable testing economics model.</p>
+<hr />
+<h2 id="319-anti-patterns-and-pitfalls">31.9 Anti-Patterns and Pitfalls</h2>
+<h3 id="anti-pattern-asserting-on-exact-text-output">Anti-Pattern: Asserting on Exact Text Output</h3>
+<p>Do not write tests like:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># BAD: Fragile, breaks on any rewording</span>
+<span class="k">assert</span> <span class="n">agent</span><span class="o">.</span><span class="n">response</span> <span class="o">==</span> <span class="s2">&quot;The bug is on line 42 of config.py&quot;</span>
+</code></pre></div>
+
+<p>Instead, assert on structural properties:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># GOOD: Tests the meaningful property</span>
+<span class="k">assert</span> <span class="s2">&quot;config.py&quot;</span> <span class="ow">in</span> <span class="n">agent</span><span class="o">.</span><span class="n">files_modified</span>
+<span class="k">assert</span> <span class="n">test_passes</span><span class="p">(</span><span class="s2">&quot;python -m pytest tests/test_config.py&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="anti-pattern-testing-llm-behavior-in-unit-tests">Anti-Pattern: Testing LLM Behavior in Unit Tests</h3>
+<p>If your unit test requires an API call, it is not a unit test. Refactor to separate the LLM interaction from the logic you want to test.</p>
+<h3 id="anti-pattern-re-recording-cassettes-without-review">Anti-Pattern: Re-recording Cassettes Without Review</h3>
+<p>Blindly updating VCR cassettes is equivalent to writing <code>assert True</code>. Always diff the old and new cassettes. Verify the behavioral change is intentional.</p>
+<h3 id="anti-pattern-single-run-evals">Anti-Pattern: Single-Run Evals</h3>
+<p>A single eval run is statistically meaningless for non-deterministic systems. Always run N&gt;=5 and report confidence intervals.</p>
+<h3 id="anti-pattern-ignoring-cost-in-test-design">Anti-Pattern: Ignoring Cost in Test Design</h3>
+<p>A test that makes 10 API calls when 1 would suffice wastes money and time on every run for the life of the project. Design eval tasks to be minimal -- the simplest prompt that exercises the behavior you care about.</p>
+<hr />
+<h2 id="3110-key-takeaways">31.10 Key Takeaways</h2>
+<ol>
+<li>
+<p><strong>Separate deterministic from non-deterministic.</strong> The vast majority of an AI agent's code is deterministic and testable with traditional techniques. Architect the boundary between the LLM and everything else to be clean and mockable.</p>
+</li>
+<li>
+<p><strong>VCR recording is your best friend.</strong> Record API interactions once, replay them forever. This converts non-deterministic agent tests into deterministic regression tests. Re-record when behavior intentionally changes.</p>
+</li>
+<li>
+<p><strong>Eval tests are statistical, not absolute.</strong> Run them multiple times, report confidence intervals, flag regressions at 2-sigma. A single run tells you nothing.</p>
+</li>
+<li>
+<p><strong>Snapshot the structure, not the text.</strong> Tool call sequences, file modifications, and permission decisions are stable enough to snapshot. Prose output is not.</p>
+</li>
+<li>
+<p><strong>Test permissions exhaustively.</strong> The permission system is pure, fast, and critical to safety. It deserves hundreds of test cases covering every rule combination and precedence interaction.</p>
+</li>
+<li>
+<p><strong>Budget your testing economics.</strong> Unit tests cost $0 and run in seconds -- maximize them. Eval tests cost real money -- use them strategically for quality measurement, not for regression detection.</p>
+</li>
+<li>
+<p><strong>Make re-recording easy.</strong> A single flag should switch from replay to record mode. The friction of re-recording determines whether developers actually update cassettes or just delete failing tests.</p>
+</li>
+</ol>
+<p>In the next chapter, we turn from testing to observability -- the architecture that lets you understand what a production AI agent is doing, how much it costs, and why it made the decisions it did.</p>
+<div class="chapter-nav">
+  <a href="chapter-30.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-32.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

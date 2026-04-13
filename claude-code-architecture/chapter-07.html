@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 7: The Core Agent Loop — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-08.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-7-the-core-agent-loop">Chapter 7: The Core Agent Loop</h1>
+<p>In Chapters 4-6, we examined bootstrap, configuration, and session lifecycle — everything that happens before the agent starts thinking. Now we reach the architectural heart of any AI CLI agent: the loop that turns a language model into an agent.</p>
+<p>This chapter is about one pattern: <strong>prompt-think-act-observe</strong>. Every AI agent ever built implements some variant of this cycle. The difference between a toy demo and a production system lies in how you handle the edges: when does the loop stop? What happens when it fails? How do you prevent it from running forever? How does the model know it is making progress?</p>
+<p>We will design a production agent loop from first principles, examining the architectural decisions that separate a chatbot from an agent. By the end of this chapter, you will have a complete mental model of the agent loop — its invariants, its exit conditions, its error recovery paths, and the data flow that connects each iteration to the next.</p>
+<hr />
+<h2 id="the-fundamental-pattern-prompt-think-act-observe">The Fundamental Pattern: Prompt-Think-Act-Observe</h2>
+<p>Every AI agent follows the same cycle:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">User</span><span class="w"> </span><span class="n">Prompt</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">Think</span><span class="o">:</span><span class="w"> </span><span class="n">Call</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">Model</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">{</span><span class="n">Tool</span><span class="w"> </span><span class="n">Use</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Act</span><span class="o">:</span><span class="w"> </span><span class="n">Execute</span><span class="w"> </span><span class="n">Tools</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Observe</span><span class="o">:</span><span class="w"> </span><span class="n">Collect</span><span class="w"> </span><span class="n">Results</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Respond</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">User</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Wait</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Next</span><span class="w"> </span><span class="n">Prompt</span><span class="p">]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">A</span>
+</code></pre></div>
+
+<p>This looks simple. A chatbot also calls a model and returns a response. The difference is the <strong>inner loop</strong> — the path from "Think" through "Act" and "Observe" back to "Think." A chatbot has no inner loop. It calls the model once per user message and returns. An agent calls the model, sees that the model wants to use a tool, executes the tool, feeds the result back, and lets the model decide what to do next. This inner loop may run once or fifty times before the model decides it has finished.</p>
+<p>The inner loop is what makes an agent an agent. It is also what makes agents dangerous, expensive, and difficult to debug. Every iteration costs tokens. Every tool execution has side effects. Every continuation decision is a bet that the model will converge rather than spiral.</p>
+<h3 id="why-not-just-a-chatbot">Why Not Just a Chatbot?</h3>
+<p>A chatbot's architecture is a single function call:</p>
+<div class="codehilite"><pre><span></span><code>response = call_model(system_prompt + conversation_history + user_message)
+return response
+</code></pre></div>
+
+<p>This works when the model's output is the final answer. But the moment you need the model to interact with the environment — read a file, search the web, execute a command, edit code — the single-call architecture breaks down. The model needs to see the result of its action before deciding what to do next.</p>
+<p>Consider a user asking: "Find all Python files with SQL injection vulnerabilities and fix them." The model cannot do this in one shot. It needs to:</p>
+<ol>
+<li>Search for Python files (tool call)</li>
+<li>Read each file (tool calls)</li>
+<li>Analyze for SQL injection patterns (reasoning)</li>
+<li>Edit the vulnerable files (tool calls)</li>
+<li>Verify the fixes (tool calls)</li>
+</ol>
+<p>Each step depends on the output of the previous step. The model cannot know which files to read until it has searched. It cannot know what to fix until it has read. The agent loop is the mechanism that lets the model chain these dependent steps together.</p>
+<h3 id="the-chatbot-to-agent-spectrum">The Chatbot-to-Agent Spectrum</h3>
+<p>Not all loops are equal. Systems exist on a spectrum from pure chatbot to fully autonomous agent:</p>
+<table>
+<thead>
+<tr>
+<th>System Type</th>
+<th>Inner Loop?</th>
+<th>Tool Use?</th>
+<th>Convergence?</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Chatbot</strong></td>
+<td>No</td>
+<td>No</td>
+<td>N/A</td>
+<td>ChatGPT (basic)</td>
+</tr>
+<tr>
+<td><strong>Tool-augmented chatbot</strong></td>
+<td>Single pass</td>
+<td>Yes, one round</td>
+<td>N/A</td>
+<td>ChatGPT with plugins (1 tool call)</td>
+</tr>
+<tr>
+<td><strong>Simple agent</strong></td>
+<td>Yes, bounded</td>
+<td>Yes, multi-round</td>
+<td>Turn limit</td>
+<td>Basic ReAct loop</td>
+</tr>
+<tr>
+<td><strong>Production agent</strong></td>
+<td>Yes, managed</td>
+<td>Yes, concurrent</td>
+<td>Multi-signal</td>
+<td>Claude Code, Cursor</td>
+</tr>
+</tbody>
+</table>
+<p>The jump from "tool-augmented chatbot" to "simple agent" is the introduction of the inner loop. The jump from "simple agent" to "production agent" is the introduction of convergence detection, error recovery, token budget management, and all the other machinery we will design in this chapter.</p>
+<hr />
+<h2 id="designing-the-loop-an-async-generator">Designing the Loop: An Async Generator</h2>
+<p>The first architectural decision: what is the loop's interface?</p>
+<h3 id="why-not-a-simple-while-loop">Why Not a Simple While Loop?</h3>
+<p>The naive implementation looks like this:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">agent_loop</span><span class="p">(</span><span class="n">messages</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Message</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Message</span><span class="p">]:</span>
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">call_model</span><span class="p">(</span><span class="n">messages</span><span class="p">)</span>
+        <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
+
+        <span class="n">tool_calls</span> <span class="o">=</span> <span class="n">extract_tool_use</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">tool_calls</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">messages</span>
+
+        <span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">execute_tools</span><span class="p">(</span><span class="n">tool_calls</span><span class="p">)</span>
+        <span class="n">messages</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
+</code></pre></div>
+
+<p>This has three problems that matter at production scale:</p>
+<p><strong>No streaming.</strong> The consumer waits for the entire model response before seeing anything. In a CLI where responses can be thousands of tokens, the user stares at a blank screen for 10-30 seconds.</p>
+<p><strong>No backpressure.</strong> The loop runs as fast as the model generates. If the UI renderer is slow — rendering markdown, executing syntax highlighting, writing to disk — messages pile up in memory.</p>
+<p><strong>No exit reason communication.</strong> The function returns messages, but the caller cannot distinguish "completed normally" from "hit a token limit" from "user aborted." All exit paths collapse into the same return type.</p>
+<h3 id="the-pull-based-stream-solution">The Pull-Based Stream Solution</h3>
+<p>The architectural solution is to make the agent loop a <strong>pull-based stream</strong> — an async generator that yields messages one at a time, driven by the consumer's pace.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Consumer</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">SDK</span><span class="w"> </span><span class="n">Consumer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Loop</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">Loop</span><span class="w"> </span><span class="p">(</span><span class="n">Generator</span><span class="p">)</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Tools</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Tool</span><span class="w"> </span><span class="n">Executor</span>
+
+<span class="w">    </span><span class="n">Consumer</span><span class="o">-&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">next</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Loop</span><span class="o">-&gt;&gt;</span><span class="n">Model</span><span class="p">:</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">request</span>
+<span class="w">    </span><span class="n">Model</span><span class="o">--&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="n">chunk</span>
+<span class="w">    </span><span class="n">Loop</span><span class="o">--&gt;&gt;</span><span class="n">Consumer</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">StreamEvent</span>
+<span class="w">    </span><span class="n">Consumer</span><span class="o">-&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">next</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Model</span><span class="o">--&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">tool_use</span><span class="w"> </span><span class="n">block</span>
+<span class="w">    </span><span class="n">Loop</span><span class="o">-&gt;&gt;</span><span class="n">Tools</span><span class="p">:</span><span class="w"> </span><span class="n">execute</span><span class="w"> </span><span class="k">tool</span>
+<span class="w">    </span><span class="n">Tools</span><span class="o">--&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">result</span>
+<span class="w">    </span><span class="n">Loop</span><span class="o">--&gt;&gt;</span><span class="n">Consumer</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">ToolResult</span>
+<span class="w">    </span><span class="n">Consumer</span><span class="o">-&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">next</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Loop</span><span class="o">-&gt;&gt;</span><span class="n">Model</span><span class="p">:</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="p">(</span><span class="n">with</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">result</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Model</span><span class="o">--&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">final</span><span class="w"> </span><span class="n">text</span>
+<span class="w">    </span><span class="n">Loop</span><span class="o">--&gt;&gt;</span><span class="n">Consumer</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">AssistantMessage</span>
+<span class="w">    </span><span class="n">Loop</span><span class="o">--&gt;&gt;</span><span class="n">Consumer</span><span class="p">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">Terminal</span><span class="p">(</span><span class="n">completed</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Three things to notice about this design:</p>
+<p><strong>First</strong>, the consumer drives the pace. Each <code>next()</code> call pulls one message through the pipeline. If the UI renderer is slow, the generator naturally pauses. Backpressure is free — no explicit flow control needed.</p>
+<p><strong>Second</strong>, the yield channel carries messages (what happened) and the return channel carries the terminal reason (why it stopped). These are separate channels with separate types. The consumer processes messages as they arrive and only checks the terminal reason when the generator is done.</p>
+<p><strong>Third</strong>, the generator can yield different message types: stream events (partial tokens), assistant messages (complete responses), tool results, and status updates. The consumer pattern-matches on the message type and routes each to the appropriate handler.</p>
+<h3 id="why-async-generators-over-alternatives">Why Async Generators Over Alternatives</h3>
+<table>
+<thead>
+<tr>
+<th>Alternative</th>
+<th>Problem</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Callbacks</strong></td>
+<td>No return channel for exit reasons. Cleanup requires manual tracking. Callback hell for multi-step flows.</td>
+</tr>
+<tr>
+<td><strong>EventEmitter</strong></td>
+<td>No backpressure. Emitter fires regardless of consumer readiness. Memory grows unbounded during slow rendering.</td>
+</tr>
+<tr>
+<td><strong>Observable (RxJS)</strong></td>
+<td>Heavy dependency. Adds 50KB+ for sugar over generators. Operator composition is overkill for a single iteration pattern.</td>
+</tr>
+<tr>
+<td><strong>Channel (Go-style)</strong></td>
+<td>Not native to most runtimes. Requires a CSP library. Adds conceptual overhead.</td>
+</tr>
+</tbody>
+</table>
+<p>The async generator gets backpressure, composable cleanup via <code>.return()</code> and <code>.throw()</code>, and a separate return channel for exit reasons — all from the language runtime, zero dependencies.</p>
+<hr />
+<h2 id="loop-state-immutable-config-vs-mutable-state">Loop State: Immutable Config vs. Mutable State</h2>
+<p>The second architectural decision: how do you track state across iterations?</p>
+<h3 id="the-separation-principle">The Separation Principle</h3>
+<p>Every agent loop has two categories of data:</p>
+<ol>
+<li>
+<p><strong>Configuration</strong> — what was true when the loop started. The system prompt, the tool definitions, the model to use, the maximum turn count. This never changes within a single agent invocation.</p>
+</li>
+<li>
+<p><strong>Iteration state</strong> — what changes on every loop cycle. The conversation messages, the turn counter, the recovery attempt count, whether compaction has been tried.</p>
+</li>
+</ol>
+<p>Mixing these in a single object creates two problems:</p>
+<ul>
+<li>
+<p><strong>Debugging difficulty.</strong> When something goes wrong on iteration 47, you need to compare current state against the original request. If both live in the same object, you must reconstruct the original from the mutated version.</p>
+</li>
+<li>
+<p><strong>Refactoring resistance.</strong> If you later want to extract the loop body into a pure function — <code>(state, event, config) -&gt; state</code> — mixed state and config blocks this extraction.</p>
+</li>
+</ul>
+<p>The pattern: destructure config once at entry, never reassign it. Create a separate state type that is replaced (not mutated) on every iteration.</p>
+<div class="codehilite"><pre><span></span><code><span class="err">┌─────────────────────────────┐</span>
+<span class="err">│</span><span class="w">       </span><span class="n">QueryConfig</span><span class="w">           </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="p">(</span><span class="n">immutable</span><span class="p">,</span><span class="w"> </span><span class="n">snapshotted</span><span class="w">    </span><span class="err">│</span>
+<span class="err">│</span><span class="w">   </span><span class="n">at</span><span class="w"> </span><span class="n">loop</span><span class="w"> </span><span class="n">entry</span><span class="p">)</span><span class="w">            </span><span class="err">│</span>
+<span class="err">│</span><span class="w">                             </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">system</span><span class="w"> </span><span class="n">prompt</span><span class="w">            </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">definitions</span><span class="w">         </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">model</span><span class="w"> </span><span class="n">name</span><span class="w">               </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">feature</span><span class="w"> </span><span class="n">flags</span><span class="w">            </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="nb">max</span><span class="w"> </span><span class="n">turns</span><span class="w">                </span><span class="err">│</span>
+<span class="err">└─────────────────────────────┘</span>
+
+<span class="err">┌─────────────────────────────┐</span>
+<span class="err">│</span><span class="w">       </span><span class="n">LoopState</span><span class="w">             </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="p">(</span><span class="n">replaced</span><span class="w"> </span><span class="n">every</span><span class="w"> </span><span class="n">iteration</span><span class="p">)</span><span class="w"> </span><span class="err">│</span>
+<span class="err">│</span><span class="w">                             </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">messages</span><span class="p">[]</span><span class="w">               </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">turn</span><span class="w"> </span><span class="n">count</span><span class="w">               </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">recovery</span><span class="w"> </span><span class="n">counters</span><span class="w">        </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">compaction</span><span class="w"> </span><span class="n">tracking</span><span class="w">      </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">-</span><span class="w"> </span><span class="n">transition</span><span class="w"> </span><span class="n">reason</span><span class="w">        </span><span class="err">│</span>
+<span class="err">└─────────────────────────────┘</span>
+</code></pre></div>
+
+<h3 id="replace-dont-mutate">Replace, Don't Mutate</h3>
+<p>A critical sub-pattern: on every continuation, build a <strong>new</strong> state object rather than mutating the existing one.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># BAD: mutation hides which fields changed</span>
+<span class="n">state</span><span class="o">.</span><span class="n">messages</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">tool_results</span><span class="p">)</span>
+<span class="n">state</span><span class="o">.</span><span class="n">turn_count</span> <span class="o">+=</span> <span class="mi">1</span>
+<span class="n">state</span><span class="o">.</span><span class="n">recovery_count</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c1"># Did we mean to reset this? Hard to tell.</span>
+
+<span class="c1"># GOOD: replacement declares the complete next state</span>
+<span class="n">state</span> <span class="o">=</span> <span class="n">LoopState</span><span class="p">(</span>
+    <span class="n">messages</span><span class="o">=</span><span class="p">[</span><span class="o">*</span><span class="n">state</span><span class="o">.</span><span class="n">messages</span><span class="p">,</span> <span class="o">*</span><span class="n">assistant_msgs</span><span class="p">,</span> <span class="o">*</span><span class="n">tool_results</span><span class="p">],</span>
+    <span class="n">turn_count</span><span class="o">=</span><span class="n">state</span><span class="o">.</span><span class="n">turn_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">recovery_count</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>  <span class="c1"># Explicit: recovery resets on successful tool turn</span>
+    <span class="n">compaction_attempted</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>  <span class="c1"># Explicit: new turn, new chance</span>
+    <span class="n">transition</span><span class="o">=</span><span class="n">Transition</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;next_turn&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>When you replace the entire state object, every continuation site declares the complete next state. You can read any transition independently without tracing what other code paths might have mutated before it. The <code>transition</code> field records <em>why</em> this iteration was started — invaluable for debugging and testing.</p>
+<h3 id="snapshot-feature-flags-at-entry">Snapshot Feature Flags at Entry</h3>
+<p>Feature flags deserve special attention. In a production system, feature flags can change at any time — a remote flag server pushes an update, and suddenly a feature is enabled or disabled.</p>
+<p>If the agent loop reads flags on every iteration, behavior can change mid-query. Iteration 1 might use streaming tool execution because the flag is on; iteration 5 might not because the flag was turned off between iterations. This creates inconsistencies that are nearly impossible to reproduce or debug.</p>
+<p>The solution: snapshot all relevant feature flags into the config object at loop entry. The loop uses the snapshot for its entire lifetime. Even if the flag server pushes an update mid-query, the current loop runs consistently.</p>
+<p>This pattern applies to any external state that could change asynchronously: feature flags, configuration files, environment variables, API capabilities. Snapshot at entry, use the snapshot throughout.</p>
+<hr />
+<h2 id="the-five-phase-iteration">The Five-Phase Iteration</h2>
+<p>Each pass through the loop follows five phases. Understanding this structure is essential to reasoning about the loop's behavior.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">START</span><span class="p">([</span><span class="n">Iteration</span><span class="w"> </span><span class="n">Start</span><span class="p">])</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">P1</span><span class="p">[</span><span class="n">Phase</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">Preparation</span><span class="p">]</span>
+<span class="w">    </span><span class="n">P1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">P2</span><span class="p">[</span><span class="n">Phase</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="n">Call</span><span class="p">]</span>
+<span class="w">    </span><span class="n">P2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">P3</span><span class="p">{</span><span class="n">Phase</span><span class="w"> </span><span class="mi">3</span><span class="o">:</span><span class="w"> </span><span class="n">Post</span><span class="o">-</span><span class="n">Response</span><span class="w"> </span><span class="n">Decision</span><span class="p">}</span>
+<span class="w">    </span><span class="n">P3</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="w"> </span><span class="n">tools</span><span class="p">,</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">errors</span><span class="o">|</span><span class="w"> </span><span class="n">DONE</span><span class="p">([</span><span class="n">Return</span><span class="w"> </span><span class="n">Terminal</span><span class="p">])</span>
+<span class="w">    </span><span class="n">P3</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Recoverable</span><span class="w"> </span><span class="n">error</span><span class="o">|</span><span class="w"> </span><span class="n">P1</span>
+<span class="w">    </span><span class="n">P3</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Tool</span><span class="w"> </span><span class="n">use</span><span class="w"> </span><span class="n">detected</span><span class="o">|</span><span class="w"> </span><span class="n">P4</span><span class="p">[</span><span class="n">Phase</span><span class="w"> </span><span class="mi">4</span><span class="o">:</span><span class="w"> </span><span class="n">Tool</span><span class="w"> </span><span class="n">Execution</span><span class="p">]</span>
+<span class="w">    </span><span class="n">P4</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">P5</span><span class="p">{</span><span class="n">Phase</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span><span class="w"> </span><span class="n">Continue</span><span class="w"> </span><span class="n">Decision</span><span class="p">}</span>
+<span class="w">    </span><span class="n">P5</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Max</span><span class="w"> </span><span class="n">turns</span><span class="w"> </span><span class="n">reached</span><span class="o">|</span><span class="w"> </span><span class="n">DONE</span>
+<span class="w">    </span><span class="n">P5</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">User</span><span class="w"> </span><span class="n">aborted</span><span class="o">|</span><span class="w"> </span><span class="n">DONE</span>
+<span class="w">    </span><span class="n">P5</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Hook</span><span class="w"> </span><span class="n">blocked</span><span class="o">|</span><span class="w"> </span><span class="n">DONE</span>
+<span class="w">    </span><span class="n">P5</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Continue</span><span class="o">|</span><span class="w"> </span><span class="n">START</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">P1</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e1f5fe</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">P2</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">P3</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">P4</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">P5</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">f3e5f5</span>
+</code></pre></div>
+
+<h3 id="phase-1-context-preparation">Phase 1: Context Preparation</h3>
+<p>Before calling the model, the loop must ensure the message context fits within the model's context window. This is a chain of increasingly aggressive compression strategies, cheapest first:</p>
+<div class="codehilite"><pre><span></span><code><span class="mf">1.</span><span class="w"> </span><span class="kr">To</span><span class="n">ol</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="n">budget</span><span class="w"> </span><span class="n">enforcement</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Truncate</span><span class="w"> </span><span class="n">oversized</span><span class="w"> </span><span class="n">individual</span><span class="w"> </span><span class="kr">to</span><span class="n">ol</span><span class="w"> </span><span class="n">results</span>
+<span class="mf">2.</span><span class="w"> </span><span class="n">History</span><span class="w"> </span><span class="n">snipping</span><span class="w">            </span><span class="err">→</span><span class="w"> </span><span class="c1">Remove oldest messages by count</span>
+<span class="mf">3.</span><span class="w"> </span><span class="n">Microcompact</span><span class="w">                </span><span class="err">→</span><span class="w"> </span><span class="n">Replace</span><span class="w"> </span><span class="n">old</span><span class="w"> </span><span class="kr">to</span><span class="n">ol</span><span class="w"> </span><span class="kr">cont</span><span class="n">ent</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">markers</span>
+<span class="mf">4.</span><span class="w"> </span><span class="kr">Cont</span><span class="n">ext</span><span class="w"> </span><span class="n">collapse</span><span class="w">            </span><span class="err">→</span><span class="w"> </span><span class="n">Summarize</span><span class="w"> </span><span class="n">old</span><span class="w"> </span><span class="n">conversation</span><span class="w"> </span><span class="n">segments</span>
+<span class="mf">5.</span><span class="w"> </span><span class="n">Auto</span><span class="o">-</span><span class="n">compact</span><span class="w">                </span><span class="err">→</span><span class="w"> </span><span class="n">Full</span><span class="w"> </span><span class="n">LLM</span><span class="o">-</span><span class="n">based</span><span class="w"> </span><span class="n">summarization</span>
+<span class="mf">6.</span><span class="w"> </span><span class="kr">To</span><span class="n">ken</span><span class="w"> </span><span class="n">warning</span><span class="w"> </span><span class="n">check</span><span class="w">         </span><span class="err">→</span><span class="w"> </span><span class="n">Abort</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="n">still</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">limit</span>
+</code></pre></div>
+
+<p>The ordering is deliberate. Each strategy is cheaper and faster than the next. The pipeline only advances when the previous tier cannot reduce context enough. The system never sends a prompt that exceeds the model's context window — if all compression strategies fail and the context still exceeds the limit, the loop exits with a <code>prompt_too_long</code> terminal reason rather than wasting an API call that will definitely fail.</p>
+<p>Chapter 9 covers context management in depth. For the agent loop's purposes, what matters is that Phase 1 is a <strong>precondition enforcer</strong>: after it runs, the context is guaranteed to fit.</p>
+<h3 id="phase-2-model-call-streaming">Phase 2: Model Call (Streaming)</h3>
+<p>The core of Phase 2 is a streaming iteration over the model's response. Four things happen simultaneously during the stream:</p>
+<p><strong>Yield messages to the consumer.</strong> Each token chunk, each content block, each tool use detection streams to the UI for real-time rendering.</p>
+<p><strong>Collect the full response.</strong> The complete assistant messages accumulate for use in Phases 3-5.</p>
+<p><strong>Detect tool use blocks.</strong> Tool calls are detected <em>during</em> streaming, not after. This enables pipelining.</p>
+<p><strong>Feed the streaming tool executor.</strong> This is the key performance optimization. While the model generates content block N+1, the tool from content block N is already executing. For a response that invokes three tools, this can cut total latency by 60-70% compared to sequential execution:</p>
+<div class="codehilite"><pre><span></span><code>gantt
+    title Sequential vs Pipelined Tool Execution
+    dateFormat X
+    axisFormat %s
+
+    section Sequential
+    Model generates response    :s1, 0, 4
+    Execute Tool 1              :s2, after s1, 2
+    Execute Tool 2              :s3, after s2, 2
+    Execute Tool 3              :s4, after s3, 2
+
+    section Pipelined
+    Model generates response    :p1, 0, 4
+    Execute Tool 1              :p2, 1, 2
+    Execute Tool 2              :p3, 2, 2
+    Execute Tool 3              :p4, 3, 2
+</code></pre></div>
+
+<p>The sequential approach takes 10 time units. The pipelined approach takes 5. The savings grow with the number of tools in a single response.</p>
+<p>Not all tools can pipeline safely. Read-only tools (file reads, searches, web fetches) are concurrency-safe — they can execute in parallel. Mutation tools (bash commands, file edits, file writes) are not — they may have implicit dependency chains. The executor classifies each tool and only pipelines concurrency-safe tools.</p>
+<h3 id="phase-3-post-response-decision">Phase 3: Post-Response Decision</h3>
+<p>After the model's response completes, the loop must decide what to do next. This is where most of the complexity lives, because multiple recovery and continuation paths can trigger:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">STREAM_DONE</span><span class="p">(</span><span class="o">[</span><span class="n">Model Response Complete</span><span class="o">]</span><span class="p">)</span><span class="w"> </span><span class="c1">--&gt; A{Tool use in response?}</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="c1">--&gt;|Yes| TOOLS[Go to Phase 4: Tool Execution]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="c1">--&gt;|No| B{Prompt too long error?}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="c1">--&gt;|Yes| C{Already tried reactive compact?}</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="c1">--&gt;|No| D[Compact and retry]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="c1">--&gt;|Yes| E([Exit: prompt_too_long])</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="c1">--&gt;|No| F{Output token limit hit?}</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="c1">--&gt;|Yes| G{First time hitting limit?}</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="c1">--&gt;|Yes| H[Escalate token limit and retry]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="c1">--&gt;|No| I{Recovery attempts &lt; 3?}</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="c1">--&gt;|Yes| J[Inject resume message and continue]</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="c1">--&gt;|No| K[Surface truncation error]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="c1">--&gt;|No| L{Stop hooks pass?}</span>
+<span class="w">    </span><span class="n">L</span><span class="w"> </span><span class="c1">--&gt;|Blocked| M[Inject hook errors and continue]</span>
+<span class="w">    </span><span class="n">L</span><span class="w"> </span><span class="c1">--&gt;|Prevented| N([Exit: stop_hook_prevented])</span>
+<span class="w">    </span><span class="n">L</span><span class="w"> </span><span class="c1">--&gt;|Pass| O{Token budget remaining?}</span>
+<span class="w">    </span><span class="n">O</span><span class="w"> </span><span class="c1">--&gt;|Yes, not diminishing| P[Inject nudge and continue]</span>
+<span class="w">    </span><span class="n">O</span><span class="w"> </span><span class="c1">--&gt;|No or diminishing| Q([Exit: completed])</span>
+
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="c1">--&gt; RETRY([Retry from Phase 1])</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="c1">--&gt; RETRY</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="c1">--&gt; RETRY</span>
+<span class="w">    </span><span class="n">M</span><span class="w"> </span><span class="c1">--&gt; RETRY</span>
+<span class="w">    </span><span class="n">P</span><span class="w"> </span><span class="c1">--&gt; RETRY</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">STREAM_DONE</span><span class="w"> </span><span class="nl">fill</span><span class="p">:</span><span class="n">#fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="nl">fill</span><span class="p">:</span><span class="n">#ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">N</span><span class="w"> </span><span class="nl">fill</span><span class="p">:</span><span class="n">#ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Q</span><span class="w"> </span><span class="nl">fill</span><span class="p">:</span><span class="n">#c8e6c9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">K</span><span class="w"> </span><span class="nl">fill</span><span class="p">:</span><span class="n">#ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">TOOLS</span><span class="w"> </span><span class="nl">fill</span><span class="p">:</span><span class="n">#e8f5e9</span>
+</code></pre></div>
+
+<p>This decision tree is the most architecturally significant diagram in the agent loop. Each branch represents a distinct recovery or continuation path, and each path has its own state management requirements.</p>
+<h3 id="phase-4-tool-execution">Phase 4: Tool Execution</h3>
+<p>If tool use was detected during streaming (Phase 2), the loop now collects all tool results. Two paths exist:</p>
+<ul>
+<li><strong>Streaming execution enabled:</strong> The streaming tool executor already started tools during Phase 2. Now it drains any remaining results from tools still in progress.</li>
+<li><strong>Sequential fallback:</strong> Tools start and complete one at a time. Simpler, slower, but useful as a fallback when the streaming executor is disabled via feature flag.</li>
+</ul>
+<p>Tool results become user messages in the conversation — this is the API's protocol for feeding tool output back to the model. The model sees its own tool calls and their results, giving it the information it needs to decide what to do next.</p>
+<h3 id="phase-5-continue-decision">Phase 5: Continue Decision</h3>
+<p>After tools execute, the loop must decide whether to continue. Three immediate exit conditions:</p>
+<ol>
+<li><strong>Max turns reached.</strong> A configurable limit (typically 200 for interactive sessions, lower for subagents) prevents infinite loops.</li>
+<li><strong>User aborted.</strong> Ctrl+C or an abort signal was received during tool execution.</li>
+<li><strong>Hook blocked.</strong> A post-tool-execution hook returned a blocking error.</li>
+</ol>
+<p>If none of these trigger, the loop builds the next state and continues from Phase 1. The state construction is the feedback mechanism: <code>messages = [...previous, ...assistant_response, ...tool_results]</code>. The model's response and the tool results become part of the conversation history for the next iteration.</p>
+<hr />
+<h2 id="convergence-detection-the-10-exit-reasons">Convergence Detection: The 10 Exit Reasons</h2>
+<p>The agent loop must know when to stop. This is harder than it sounds. The model does not explicitly say "I am done." Instead, the loop infers completion from multiple signals.</p>
+<p>A production agent loop has at least 10 distinct exit reasons:</p>
+<table>
+<thead>
+<tr>
+<th>Exit Reason</th>
+<th>Trigger</th>
+<th>User Experience</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>completed</code></td>
+<td>Model finished naturally (no tool calls, no errors)</td>
+<td>Normal response displayed</td>
+</tr>
+<tr>
+<td><code>prompt_too_long</code></td>
+<td>Context exceeded limits, all recovery failed</td>
+<td>Error message, suggest <code>/clear</code></td>
+</tr>
+<tr>
+<td><code>blocking_limit</code></td>
+<td>Approaching context ceiling, cannot proceed</td>
+<td>Warning, suggest <code>/compact</code></td>
+</tr>
+<tr>
+<td><code>image_error</code></td>
+<td>Unrecoverable image processing failure</td>
+<td>Error message</td>
+</tr>
+<tr>
+<td><code>model_error</code></td>
+<td>API error after all retries exhausted</td>
+<td>Error with retry suggestion</td>
+</tr>
+<tr>
+<td><code>aborted_streaming</code></td>
+<td>User cancelled during model output</td>
+<td>Partial response shown</td>
+</tr>
+<tr>
+<td><code>aborted_tools</code></td>
+<td>User cancelled during tool execution</td>
+<td>Partial results shown</td>
+</tr>
+<tr>
+<td><code>stop_hook_prevented</code></td>
+<td>Post-turn hook blocked continuation</td>
+<td>Hook's error message shown</td>
+</tr>
+<tr>
+<td><code>hook_stopped</code></td>
+<td>Hook explicitly terminated the session</td>
+<td>Hook's message shown</td>
+</tr>
+<tr>
+<td><code>max_turns</code></td>
+<td>Turn limit reached</td>
+<td>Warning with turn count</td>
+</tr>
+</tbody>
+</table>
+<h3 id="why-discriminated-unions-not-exceptions">Why Discriminated Unions, Not Exceptions</h3>
+<p>Each exit reason should be a variant of a discriminated union (tagged enum), not an exception:</p>
+<div class="codehilite"><pre><span></span><code><span class="kr">type</span><span class="w"> </span><span class="nx">Terminal</span><span class="w"> </span><span class="o">=</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;completed&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;prompt_too_long&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;max_turns&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">turnCount</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;model_error&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">error</span><span class="o">:</span><span class="w"> </span><span class="kt">unknown</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;aborted_streaming&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="c1">// ... 5 more</span>
+</code></pre></div>
+
+<p>Three benefits over exceptions:</p>
+<ol>
+<li>
+<p><strong>Exhaustiveness checking.</strong> The compiler ensures every exit reason is handled. Add a new reason and every <code>switch</code> statement that does not handle it produces a type error.</p>
+</li>
+<li>
+<p><strong>Testing precision.</strong> Tests assert on <code>terminal.reason === 'max_turns'</code> rather than catching exceptions and parsing error messages.</p>
+</li>
+<li>
+<p><strong>No stack unwinding.</strong> Exceptions unwind the call stack, destroying local state. A terminal return preserves the generator's cleanup path — command lifecycle notifications, metric recording, and transcript persistence all run normally.</p>
+</li>
+</ol>
+<h3 id="the-distinction-stop-vs-error">The Distinction: Stop vs. Error</h3>
+<p>Not every exit is an error. <code>completed</code>, <code>max_turns</code>, and <code>stop_hook_prevented</code> are normal terminations — the loop did its job and stopped for a well-defined reason. <code>model_error</code> and <code>prompt_too_long</code> are failures — something went wrong and recovery was not possible.</p>
+<p>The UI treatment differs: normal terminations are silent or informational, while failures show error messages with recovery suggestions. Keeping these in the same union type with different variants — rather than separate success/failure return types — simplifies the consumer's control flow. One <code>switch</code> handles all cases.</p>
+<hr />
+<h2 id="the-7-continuation-reasons">The 7 Continuation Reasons</h2>
+<p>Equally important to knowing <em>when to stop</em> is knowing <em>why to continue</em>. The loop continues for seven distinct reasons, each with its own state management:</p>
+<table>
+<thead>
+<tr>
+<th>Continuation Reason</th>
+<th>Trigger</th>
+<th>State Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>next_turn</code></td>
+<td>Normal tool-to-model cycle</td>
+<td>Recovery counters reset to zero</td>
+</tr>
+<tr>
+<td><code>collapse_drain_retry</code></td>
+<td>Context collapse freed space, retry</td>
+<td>Preserves collapse state</td>
+</tr>
+<tr>
+<td><code>reactive_compact_retry</code></td>
+<td>Compacted after prompt-too-long</td>
+<td>Sets <code>compaction_attempted = true</code></td>
+</tr>
+<tr>
+<td><code>max_output_tokens_escalate</code></td>
+<td>8K limit hit, retry at 64K</td>
+<td>Sets override, does NOT increment recovery count</td>
+</tr>
+<tr>
+<td><code>max_output_tokens_recovery</code></td>
+<td>64K limit hit, resume message injected</td>
+<td>Increments recovery count (1..3)</td>
+</tr>
+<tr>
+<td><code>stop_hook_blocking</code></td>
+<td>Hook injected error messages</td>
+<td>Preserves compaction guards</td>
+</tr>
+<tr>
+<td><code>token_budget_continuation</code></td>
+<td>Budget remaining, nudge injected</td>
+<td>Increments continuation count</td>
+</tr>
+</tbody>
+</table>
+<h3 id="why-track-continuation-reasons">Why Track Continuation Reasons?</h3>
+<p>Recording the continuation reason on the state serves three purposes:</p>
+<p><strong>1. Prevents state interference.</strong> Each recovery path has specific fields it must preserve and specific fields it must reset. The <code>next_turn</code> path resets all recovery counters — because tools executed successfully, there is nothing to recover from. The <code>stop_hook_blocking</code> path preserves the compaction guard — because a previous compaction attempt may have failed, and resetting the guard would create an infinite loop.</p>
+<p><strong>2. Enables debugging.</strong> When a session enters an unexpected loop (compacting on every turn, or retrying indefinitely), the continuation reason trace shows exactly which paths triggered and in what order.</p>
+<p><strong>3. Supports testing.</strong> Tests can assert <code>state.transition.reason === 'max_output_tokens_escalate'</code> without inspecting the actual messages or counting API calls.</p>
+<h3 id="the-interaction-trap">The Interaction Trap</h3>
+<p>The most dangerous aspect of continuation reasons is their interaction. Consider this scenario:</p>
+<ol>
+<li>Model response triggers a stop hook with blocking errors.</li>
+<li>Stop hook injects error messages. Loop continues with <code>stop_hook_blocking</code>.</li>
+<li>The new messages push context past the compaction threshold.</li>
+<li>Compaction fires but fails (context is too large even for summarization).</li>
+<li>The compaction failure flag is set.</li>
+<li>The model responds to the hook errors, triggering the stop hook again.</li>
+<li>Stop hook injects more errors. Loop continues with <code>stop_hook_blocking</code>.</li>
+<li><strong>If the compaction flag was reset at step 7</strong>, compaction would fire again at step 3, fail again, and the loop would repeat forever.</li>
+</ol>
+<p>The fix: when continuing due to <code>stop_hook_blocking</code>, preserve the compaction failure flag. Do not reset it. This prevents the death spiral.</p>
+<p>This kind of interaction between recovery paths is the primary source of infinite loop bugs in agent systems. Every new continuation reason must be analyzed against every existing one for potential cycles. The transition reason field makes this analysis tractable — you can trace the exact path through the state machine.</p>
+<hr />
+<h2 id="error-recovery-within-the-loop">Error Recovery Within the Loop</h2>
+<p>Production agent loops encounter three categories of errors, each requiring different recovery strategies:</p>
+<h3 id="category-1-recoverable-api-errors">Category 1: Recoverable API Errors</h3>
+<p>The most common recoverable error is <strong>output token limit exhaustion</strong> — the model's response was cut off because it exceeded the configured maximum. The recovery strategy is a three-phase escalation:</p>
+<p><strong>Phase 1: Silent escalation.</strong> The default output limit is intentionally low (e.g., 8K tokens) to optimize GPU slot reservations. When the model hits this limit, the loop silently retries with a higher limit (e.g., 64K). No user-visible message. No partial output shown. The user never knows it happened.</p>
+<p><strong>Phase 2: Multi-turn recovery.</strong> If the model hits even the escalated limit, inject a recovery message: "Resume directly where you left off. No apology, no recap. Break remaining work into smaller pieces." This instruction prevents the model from wasting tokens on meta-commentary about being cut off. Up to 3 recovery attempts are allowed.</p>
+<p><strong>Phase 3: Surface the error.</strong> If all recovery attempts fail, show the user the truncated response and explain what happened.</p>
+<p>The key architectural insight: <strong>withhold recoverable errors from the output stream</strong>. If the loop yields an error message to the consumer during streaming, the consumer might disconnect (an SDK client terminates on errors). When the loop subsequently recovers, nobody is listening. The solution is to detect potentially recoverable errors during streaming, suppress them, attempt recovery, and only surface them if recovery fails.</p>
+<h3 id="category-2-context-overflow">Category 2: Context Overflow</h3>
+<p>When the model returns a prompt-too-long error, the conversation has exceeded the context window. The recovery path:</p>
+<ol>
+<li>Parse the error to extract the exact token overshoot.</li>
+<li>Compact the conversation (remove oldest messages, summarize).</li>
+<li>Retry the request with the compacted context.</li>
+</ol>
+<p>This is a last-resort compaction — it fires only after the pre-request compaction pipeline (Phase 1) has already tried and failed. The retry is allowed once per query. If compaction fails or the compacted context still exceeds the limit, the loop exits with <code>prompt_too_long</code>.</p>
+<h3 id="category-3-transient-failures">Category 3: Transient Failures</h3>
+<p>Network timeouts, rate limits (429), server overload (529), and stale connections. These are handled by the retry engine (covered in Chapter 10's API client design), not by the agent loop directly. The loop sees either a successful response or a final error after retries are exhausted.</p>
+<p>The separation matters: the retry engine handles transient failures at the HTTP level. The agent loop handles semantic failures at the conversation level. Mixing these creates confusion about which layer is responsible for recovery.</p>
+<h3 id="the-error-withholding-pattern">The Error Withholding Pattern</h3>
+<p>Error withholding deserves its own discussion because it is counterintuitive. Most systems surface errors immediately. The agent loop does the opposite for recoverable errors:</p>
+<div class="codehilite"><pre><span></span><code><span class="nv">During</span><span class="w"> </span><span class="nv">Streaming</span>:
+┌─────────────────────────────────────────┐
+│<span class="w"> </span><span class="nv">Error</span><span class="w"> </span><span class="nv">detected</span><span class="w">                          </span>│
+│<span class="w">   </span>├──<span class="w"> </span><span class="nv">Is</span><span class="w"> </span><span class="nv">it</span><span class="w"> </span><span class="nv">recoverable</span>?<span class="w">                </span>│
+│<span class="w">   </span>│<span class="w">   </span>├──<span class="w"> </span><span class="nv">Yes</span>:<span class="w"> </span><span class="nv">withhold</span><span class="w"> </span><span class="nv">from</span><span class="w"> </span><span class="nv">consumer</span><span class="w">   </span>│
+│<span class="w">   </span>│<span class="w">   </span>│<span class="w">       </span><span class="ss">(</span><span class="nv">but</span><span class="w"> </span><span class="nv">save</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nv">recovery</span><span class="ss">)</span><span class="w">   </span>│
+│<span class="w">   </span>│<span class="w">   </span>└──<span class="w"> </span><span class="nv">No</span>:<span class="w"> </span><span class="nv">yield</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">consumer</span><span class="w">         </span>│
+│<span class="w">   </span>└──<span class="w"> </span><span class="k">Continue</span><span class="w"> </span><span class="nv">streaming</span><span class="w">                </span>│
+└─────────────────────────────────────────┘
+
+<span class="nv">After</span><span class="w"> </span><span class="nv">Streaming</span>:
+┌─────────────────────────────────────────┐
+│<span class="w"> </span><span class="nv">Withheld</span><span class="w"> </span><span class="nv">errors</span><span class="w"> </span><span class="nv">exist</span>?<span class="w">                  </span>│
+│<span class="w">   </span>├──<span class="w"> </span><span class="nv">Attempt</span><span class="w"> </span><span class="nv">recovery</span><span class="w">                  </span>│
+│<span class="w">   </span>│<span class="w">   </span>├──<span class="w"> </span><span class="nv">Success</span>:<span class="w"> </span><span class="k">continue</span><span class="w"> </span><span class="k">loop</span><span class="w">        </span>│
+│<span class="w">   </span>│<span class="w">   </span>│<span class="w">   </span><span class="ss">(</span><span class="nv">consumer</span><span class="w"> </span><span class="nv">never</span><span class="w"> </span><span class="nv">saw</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">error</span><span class="ss">)</span>│
+│<span class="w">   </span>│<span class="w">   </span>└──<span class="w"> </span><span class="nv">Failure</span>:<span class="w"> </span><span class="nv">yield</span><span class="w"> </span><span class="nv">withheld</span><span class="w"> </span><span class="nv">error</span><span class="w"> </span>│
+│<span class="w">   </span>│<span class="w">       </span><span class="ss">(</span><span class="nv">consumer</span><span class="w"> </span><span class="nv">sees</span><span class="w"> </span><span class="nv">it</span><span class="w"> </span><span class="nv">now</span><span class="ss">)</span><span class="w">        </span>│
+│<span class="w">   </span>└──<span class="w"> </span><span class="nv">No</span><span class="w"> </span><span class="nv">errors</span>:<span class="w"> </span><span class="nv">proceed</span><span class="w"> </span><span class="nv">normally</span><span class="w">       </span>│
+└─────────────────────────────────────────┘
+</code></pre></div>
+
+<p>This pattern is necessary because of the generator protocol. Once you <code>yield</code> a message, it is in the consumer's hands. You cannot take it back. If the consumer reacts to an error by disconnecting, your subsequent recovery is invisible. By withholding, you defer the decision until you have enough information to make it correctly.</p>
+<hr />
+<h2 id="the-agentic-turn-concept">The "Agentic Turn" Concept</h2>
+<p>A key concept for understanding the agent loop is the <strong>agentic turn</strong>: one user message may trigger many loop iterations.</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">User</span><span class="w"> </span><span class="nx">types</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Find and fix all TODO comments in src/&quot;</span>
+
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">1</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">calls</span><span class="w"> </span><span class="nx">Grep</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">find</span><span class="w"> </span><span class="nx">TODO</span><span class="w"> </span><span class="nx">comments</span>
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">2</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">calls</span><span class="w"> </span><span class="nx">Read</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">file1</span><span class="p">.</span><span class="nx">py</span>
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">3</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">calls</span><span class="w"> </span><span class="nx">Edit</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">file1</span><span class="p">.</span><span class="nx">py</span>
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">4</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">calls</span><span class="w"> </span><span class="nx">Read</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">file2</span><span class="p">.</span><span class="nx">py</span>
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">5</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">calls</span><span class="w"> </span><span class="nx">Edit</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">file2</span><span class="p">.</span><span class="nx">py</span>
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">6</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">calls</span><span class="w"> </span><span class="nx">Read</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">file3</span><span class="p">.</span><span class="nx">py</span>
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">7</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">calls</span><span class="w"> </span><span class="nx">Edit</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">file3</span><span class="p">.</span><span class="nx">py</span>
+<span class="w">  </span><span class="nx">Iteration</span><span class="w"> </span><span class="mi">8</span><span class="p">:</span><span class="w"> </span><span class="nx">Model</span><span class="w"> </span><span class="nx">responds</span><span class="w"> </span><span class="nx">with</span><span class="w"> </span><span class="nx">summary</span><span class="w"> </span><span class="nx">of</span><span class="w"> </span><span class="nx">changes</span>
+
+<span class="nx">Total</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="nx">iterations</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="nx">user</span><span class="w"> </span><span class="nx">message</span>
+</code></pre></div>
+
+<p>The distinction between "user turn" and "agent turn" matters for:</p>
+<p><strong>Token accounting.</strong> The context window grows across all 8 iterations. By iteration 8, the window contains the original user message plus 7 model responses and 7 tool results. Context management must track tokens across the entire agentic turn, not just per-iteration.</p>
+<p><strong>Cost tracking.</strong> Each iteration incurs an API call. The user types one sentence, but the system makes 8 API calls. Cost tracking should show the total cost of the agentic turn, not just the last iteration.</p>
+<p><strong>Abort handling.</strong> If the user presses Ctrl+C during iteration 5, the loop must handle a mid-turn abort. Some tool results are already in the conversation. Some edits have already been applied to disk. The abort handler must decide: roll back the edits? Leave them in place? Show partial results?</p>
+<p><strong>Subagent delegation.</strong> An agentic turn may spawn subagents that run their own loops. The parent's turn counter includes subagent iterations, but the subagent's budget is separate from the parent's continuation budget.</p>
+<hr />
+<h2 id="token-budget-management-per-turn">Token Budget Management Per Turn</h2>
+<p>An agentic turn can consume significant tokens. Without budget management, a user who asks "refactor everything" could trigger hundreds of iterations, consuming millions of tokens.</p>
+<p>Two independent budget systems control spending:</p>
+<h3 id="client-side-continuation-budget">Client-Side Continuation Budget</h3>
+<p>The user sets a token budget explicitly: <code>"refactor this module +500k"</code>. The budget engine tracks total tokens consumed across all iterations of the agentic turn and makes a binary decision after each iteration: continue or stop.</p>
+<p>Three stopping conditions, evaluated in order:</p>
+<ol>
+<li><strong>Under 90% and making progress</strong> — continue. Inject a nudge message: "You've used X% of your budget. Keep working."</li>
+<li><strong>Diminishing returns</strong> — stop early. After 3+ continuations, if the last two produced less than 500 tokens each, the model is stuck in a loop. Stop to prevent waste.</li>
+<li><strong>At or above 90%</strong> — stop naturally. The 10% headroom gives the model space for a coherent closing response.</li>
+</ol>
+<p>A critical guard: subagents do not inherit the parent's budget. A subagent spawned by the parent should complete its delegated task and return, not auto-continue under the parent's budget.</p>
+<h3 id="server-side-task-budget">Server-Side Task Budget</h3>
+<p>The client-side budget decides <em>whether</em> to continue. But the model does not know about it — the model generates a full response, and the client decides afterward. The model cannot self-pace.</p>
+<p>The task budget solves this by passing the total budget and remaining balance to the API. The model sees how much budget is left and can plan accordingly — producing shorter responses when budget is low rather than being cut off mid-thought.</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Client-Side Budget</th>
+<th>Server-Side Task Budget</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Who decides</td>
+<td>The agent loop</td>
+<td>The model itself</td>
+</tr>
+<tr>
+<td>Model awareness</td>
+<td>None</td>
+<td>Full (sees total + remaining)</td>
+</tr>
+<tr>
+<td>Mechanism</td>
+<td>Auto-continue with nudge</td>
+<td>Model self-paces</td>
+</tr>
+<tr>
+<td>Works after compaction</td>
+<td>Yes (tracks total)</td>
+<td>Yes (remaining recalculated)</td>
+</tr>
+</tbody>
+</table>
+<p>They work in concert. The client decides whether to run another iteration. The model, given the task budget, decides how to allocate its response within the available tokens.</p>
+<hr />
+<h2 id="the-complete-agent-loop-architecture">The Complete Agent Loop Architecture</h2>
+<p>Here is the full flowchart of the production agent loop with all decision points:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">ENTRY</span><span class="p">([</span><span class="n">Agent</span><span class="w"> </span><span class="n">Loop</span><span class="w"> </span><span class="n">Entry</span><span class="p">])</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">INIT</span><span class="p">[</span><span class="n">Initialize</span><span class="w"> </span><span class="n">State</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Turn</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Recovery</span><span class="w"> </span><span class="n">counters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">]</span>
+<span class="w">    </span><span class="n">INIT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP_START</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">LOOP</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;while(true)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">LOOP_START</span><span class="p">([</span><span class="n">Iteration</span><span class="w"> </span><span class="n">Start</span><span class="p">])</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CTX</span><span class="p">[</span><span class="n">Phase</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">Preparation</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Compress</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">needed</span><span class="p">]</span>
+<span class="w">        </span><span class="n">CTX</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TOKEN_CHECK</span><span class="p">{</span><span class="n">Context</span><span class="w"> </span><span class="n">fits</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="k">in</span><span class="w"> </span><span class="n">window</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">TOKEN_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="p">,</span><span class="w"> </span><span class="n">all</span><span class="w"> </span><span class="n">compression</span><span class="w"> </span><span class="n">failed</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT_PTL</span><span class="p">([</span><span class="n">Exit</span><span class="o">:</span><span class="w"> </span><span class="n">prompt_too_long</span><span class="p">])</span>
+<span class="w">        </span><span class="n">TOKEN_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">MODEL</span><span class="p">[</span><span class="n">Phase</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="n">Call</span><span class="w"> </span><span class="n">Model</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Stream</span><span class="w"> </span><span class="n">response</span><span class="p">]</span>
+
+<span class="w">        </span><span class="n">MODEL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ABORT_CHECK</span><span class="p">{</span><span class="n">User</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">aborted</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">ABORT_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">During</span><span class="w"> </span><span class="n">stream</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT_ABORT_S</span><span class="p">([</span><span class="n">Exit</span><span class="o">:</span><span class="w"> </span><span class="n">aborted_streaming</span><span class="p">])</span>
+<span class="w">        </span><span class="n">ABORT_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">TOOL_CHECK</span><span class="p">{</span><span class="n">Tool</span><span class="w"> </span><span class="n">use</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">detected</span><span class="o">?</span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">TOOL_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">ERR_CHECK</span><span class="p">{</span><span class="n">Recoverable</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">error</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">ERR_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">prompt_too_long</span><span class="o">|</span><span class="w"> </span><span class="n">REACT_COMPACT</span><span class="p">{</span><span class="n">Already</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">compacted</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">REACT_COMPACT</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">DO_COMPACT</span><span class="p">[</span><span class="n">Reactive</span><span class="w"> </span><span class="n">compact</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP_START</span>
+<span class="w">        </span><span class="n">REACT_COMPACT</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT_PTL</span>
+
+<span class="w">        </span><span class="n">ERR_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">max_output_tokens</span><span class="o">|</span><span class="w"> </span><span class="n">ESCALATE</span><span class="p">{</span><span class="n">First</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">time</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">ESCALATE</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="p">,</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="mi">8</span><span class="n">K</span><span class="o">|</span><span class="w"> </span><span class="n">RETRY_64K</span><span class="p">[</span><span class="n">Retry</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="mi">64</span><span class="n">K</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP_START</span>
+<span class="w">        </span><span class="n">ESCALATE</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="p">,</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="mi">64</span><span class="n">K</span><span class="o">|</span><span class="w"> </span><span class="n">RECOVERY</span><span class="p">{</span><span class="n">Attempts</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;&lt;</span><span class="w"> </span><span class="mi">3</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">RECOVERY</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">INJECT_RESUME</span><span class="p">[</span><span class="n">Inject</span><span class="w"> </span><span class="n">resume</span><span class="w"> </span><span class="n">msg</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP_START</span>
+<span class="w">        </span><span class="n">RECOVERY</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">SURFACE_ERR</span><span class="p">[</span><span class="n">Surface</span><span class="w"> </span><span class="n">truncation</span><span class="p">]</span>
+
+<span class="w">        </span><span class="n">ERR_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="w"> </span><span class="n">error</span><span class="o">|</span><span class="w"> </span><span class="n">HOOKS</span><span class="p">{</span><span class="n">Stop</span><span class="w"> </span><span class="n">hooks</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">pass</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">HOOKS</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Blocked</span><span class="o">|</span><span class="w"> </span><span class="n">INJECT_HOOK</span><span class="p">[</span><span class="n">Inject</span><span class="w"> </span><span class="n">hook</span><span class="w"> </span><span class="n">errors</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP_START</span>
+<span class="w">        </span><span class="n">HOOKS</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Prevented</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT_HOOK</span><span class="p">([</span><span class="n">Exit</span><span class="o">:</span><span class="w"> </span><span class="n">stop_hook_prevented</span><span class="p">])</span>
+<span class="w">        </span><span class="n">HOOKS</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Pass</span><span class="o">|</span><span class="w"> </span><span class="n">BUDGET</span><span class="p">{</span><span class="n">Token</span><span class="w"> </span><span class="n">budget</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">remaining</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">BUDGET</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="p">,</span><span class="w"> </span><span class="n">not</span><span class="w"> </span><span class="n">diminishing</span><span class="o">|</span><span class="w"> </span><span class="n">INJECT_NUDGE</span><span class="p">[</span><span class="n">Inject</span><span class="w"> </span><span class="n">nudge</span><span class="w"> </span><span class="n">msg</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP_START</span>
+<span class="w">        </span><span class="n">BUDGET</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="w"> </span><span class="n">or</span><span class="w"> </span><span class="n">diminishing</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT_DONE</span><span class="p">([</span><span class="n">Exit</span><span class="o">:</span><span class="w"> </span><span class="n">completed</span><span class="p">])</span>
+
+<span class="w">        </span><span class="n">TOOL_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">EXEC_TOOLS</span><span class="p">[</span><span class="n">Phase</span><span class="w"> </span><span class="mi">4</span><span class="o">:</span><span class="w"> </span><span class="n">Execute</span><span class="w"> </span><span class="n">Tools</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Pipeline</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">safe</span><span class="p">]</span>
+<span class="w">        </span><span class="n">EXEC_TOOLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ABORT_CHECK2</span><span class="p">{</span><span class="n">User</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">aborted</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">ABORT_CHECK2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT_ABORT_T</span><span class="p">([</span><span class="n">Exit</span><span class="o">:</span><span class="w"> </span><span class="n">aborted_tools</span><span class="p">])</span>
+<span class="w">        </span><span class="n">ABORT_CHECK2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">TURN_CHECK</span><span class="p">{</span><span class="n">Max</span><span class="w"> </span><span class="n">turns</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">reached</span><span class="o">?</span><span class="p">}</span>
+<span class="w">        </span><span class="n">TURN_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT_TURNS</span><span class="p">([</span><span class="n">Exit</span><span class="o">:</span><span class="w"> </span><span class="n">max_turns</span><span class="p">])</span>
+<span class="w">        </span><span class="n">TURN_CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">BUILD_STATE</span><span class="p">[</span><span class="n">Build</span><span class="w"> </span><span class="n">next</span><span class="w"> </span><span class="n">state</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Reset</span><span class="w"> </span><span class="n">recovery</span><span class="w"> </span><span class="n">counters</span><span class="p">]</span>
+<span class="w">        </span><span class="n">BUILD_STATE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LOOP_START</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">LOOP_START</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXIT_PTL</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXIT_ABORT_S</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXIT_ABORT_T</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXIT_HOOK</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXIT_TURNS</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff9c4</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXIT_DONE</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c8e6c9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SURFACE_ERR</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcdd2</span>
+</code></pre></div>
+
+<hr />
+<h2 id="loop-invariants">Loop Invariants</h2>
+<p>A loop invariant is a condition that must be true at the start and end of every iteration. Documenting invariants prevents bugs where one iteration's exit state violates another iteration's entry assumptions.</p>
+<h3 id="invariant-1-messages-are-valid-api-input">Invariant 1: Messages Are Valid API Input</h3>
+<p>At every iteration start, the <code>messages</code> array must be a valid sequence for the API:
+- Starts with a <code>user</code> message (or is empty, for the first turn)
+- Every <code>tool_use</code> block in an assistant message has a matching <code>tool_result</code> in the subsequent user message
+- No orphaned <code>tool_result</code> blocks without preceding <code>tool_use</code> blocks</p>
+<p>If the stream is interrupted mid-generation, orphaned <code>tool_use</code> blocks would break this invariant. The safety net: a function that scans assistant messages for <code>tool_use</code> blocks without matching results and generates synthetic error results for each. This runs on every error path — abort, network failure, model error — to maintain the invariant.</p>
+<h3 id="invariant-2-recovery-state-is-scoped-to-the-current-path">Invariant 2: Recovery State Is Scoped to the Current Path</h3>
+<p>Recovery counters (<code>max_output_tokens_recovery_count</code>, <code>compaction_attempted</code>) must only accumulate within their respective recovery paths. When the loop transitions to a normal <code>next_turn</code>, all recovery counters reset to zero. When transitioning between different recovery paths (e.g., from token recovery to stop hook blocking), each path preserves the other's state to prevent interaction bugs.</p>
+<h3 id="invariant-3-context-fits-the-window">Invariant 3: Context Fits the Window</h3>
+<p>After Phase 1 completes, the message context must fit within the model's context window. If it does not, the loop exits rather than sending a request that will fail. This invariant means Phase 2 can assume the API call will not fail due to context overflow (though it may fail for other reasons).</p>
+<h3 id="invariant-4-turn-count-increases-monotonically">Invariant 4: Turn Count Increases Monotonically</h3>
+<p>The turn counter increments on every continuation that advances the conversation (new tool results added). Recovery retries (escalation, compaction) do not increment the turn count because they replay the same logical turn. This means the turn limit counts logical turns, not raw API calls.</p>
+<hr />
+<h2 id="designing-for-testability">Designing for Testability</h2>
+<p>The agent loop is one of the hardest components to test because it depends on an external API, a tool system, and compaction logic. The key to testability: dependency injection of the hot seams.</p>
+<h3 id="identify-the-hot-seams">Identify the Hot Seams</h3>
+<p>The agent loop has four dependencies that tests need to control:</p>
+<ol>
+<li><strong>The model call</strong> — what the API returns</li>
+<li><strong>Compaction</strong> — how and when context is compressed</li>
+<li><strong>Microcompaction</strong> — the cheap pre-request compression</li>
+<li><strong>UUID generation</strong> — for deterministic message IDs in tests</li>
+</ol>
+<h3 id="inject-only-what-you-must">Inject Only What You Must</h3>
+<div class="codehilite"><pre><span></span><code><span class="kr">type</span><span class="w"> </span><span class="nx">AgentLoopDeps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">callModel</span><span class="o">:</span><span class="w"> </span><span class="kt">typeof</span><span class="w"> </span><span class="nx">streamModelResponse</span>
+<span class="w">    </span><span class="nx">compact</span><span class="o">:</span><span class="w"> </span><span class="kt">typeof</span><span class="w"> </span><span class="nx">autoCompactIfNeeded</span>
+<span class="w">    </span><span class="nx">microcompact</span><span class="o">:</span><span class="w"> </span><span class="kt">typeof</span><span class="w"> </span><span class="nx">microcompactMessages</span>
+<span class="w">    </span><span class="nx">uuid</span><span class="o">:</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="kt">string</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Using <code>typeof realFunction</code> for the type signature keeps mock signatures in sync with real implementations automatically. If the real function gains a parameter, tests that do not provide it fail at compile time.</p>
+<p>The scope is intentionally narrow — four dependencies, not twenty. Start with the minimum viable injection surface and expand only when tests prove it necessary. Over-injection creates a maintenance burden where every new feature requires updating the injection interface.</p>
+<h3 id="the-default-fallback-pattern">The Default Fallback Pattern</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">agentLoop</span><span class="p">(</span><span class="nx">params</span><span class="o">:</span><span class="w"> </span><span class="kt">LoopParams</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AsyncGenerator</span><span class="o">&lt;</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="nx">Terminal</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">params</span><span class="p">.</span><span class="nx">deps</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="nx">productionDeps</span><span class="p">()</span>
+<span class="w">    </span><span class="c1">// ... use deps.callModel, deps.compact, etc.</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Production code passes no <code>deps</code> — it gets the real implementations. Test code passes mock deps directly. No framework, no container, no decorator. This is explicit dependency injection at its simplest.</p>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building the core agent loop for a production CLI agent teaches eight principles:</p>
+<p><strong>1. Use pull-based streams for agent loops.</strong> Async generators give you backpressure, composable cleanup, and a return channel for exit reasons — all from the language runtime. The consumer controls the pace, not the producer.</p>
+<p><strong>2. Separate immutable config from mutable state.</strong> Destructure config once at entry, never reassign. Build a new state object on every continuation. This makes every transition self-documenting and independently readable.</p>
+<p><strong>3. Use discriminated unions for exit and continuation reasons.</strong> 10 exit reasons and 7 continuation reasons as discriminated unions replace magic strings, exception types, and numeric codes. Tests assert on reason fields, not message content or stack traces.</p>
+<p><strong>4. Pipeline tool execution with streaming.</strong> Starting tools while the model is still generating is the highest-impact performance optimization in the agent loop. It requires concurrent-safe classification and sibling error cascading, but the latency savings of 60-70% justify the complexity.</p>
+<p><strong>5. Withhold recoverable errors from the output stream.</strong> Do not expose partial failures to consumers. Suppress during streaming, attempt recovery, and surface only when recovery fails. This prevents the bug where SDK consumers disconnect before recovery completes.</p>
+<p><strong>6. Document state field interactions across recovery paths.</strong> When one recovery path interacts with another (compaction + stop hooks), the interaction can create infinite loops. The transition reason field and explicit state preservation rules make these interactions debuggable.</p>
+<p><strong>7. Enforce loop invariants explicitly.</strong> Valid API message sequences, scoped recovery state, context window compliance, and monotonic turn counts. Each invariant prevents a class of bugs that would otherwise manifest as mysterious API errors or infinite loops.</p>
+<p><strong>8. Optimize for the common case, handle the tail correctly.</strong> The 8K default output limit covers 99% of responses at 4-8x better GPU utilization. The escalation to 64K handles the 1% that need more. The 3-attempt recovery handles the 0.01% that need even more. Do not over-provision the default — save resources for the system, recover gracefully when needed.</p>
+<p>In Chapter 8, we turn from the loop itself to the data that flows through it: the message architecture that structures the conversation between user, model, tools, and system.</p>
+<div class="chapter-nav">
+  <a href="chapter-06.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-08.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

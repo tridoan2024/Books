@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 22: MCP Server Lifecycle — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-23.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-22-mcp-server-lifecycle">Chapter 22: MCP Server Lifecycle</h1>
+<p>Chapter 21 covered the MCP protocol itself -- the wire format, transport layers, and capability negotiation that enable AI agents to communicate with external servers. But a protocol specification tells you what messages look like. It does not tell you how to find servers, start them, keep them alive, recover when they crash, or clean them up when the session ends. That is lifecycle management, and it is where most of the operational complexity lives.</p>
+<p>A production AI agent may connect to five or ten MCP servers simultaneously: a memory server, a database connector, an API gateway, a file system extension, a CI/CD bridge. Each server has its own startup sequence, its own failure modes, its own reconnection semantics. The lifecycle manager must handle all of them uniformly while gracefully degrading when any one of them fails. An MCP server going down should never take the agent down with it.</p>
+<p>This chapter covers the full operational lifecycle: how servers are discovered from multiple configuration sources, how connections are established and maintained, how failures are detected and recovered, and how resources are cleaned up on disconnect.</p>
+<hr />
+<h2 id="221-server-discovery">22.1 Server Discovery</h2>
+<p>Before connecting to an MCP server, the agent must know it exists. Server definitions come from four sources, arranged in a precedence hierarchy:</p>
+<h3 id="the-four-discovery-sources">The Four Discovery Sources</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Enterprise</span><span class="w"> </span><span class="n">Policy</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Managed</span><span class="w"> </span><span class="n">Settings</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Merged</span><span class="w"> </span><span class="n">Configuration</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="p">[</span><span class="n">User</span><span class="w"> </span><span class="n">Settings</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;~/</span><span class="p">.</span><span class="n">claude</span><span class="o">/</span><span class="n">settings</span><span class="p">.</span><span class="n">json</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span>
+<span class="w">    </span><span class="n">C</span><span class="p">[</span><span class="n">Project</span><span class="w"> </span><span class="n">Config</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">.</span><span class="n">mcp</span><span class="p">.</span><span class="n">json</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span>
+<span class="w">    </span><span class="n">D</span><span class="p">[</span><span class="n">Environment</span><span class="w"> </span><span class="n">Variable</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">MCP_SERVERS</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Connection</span><span class="w"> </span><span class="n">Manager</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">742</span><span class="n">a2a</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">2</span><span class="n">b6cb0</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">276749</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">744210</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">4</span><span class="n">a5568</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">2</span><span class="n">d3748</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<p><strong>1. Project configuration (<code>.mcp.json</code>).</strong> The highest-priority, most common source. A JSON file in the project root that declares MCP servers needed for this specific codebase:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;copilot-mem&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;npx&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;-y&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;@anthropic/copilot-mem-server&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;MEM_DB_PATH&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/Users/dev/.copilot_home/memory.db&quot;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;postgres&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp-postgres&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;--host&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;localhost&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;--port&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;5432&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;PGPASSWORD&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;${DB_PASSWORD}&quot;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Project configs are checked into version control (minus any credential references). When a teammate clones the repo, they get the same MCP server definitions. This is the primary mechanism for project-specific tooling.</p>
+<p><strong>2. User settings (<code>~/.claude/settings.json</code>).</strong> MCP servers that a user wants available across all projects. A memory server is the canonical example -- you want persistent knowledge regardless of which project you are working in:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;global-memory&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;npx&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;-y&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;copilot-mem-server&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>User settings have lower precedence than project config. If both define a server with the same name, the project config wins. This lets projects override user defaults when needed.</p>
+<p><strong>3. Enterprise policy (managed settings).</strong> In enterprise deployments, IT administrators can define MCP servers that must be available (or must be blocked) across the organization. Managed settings can enforce:</p>
+<ul>
+<li>Required servers that every user must connect to (audit logging, compliance tools)</li>
+<li>Blocked servers that no user may connect to (unapproved third-party tools)</li>
+<li>Pinned versions for approved servers</li>
+</ul>
+<p>Managed settings have the highest enforcement priority for blocking, but the lowest for addition -- they add servers to the pool, and project/user configs can override their parameters.</p>
+<p><strong>4. Environment variables (<code>MCP_SERVERS</code>).</strong> An escape hatch for CI/CD pipelines and containerized environments where file-based configuration is impractical. The variable contains a JSON string with the same format as <code>.mcp.json</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">MCP_SERVERS</span><span class="o">=</span><span class="s1">&#39;{&quot;ci-tools&quot;:{&quot;command&quot;:&quot;mcp-ci&quot;,&quot;args&quot;:[&quot;--mode&quot;,&quot;headless&quot;]}}&#39;</span>
+</code></pre></div>
+
+<p>Environment variable definitions have the lowest precedence -- they are overridden by all file-based sources.</p>
+<h3 id="configuration-merge-semantics">Configuration Merge Semantics</h3>
+<p>When the same server name appears in multiple sources, the merge follows these rules:</p>
+<table>
+<thead>
+<tr>
+<th>Conflict</th>
+<th>Resolution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Same name, different command</td>
+<td>Project config wins</td>
+</tr>
+<tr>
+<td>Same name, different args</td>
+<td>Project config wins</td>
+</tr>
+<tr>
+<td>Same name, different env</td>
+<td>Deep merge (project overrides per-key)</td>
+</tr>
+<tr>
+<td>Server in project + blocked by policy</td>
+<td>Policy wins (server is blocked)</td>
+</tr>
+<tr>
+<td>Server in user settings, not in project</td>
+<td>Server is available</td>
+</tr>
+<tr>
+<td>Server in env var, also in project</td>
+<td>Project config wins</td>
+</tr>
+</tbody>
+</table>
+<p>The deep merge for environment variables is important. A user setting might define <code>MEM_DB_PATH</code>, while the project config adds <code>MEM_LOG_LEVEL</code>. Both should be present when the server starts.</p>
+<h3 id="validation-at-discovery-time">Validation at Discovery Time</h3>
+<p>Each server definition is validated before any connection attempt:</p>
+<ol>
+<li><strong>Command exists.</strong> The specified command (e.g., <code>npx</code>, <code>mcp-postgres</code>) must be resolvable in PATH. If not, the server is marked as "unavailable" with a clear error message.</li>
+<li><strong>URL is well-formed</strong> (for HTTP-based servers). The URL must parse correctly and use HTTPS in production.</li>
+<li><strong>Environment variables resolve.</strong> References like <code>${DB_PASSWORD}</code> must resolve to non-empty values. Missing variables produce a warning, not an error -- the server might still function without them.</li>
+<li><strong>No circular dependencies.</strong> While rare, it is theoretically possible for MCP server A to depend on MCP server B and vice versa. The discovery system detects and rejects circular definitions.</li>
+</ol>
+<hr />
+<h2 id="222-connection-management">22.2 Connection Management</h2>
+<p>Once a server definition is validated, the connection manager establishes a connection through a multi-step process.</p>
+<h3 id="connection-establishment-for-stdio-servers">Connection Establishment for stdio Servers</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CM</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Connection</span><span class="w"> </span><span class="n">Manager</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">OS</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Operating</span><span class="w"> </span><span class="n">System</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">SP</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="nf">Process</span>
+
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">OS</span><span class="o">:</span><span class="w"> </span><span class="n">spawn</span><span class="p">(</span><span class="n">command</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"> </span><span class="n">env</span><span class="p">)</span>
+<span class="w">    </span><span class="n">OS</span><span class="o">-&gt;&gt;</span><span class="n">SP</span><span class="o">:</span><span class="w"> </span><span class="n">Start</span><span class="w"> </span><span class="nf">process</span>
+<span class="w">    </span><span class="n">OS</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="o">:</span><span class="w"> </span><span class="nf">Process</span><span class="w"> </span><span class="n">handle</span><span class="w"> </span><span class="p">(</span><span class="n">PID</span><span class="p">,</span><span class="w"> </span><span class="n">stdin</span><span class="p">,</span><span class="w"> </span><span class="n">stdout</span><span class="p">,</span><span class="w"> </span><span class="n">stderr</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">SP</span><span class="o">:</span><span class="w"> </span><span class="n">stdin</span><span class="o">:</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="n">clientInfo</span><span class="p">,</span><span class="w"> </span><span class="n">capabilities</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">alt</span><span class="w"> </span><span class="kr">Success</span>
+<span class="w">        </span><span class="n">SP</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="o">:</span><span class="w"> </span><span class="n">stdout</span><span class="o">:</span><span class="w"> </span><span class="n">result</span><span class="p">(</span><span class="n">serverInfo</span><span class="p">,</span><span class="w"> </span><span class="n">capabilities</span><span class="p">)</span>
+<span class="w">        </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">SP</span><span class="o">:</span><span class="w"> </span><span class="n">stdin</span><span class="o">:</span><span class="w"> </span><span class="n">notifications</span><span class="o">/</span><span class="n">initialized</span>
+<span class="w">        </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="o">:</span><span class="w"> </span><span class="n">State</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Ready</span>
+<span class="w">    </span><span class="n">else</span><span class="w"> </span><span class="n">Timeout</span><span class="w"> </span><span class="p">(</span><span class="mi">30</span><span class="n">s</span><span class="p">)</span>
+<span class="w">        </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="o">:</span><span class="w"> </span><span class="n">State</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="p">(</span><span class="s">&quot;Initialize timeout&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">OS</span><span class="o">:</span><span class="w"> </span><span class="n">kill</span><span class="p">(</span><span class="n">PID</span><span class="p">)</span>
+<span class="w">    </span><span class="n">else</span><span class="w"> </span><span class="nf">Parse</span><span class="w"> </span><span class="nf">Error</span>
+<span class="w">        </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="o">:</span><span class="w"> </span><span class="n">State</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="p">(</span><span class="s">&quot;Invalid response&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">OS</span><span class="o">:</span><span class="w"> </span><span class="n">kill</span><span class="p">(</span><span class="n">PID</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">end</span>
+</code></pre></div>
+
+<p>The 30-second initialization timeout is generous because some MCP servers do substantial work at startup -- loading databases, compiling schemas, downloading dependencies (when invoked via <code>npx</code>). A server that does not respond to <code>initialize</code> within 30 seconds is almost certainly hung or misconfigured.</p>
+<h3 id="connection-establishment-for-http-servers">Connection Establishment for HTTP Servers</h3>
+<p>HTTP-based connections follow the same protocol handshake but with different transport mechanics:</p>
+<ol>
+<li><strong>DNS resolution and TLS handshake.</strong> For remote servers, the connection manager resolves the hostname, establishes a TLS connection, and verifies the certificate chain.</li>
+<li><strong>Authentication.</strong> If the server requires authentication, the client includes credentials in the HTTP headers (Bearer token, OAuth2 access token, or custom auth scheme).</li>
+<li><strong>Initialize request.</strong> Sent as an HTTP POST to the server's MCP endpoint.</li>
+<li><strong>SSE channel</strong> (if using SSE transport). The client opens a persistent SSE connection for server-to-client messages.</li>
+</ol>
+<h3 id="health-monitoring">Health Monitoring</h3>
+<p>After establishing a connection, the lifecycle manager monitors server health through two mechanisms:</p>
+<p><strong>Periodic pings.</strong> The client sends a <code>ping</code> request every 30 seconds. The server must respond with a <code>pong</code> result. If three consecutive pings go unanswered (90 seconds of silence), the server is considered unresponsive and the connection enters the error state.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Client -&gt; Server</span>
+<span class="p">{</span><span class="nt">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ping-1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ping&quot;</span><span class="p">}</span>
+
+<span class="c1">// Server -&gt; Client</span>
+<span class="p">{</span><span class="nt">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ping-1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}}</span>
+</code></pre></div>
+
+<p><strong>Process monitoring</strong> (stdio only). The connection manager monitors the server process for unexpected termination. If the process exits with a non-zero exit code, the connection immediately enters the error state with the exit code as context.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Healthy</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;3 missed pings&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">Unresponsive</span><span class="p">]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;Process exit&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Terminated</span><span class="p">]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;Parse error&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Protocol</span><span class="w"> </span><span class="n">Error</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;Ping response&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">A</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;Timeout&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Disconnected</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;Reconnect&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Connecting</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;Success&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">A</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s">&quot;Failure&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">E</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">276749</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c05621</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c53030</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c53030</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">742</span><span class="n">a2a</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">2</span><span class="n">b6cb0</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<p>The health monitoring overhead is minimal -- one small JSON round-trip every 30 seconds per server. For an agent connected to five MCP servers, that is 10 messages per minute total. The latency of health checks (typically &lt;5ms for stdio, &lt;50ms for HTTP) is negligible compared to the seconds-long LLM inference cycles.</p>
+<hr />
+<h2 id="223-the-connection-state-machine">22.3 The Connection State Machine</h2>
+<p>Every MCP connection is modeled as a finite state machine with six states. This state machine is the core abstraction that the rest of the lifecycle manager operates on.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">stateDiagram</span><span class="o">-</span><span class="n">v2</span>
+<span class="w">    </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Disconnected</span>
+<span class="w">    </span><span class="n">Disconnected</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Connecting</span><span class="o">:</span><span class="w"> </span><span class="n">connect</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Connecting</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Negotiating</span><span class="o">:</span><span class="w"> </span><span class="n">transport</span><span class="w"> </span><span class="n">established</span>
+<span class="w">    </span><span class="n">Connecting</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="o">:</span><span class="w"> </span><span class="n">transport</span><span class="w"> </span><span class="kr">failure</span>
+<span class="w">    </span><span class="n">Negotiating</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Ready</span><span class="o">:</span><span class="w"> </span><span class="n">initialize</span><span class="w"> </span><span class="n">handshake</span><span class="w"> </span><span class="n">complete</span>
+<span class="w">    </span><span class="n">Negotiating</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="o">:</span><span class="w"> </span><span class="n">handshake</span><span class="w"> </span><span class="kr">failure</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">timeout</span>
+<span class="w">    </span><span class="n">Ready</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="o">:</span><span class="w"> </span><span class="n">health</span><span class="w"> </span><span class="n">check</span><span class="w"> </span><span class="kr">failure</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nf">process</span><span class="w"> </span><span class="n">exit</span>
+<span class="w">    </span><span class="n">Ready</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Disconnecting</span><span class="o">:</span><span class="w"> </span><span class="n">disconnect</span><span class="p">()</span>
+<span class="w">    </span><span class="nf">Error</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Connecting</span><span class="o">:</span><span class="w"> </span><span class="n">reconnect</span><span class="w"> </span><span class="p">(</span><span class="n">after</span><span class="w"> </span><span class="n">backoff</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">Error</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Disconnected</span><span class="o">:</span><span class="w"> </span><span class="nf">max</span><span class="w"> </span><span class="n">retries</span><span class="w"> </span><span class="n">exceeded</span>
+<span class="w">    </span><span class="n">Disconnecting</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Disconnected</span><span class="o">:</span><span class="w"> </span><span class="n">cleanup</span><span class="w"> </span><span class="n">complete</span>
+</code></pre></div>
+
+<h3 id="state-definitions">State Definitions</h3>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Meaning</th>
+<th>Tool Calls Accepted?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Disconnected</strong></td>
+<td>No connection exists. Initial and terminal state.</td>
+<td>No</td>
+</tr>
+<tr>
+<td><strong>Connecting</strong></td>
+<td>Transport is being established (process spawning, TCP handshake).</td>
+<td>No</td>
+</tr>
+<tr>
+<td><strong>Negotiating</strong></td>
+<td>Transport is up, initialize handshake in progress.</td>
+<td>No</td>
+</tr>
+<tr>
+<td><strong>Ready</strong></td>
+<td>Fully operational. Tools, resources, and prompts are available.</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><strong>Error</strong></td>
+<td>Connection failed or server became unresponsive. May reconnect.</td>
+<td>No (queued for retry)</td>
+</tr>
+<tr>
+<td><strong>Disconnecting</strong></td>
+<td>Graceful shutdown in progress. Waiting for cleanup.</td>
+<td>No (rejected immediately)</td>
+</tr>
+</tbody>
+</table>
+<p>The key invariant: <strong>tool calls are only accepted in the Ready state.</strong> If a tool call arrives while the connection is in any other state, the behavior depends on the state:</p>
+<ul>
+<li><strong>Connecting / Negotiating</strong>: Queue the call. It will execute when the connection reaches Ready.</li>
+<li><strong>Error</strong>: Queue the call. It will execute if reconnection succeeds, or fail if max retries are exceeded.</li>
+<li><strong>Disconnecting / Disconnected</strong>: Reject immediately with an error.</li>
+</ul>
+<p>Queuing during transient states provides a better user experience than immediate rejection. If the user invokes a memory tool while the memory server is reconnecting (a ~1-2 second window), the call should wait for reconnection rather than failing.</p>
+<h3 id="state-transition-events">State Transition Events</h3>
+<p>Each transition is triggered by a specific event:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Disconnected</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Connecting</span><span class="o">:</span><span class="w">     </span><span class="n">Agent</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="n">starts</span><span class="p">,</span><span class="w"> </span><span class="kr">or</span><span class="w"> </span><span class="n">manual</span><span class="w"> </span><span class="n">reconnect</span>
+<span class="n">Connecting</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Negotiating</span><span class="o">:</span><span class="w">      </span><span class="nf">Process</span><span class="w"> </span><span class="n">spawned</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TCP</span><span class="w"> </span><span class="n">connected</span><span class="w"> </span><span class="n">successfully</span>
+<span class="n">Connecting</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="o">:</span><span class="w">            </span><span class="nf">Process</span><span class="w"> </span><span class="n">spawn</span><span class="w"> </span><span class="n">failed</span><span class="p">,</span><span class="w"> </span><span class="n">TCP</span><span class="w"> </span><span class="n">connect</span><span class="w"> </span><span class="n">refused</span>
+<span class="n">Negotiating</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Ready</span><span class="o">:</span><span class="w">           </span><span class="n">initialize</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="n">received</span><span class="p">,</span><span class="w"> </span><span class="n">capabilities</span><span class="w"> </span><span class="n">parsed</span>
+<span class="n">Negotiating</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="o">:</span><span class="w">           </span><span class="n">Initialize</span><span class="w"> </span><span class="n">timeout</span><span class="w"> </span><span class="p">(</span><span class="mi">30</span><span class="n">s</span><span class="p">),</span><span class="w"> </span><span class="n">malformed</span><span class="w"> </span><span class="n">response</span>
+<span class="n">Ready</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nf">Error</span><span class="o">:</span><span class="w">                 </span><span class="mi">3</span><span class="w"> </span><span class="n">missed</span><span class="w"> </span><span class="n">pings</span><span class="p">,</span><span class="w"> </span><span class="nf">process</span><span class="w"> </span><span class="n">exit</span><span class="p">,</span><span class="w"> </span><span class="n">protocol</span><span class="w"> </span><span class="nf">error</span>
+<span class="n">Ready</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Disconnecting</span><span class="o">:</span><span class="w">         </span><span class="n">Agent</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="kd">ends</span><span class="p">,</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="n">removes</span><span class="w"> </span><span class="n">server</span>
+<span class="nf">Error</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Connecting</span><span class="o">:</span><span class="w">            </span><span class="n">Reconnection</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="n">fires</span><span class="w"> </span><span class="p">(</span><span class="n">exponential</span><span class="w"> </span><span class="n">backoff</span><span class="p">)</span>
+<span class="nf">Error</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Disconnected</span><span class="o">:</span><span class="w">          </span><span class="nf">Max</span><span class="w"> </span><span class="n">reconnection</span><span class="w"> </span><span class="n">attempts</span><span class="w"> </span><span class="n">exhausted</span><span class="w"> </span><span class="p">(</span><span class="n">default</span><span class="o">:</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span>
+<span class="n">Disconnecting</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Disconnected</span><span class="o">:</span><span class="w">  </span><span class="n">Cleanup</span><span class="w"> </span><span class="n">complete</span><span class="w"> </span><span class="p">(</span><span class="nf">process</span><span class="w"> </span><span class="n">terminated</span><span class="p">,</span><span class="w"> </span><span class="n">resources</span><span class="w"> </span><span class="n">freed</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="224-reconnection-strategy">22.4 Reconnection Strategy</h2>
+<p>Server failures are inevitable. The MCP server might crash due to a bug, the operating system might kill it for consuming too much memory, or a network partition might sever the HTTP connection. The reconnection strategy determines how quickly and reliably the agent recovers.</p>
+<h3 id="exponential-backoff-with-jitter">Exponential Backoff with Jitter</h3>
+<p>The reconnection timer uses exponential backoff with randomized jitter to prevent thundering-herd problems (multiple agents reconnecting to a shared server simultaneously):</p>
+<div class="codehilite"><pre><span></span><code>Attempt 1:  base_delay <span class="gs">* 2^0 + jitter  =  1s   + rand(0, 500ms)</span>
+<span class="gs">Attempt 2:  base_delay *</span> 2^1 + jitter  =  2s   + rand(0, 500ms)
+Attempt 3:  base_delay <span class="gs">* 2^2 + jitter  =  4s   + rand(0, 500ms)</span>
+<span class="gs">Attempt 4:  base_delay *</span> 2^3 + jitter  =  8s   + rand(0, 500ms)
+Attempt 5:  base_delay * 2^4 + jitter  =  16s  + rand(0, 500ms)
+Attempt 6+: capped at max_delay        =  30s  + rand(0, 500ms)
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Base delay</td>
+<td>1 second</td>
+<td>Short enough for quick recovery from transient failures</td>
+</tr>
+<tr>
+<td>Max delay</td>
+<td>30 seconds</td>
+<td>Long enough to avoid hammering a struggling server</td>
+</tr>
+<tr>
+<td>Max attempts</td>
+<td>10</td>
+<td>~3 minutes of total retry time before giving up</td>
+</tr>
+<tr>
+<td>Jitter range</td>
+<td>0-500ms</td>
+<td>Decorrelates concurrent reconnection attempts</td>
+</tr>
+</tbody>
+</table>
+<h3 id="state-recovery-after-reconnection">State Recovery After Reconnection</h3>
+<p>When a reconnection succeeds, the client must re-establish the session state. This involves:</p>
+<ol>
+<li><strong>Re-initialize.</strong> The full handshake runs again. The server may have restarted with different capabilities -- perhaps a newer version was deployed during the outage.</li>
+<li><strong>Re-fetch tool list.</strong> Tools may have changed. The client must update its tool registry.</li>
+<li><strong>Drain queued calls.</strong> Any tool calls that were queued during the error state are now executed in order.</li>
+<li><strong>Notify the agent.</strong> The agent's tool registry is updated with the refreshed tool list. If tools were removed (the server dropped a capability), pending tool calls for those tools are rejected.</li>
+</ol>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Agent</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CM</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Connection</span><span class="w"> </span><span class="n">Manager</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="p">(</span><span class="n">restarted</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="n">state</span><span class="p">,</span><span class="w"> </span><span class="n">attempt</span><span class="w"> </span><span class="n">reconnection</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Server</span><span class="p">:</span><span class="w"> </span><span class="n">Spawn</span><span class="w"> </span><span class="n">new</span><span class="w"> </span><span class="n">process</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Server</span><span class="p">:</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Server</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">result</span><span class="p">(</span><span class="n">capabilities</span><span class="p">)</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Server</span><span class="p">:</span><span class="w"> </span><span class="n">notifications</span><span class="o">/</span><span class="n">initialized</span>
+
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Server</span><span class="p">:</span><span class="w"> </span><span class="n">tools</span><span class="o">/</span><span class="n">list</span>
+<span class="w">    </span><span class="n">Server</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">result</span><span class="p">([</span><span class="n">tool1</span><span class="p">,</span><span class="w"> </span><span class="n">tool2</span><span class="p">])</span>
+
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">Update</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">registry</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">Drain</span><span class="w"> </span><span class="n">queued</span><span class="w"> </span><span class="n">calls</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Server</span><span class="p">:</span><span class="w"> </span><span class="n">tools</span><span class="o">/</span><span class="n">call</span><span class="p">(</span><span class="n">queued_call_1</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Server</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">result</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">Deliver</span><span class="w"> </span><span class="n">queued</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+
+<h3 id="what-cannot-be-recovered">What Cannot Be Recovered</h3>
+<p>Reconnection restores the connection, not the server's internal state. If the MCP server maintained in-memory state (caches, session data, intermediate computation results) before crashing, that state is lost. The agent must not assume state continuity across reconnections.</p>
+<p>This has architectural implications for MCP server design: servers that need state across restarts should persist it to disk or a database, not rely on in-memory storage. The protocol makes no guarantees about server-side state preservation.</p>
+<hr />
+<h2 id="225-graceful-degradation">22.5 Graceful Degradation</h2>
+<p>When an MCP server becomes unavailable, the agent must continue operating with reduced capability rather than failing entirely. Graceful degradation is the set of behaviors that ensure one server's failure does not cascade into a session-wide outage.</p>
+<h3 id="tool-call-failure-handling">Tool Call Failure Handling</h3>
+<p>When a tool call targets an unavailable MCP server, the flow is:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">LLM</span><span class="w"> </span><span class="n">requests</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">call</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">Server</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">Ready</span><span class="w"> </span><span class="n">state</span><span class="err">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Execute</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">call</span><span class="w"> </span><span class="n">normally</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">{</span><span class="n">Server</span><span class="w"> </span><span class="n">reconnecting</span><span class="err">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Queue</span><span class="w"> </span><span class="n">call</span><span class="p">,</span><span class="w"> </span><span class="n">wait</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="mi">10</span><span class="n">s</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="p">,</span><span class="w"> </span><span class="n">permanently</span><span class="w"> </span><span class="n">down</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Return</span><span class="w"> </span><span class="n">graceful</span><span class="w"> </span><span class="n">error</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">LLM</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">G</span><span class="p">{</span><span class="n">Reconnected</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">time</span><span class="err">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">F</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="n">LLM</span><span class="w"> </span><span class="n">sees</span><span class="w"> </span><span class="n">error</span><span class="p">,</span><span class="w"> </span><span class="n">adapts</span><span class="w"> </span><span class="n">strategy</span><span class="p">]</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">[</span><span class="n">Agent</span><span class="w"> </span><span class="n">continues</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">other</span><span class="w"> </span><span class="n">tools</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#276749,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#c05621,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">I</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#2b6cb0,color:#fff</span>
+</code></pre></div>
+
+<p>The error returned to the LLM is informative but not technical:</p>
+<div class="codehilite"><pre><span></span><code>Tool &#39;search_memory&#39; is currently unavailable (memory server disconnected). 
+You can continue without memory context, or suggest the user restart the 
+memory server.
+</code></pre></div>
+
+<p>This message is crafted for the LLM, not the user. It tells the model what happened and what its options are. The LLM can then either work around the missing tool (proceeding without memory context) or inform the user that the memory server needs attention.</p>
+<h3 id="partial-capability-operation">Partial Capability Operation</h3>
+<p>When running with multiple MCP servers, the agent maintains a capability matrix:</p>
+<div class="codehilite"><pre><span></span><code>Server          Status      Tools Available
+-----------     --------    ----------------------------------
+copilot-mem     Ready       search_memory, save_fact, ...
+postgres        Error       (none - reconnecting)
+github          Ready       create_issue, list_prs, ...
+</code></pre></div>
+
+<p>The tool registry dynamically reflects which tools are currently available. Tools from disconnected servers are removed from the LLM's tool list (or marked as unavailable in tool descriptions). This prevents the LLM from repeatedly attempting calls to a dead server.</p>
+<p>When the server reconnects, its tools are re-added to the registry. The LLM automatically regains access to those tools on the next conversation turn, because the system prompt's tool list is regenerated on each turn.</p>
+<h3 id="degradation-hierarchy">Degradation Hierarchy</h3>
+<p>Not all MCP servers are equally critical. The degradation hierarchy defines the agent's behavior based on which servers are down:</p>
+<table>
+<thead>
+<tr>
+<th>Server Category</th>
+<th>Example</th>
+<th>Agent Behavior When Down</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Enhancement</strong></td>
+<td>Memory, analytics</td>
+<td>Continue normally, note reduced recall</td>
+</tr>
+<tr>
+<td><strong>Functional</strong></td>
+<td>Database, API gateway</td>
+<td>Continue with warning, some tasks impossible</td>
+</tr>
+<tr>
+<td><strong>Critical</strong></td>
+<td>Auth provider (if required)</td>
+<td>Warn user, some operations blocked</td>
+</tr>
+</tbody>
+</table>
+<p>The categorization is implicit -- the agent does not have explicit "critical" flags on servers. Instead, the criticality emerges from the tools: if the only tool that can read the database is on a dead server, database queries are impossible. The LLM reasons about this naturally when it sees the tool error.</p>
+<hr />
+<h2 id="226-resource-management">22.6 Resource Management</h2>
+<p>MCP servers consume system resources: operating system processes, file descriptors, memory, network connections. The lifecycle manager is responsible for cleaning these up, both during normal operation and during abnormal termination.</p>
+<h3 id="process-cleanup-on-disconnect">Process Cleanup on Disconnect</h3>
+<p>For stdio-based servers, disconnect involves terminating the server process:</p>
+<div class="codehilite"><pre><span></span><code><span class="mf">1.</span><span class="w"> </span><span class="kr">Close</span><span class="w"> </span><span class="n">stdin</span><span class="w"> </span><span class="n">pipe</span><span class="w">          </span><span class="p">(</span><span class="n">signals</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="kr">to</span><span class="w"> </span><span class="n">shut</span><span class="w"> </span><span class="n">down</span><span class="w"> </span><span class="n">gracefully</span><span class="p">)</span>
+<span class="mf">2.</span><span class="w"> </span><span class="kr">Wait</span><span class="w"> </span><span class="mf">5</span><span class="w"> </span><span class="n">seconds</span><span class="w">            </span><span class="p">(</span><span class="n">grace</span><span class="w"> </span><span class="n">period</span><span class="w"> </span><span class="kr">for</span><span class="w"> </span><span class="n">cleanup</span><span class="p">)</span>
+<span class="mf">3.</span><span class="w"> </span><span class="n">Send</span><span class="w"> </span><span class="n">SIGTERM</span><span class="w">              </span><span class="p">(</span><span class="n">polite</span><span class="w"> </span><span class="n">termination</span><span class="w"> </span><span class="n">request</span><span class="p">)</span>
+<span class="mf">4.</span><span class="w"> </span><span class="kr">Wait</span><span class="w"> </span><span class="mf">3</span><span class="w"> </span><span class="n">seconds</span><span class="w">            </span><span class="p">(</span><span class="n">grace</span><span class="w"> </span><span class="n">period</span><span class="w"> </span><span class="kr">for</span><span class="w"> </span><span class="n">signal</span><span class="w"> </span><span class="n">handling</span><span class="p">)</span>
+<span class="mf">5.</span><span class="w"> </span><span class="n">Send</span><span class="w"> </span><span class="n">SIGKILL</span><span class="w">              </span><span class="p">(</span><span class="kr">for</span><span class="n">ced</span><span class="w"> </span><span class="n">termination</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="n">still</span><span class="w"> </span><span class="n">alive</span><span class="p">)</span>
+<span class="mf">6.</span><span class="w"> </span><span class="n">Collect</span><span class="w"> </span><span class="n">exit</span><span class="w"> </span><span class="n">status</span><span class="w">       </span><span class="p">(</span><span class="n">prevent</span><span class="w"> </span><span class="n">zombie</span><span class="w"> </span><span class="n">processes</span><span class="p">)</span>
+<span class="mf">7.</span><span class="w"> </span><span class="kr">Close</span><span class="w"> </span><span class="n">stdout</span><span class="o">/</span><span class="n">stderr</span><span class="w"> </span><span class="n">pipes</span><span class="w"> </span><span class="p">(</span><span class="n">release</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">descriptors</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The graduated approach (close stdin, then SIGTERM, then SIGKILL) gives well-behaved servers a chance to flush buffers, close database connections, and release locks. Misbehaving servers that ignore signals are eventually force-killed.</p>
+<h3 id="orphan-prevention">Orphan Prevention</h3>
+<p>A critical concern: what happens if the agent process crashes without going through graceful shutdown? The MCP server processes become orphans -- running processes with no parent to manage them.</p>
+<p>Three mechanisms prevent orphan accumulation:</p>
+<p><strong>Process group management.</strong> The agent spawns MCP servers in the same process group. When the agent terminates (even abnormally), the operating system can kill the entire process group.</p>
+<p><strong>PID file tracking.</strong> The agent writes the PIDs of all spawned MCP server processes to a file (e.g., <code>~/.claude/mcp-pids.json</code>). On next startup, the agent checks this file and terminates any orphaned processes from previous sessions.</p>
+<p><strong>Server-side timeout.</strong> Well-designed MCP servers detect when their parent process has died (stdin is closed, no pings arrive) and self-terminate after a timeout. This is a defense-in-depth measure that works even if the agent's cleanup mechanisms fail.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Agent</span><span class="w"> </span><span class="n">starts</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">PID</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">exists</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Read</span><span class="w"> </span><span class="n">PID</span><span class="w"> </span><span class="n">file</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">{</span><span class="n">Any</span><span class="w"> </span><span class="n">PIDs</span><span class="w"> </span><span class="n">still</span><span class="w"> </span><span class="n">running</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Terminate</span><span class="w"> </span><span class="n">orphans</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Continue</span><span class="w"> </span><span class="n">startup</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">F</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Start</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">servers</span><span class="p">]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="n">Write</span><span class="w"> </span><span class="n">PIDs</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">PID</span><span class="w"> </span><span class="n">file</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c53030</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">276749</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<h3 id="file-descriptor-management">File Descriptor Management</h3>
+<p>Each stdio MCP server consumes three file descriptors: stdin, stdout, stderr. With five concurrent MCP servers, that is 15 file descriptors. On systems with low file descriptor limits (some Linux distributions default to 1024), this can become a constraint when combined with the agent's own file operations, network connections, and subagent processes.</p>
+<p>The lifecycle manager tracks file descriptor usage and warns when approaching the system limit. In extreme cases, it can refuse to start additional MCP servers to protect the agent's core operations.</p>
+<hr />
+<h2 id="227-hot-reload">22.7 Hot Reload</h2>
+<p>Users should be able to add or remove MCP servers without restarting the agent. Hot reload enables this by watching configuration files for changes and dynamically updating the connection pool.</p>
+<h3 id="the-hot-reload-flow">The Hot Reload Flow</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">User</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Agent</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CM</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Connection</span><span class="w"> </span><span class="n">Manager</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">New</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">New</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span>
+
+<span class="w">    </span><span class="n">User</span><span class="o">-&gt;&gt;</span><span class="n">User</span><span class="p">:</span><span class="w"> </span><span class="n">Edit</span><span class="w"> </span><span class="o">.</span><span class="n">mcp</span><span class="o">.</span><span class="n">json</span><span class="w"> </span><span class="p">(</span><span class="n">add</span><span class="w"> </span><span class="n">new</span><span class="w"> </span><span class="n">server</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">File</span><span class="w"> </span><span class="n">watcher</span><span class="w"> </span><span class="n">detects</span><span class="w"> </span><span class="n">change</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">Reload</span><span class="w"> </span><span class="n">configuration</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">Diff</span><span class="w"> </span><span class="n">old</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="n">vs</span><span class="w"> </span><span class="n">new</span><span class="w"> </span><span class="n">config</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">New</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="n">detected</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">New</span><span class="p">:</span><span class="w"> </span><span class="n">Spawn</span><span class="w"> </span><span class="n">process</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">New</span><span class="p">:</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<span class="w">    </span><span class="n">New</span><span class="o">-&gt;&gt;</span><span class="n">CM</span><span class="p">:</span><span class="w"> </span><span class="n">result</span><span class="p">(</span><span class="n">capabilities</span><span class="p">)</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">New</span><span class="p">:</span><span class="w"> </span><span class="n">notifications</span><span class="o">/</span><span class="n">initialized</span>
+<span class="w">    </span><span class="n">CM</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">Register</span><span class="w"> </span><span class="n">new</span><span class="w"> </span><span class="n">tools</span>
+
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">Next</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">turn</span><span class="w"> </span><span class="n">sees</span><span class="w"> </span><span class="n">new</span><span class="w"> </span><span class="n">tools</span>
+</code></pre></div>
+
+<h3 id="configuration-diffing">Configuration Diffing</h3>
+<p>The reload process computes a diff between the old and new configurations:</p>
+<table>
+<thead>
+<tr>
+<th>Change Type</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>New server added</td>
+<td>Connect to new server, register its tools</td>
+</tr>
+<tr>
+<td>Existing server removed</td>
+<td>Disconnect from server, unregister its tools</td>
+</tr>
+<tr>
+<td>Server config changed (same name)</td>
+<td>Disconnect old, connect new (full restart)</td>
+</tr>
+<tr>
+<td>Server config unchanged</td>
+<td>No action</td>
+</tr>
+</tbody>
+</table>
+<p>Server config changes (e.g., changing arguments or environment variables) require a full reconnect because there is no protocol mechanism to update a running server's configuration. The server must be stopped and restarted with the new parameters.</p>
+<h3 id="tool-registry-consistency">Tool Registry Consistency</h3>
+<p>During hot reload, there is a brief window where the tool registry is inconsistent -- the old server's tools have been removed but the new server's tools have not yet been registered. If the LLM attempts a tool call during this window, the call fails.</p>
+<p>The mitigation is to overlap: register the new server's tools before unregistering the old server's tools. For servers being restarted (config change), this means connecting to the new instance before disconnecting the old one:</p>
+<div class="codehilite"><pre><span></span><code><span class="mf">1.</span><span class="w"> </span><span class="n">Start</span><span class="w"> </span><span class="kr">new</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="n">process</span>
+<span class="mf">2.</span><span class="w"> </span><span class="n">Complete</span><span class="w"> </span><span class="n">initialization</span><span class="w"> </span><span class="n">handshake</span>
+<span class="mf">3.</span><span class="w"> </span><span class="n">Fetch</span><span class="w"> </span><span class="kr">new</span><span class="w"> </span><span class="kr">to</span><span class="n">ol</span><span class="w"> </span><span class="kr">list</span>
+<span class="mf">4.</span><span class="w"> </span><span class="n">Register</span><span class="w"> </span><span class="kr">new</span><span class="w"> </span><span class="kr">to</span><span class="n">ols</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="n">registry</span>
+<span class="mf">5.</span><span class="w"> </span><span class="n">Disconnect</span><span class="w"> </span><span class="n">old</span><span class="w"> </span><span class="n">server</span>
+<span class="mf">6.</span><span class="w"> </span><span class="n">Unregister</span><span class="w"> </span><span class="n">old</span><span class="w"> </span><span class="kr">to</span><span class="n">ols</span><span class="w"> </span><span class="p">(</span><span class="kr">if</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="n">differ</span><span class="p">)</span>
+</code></pre></div>
+
+<p>If the new and old servers provide the same tool names (which they should, since the server name is unchanged), step 6 is a no-op -- the new registration simply overwrites the old one.</p>
+<hr />
+<h2 id="228-authentication-for-remote-mcp-servers">22.8 Authentication for Remote MCP Servers</h2>
+<p>Local MCP servers (stdio) inherit authentication from process ownership -- if the agent can spawn the process, it can communicate with it. Remote MCP servers over HTTP require explicit authentication.</p>
+<h3 id="oauth-20-flow">OAuth 2.0 Flow</h3>
+<p>MCP supports OAuth 2.0 for remote server authentication. The flow integrates with the agent's existing auth infrastructure:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">User</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Agent</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Auth</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Auth</span><span class="w"> </span><span class="n">Server</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Remote</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span>
+
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">MCP</span><span class="o">:</span><span class="w"> </span><span class="n">initialize</span><span class="w"> </span><span class="p">(</span><span class="n">no</span><span class="w"> </span><span class="kr">token</span><span class="p">)</span>
+<span class="w">    </span><span class="n">MCP</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="mi">401</span><span class="w"> </span><span class="n">Unauthorized</span><span class="w"> </span><span class="p">(</span><span class="n">auth</span><span class="w"> </span><span class="n">URL</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">User</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;MCP server requires auth. Opening browser...&quot;</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">Auth</span><span class="o">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">authorization</span><span class="w"> </span><span class="kd">endp</span><span class="n">oint</span>
+<span class="w">    </span><span class="n">User</span><span class="o">-&gt;&gt;</span><span class="n">Auth</span><span class="o">:</span><span class="w"> </span><span class="n">Login</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">consent</span>
+<span class="w">    </span><span class="n">Auth</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="n">Authorization</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="p">(</span><span class="n">via</span><span class="w"> </span><span class="n">callback</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">Auth</span><span class="o">:</span><span class="w"> </span><span class="n">Exchange</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="n">for</span><span class="w"> </span><span class="n">tokens</span>
+<span class="w">    </span><span class="n">Auth</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="n">Access</span><span class="w"> </span><span class="kt">token</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">refresh</span><span class="w"> </span><span class="kt">token</span>
+
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">MCP</span><span class="o">:</span><span class="w"> </span><span class="n">initialize</span><span class="w"> </span><span class="p">(</span><span class="n">with</span><span class="w"> </span><span class="n">Bearer</span><span class="w"> </span><span class="kr">token</span><span class="p">)</span>
+<span class="w">    </span><span class="n">MCP</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="n">result</span><span class="p">(</span><span class="n">capabilities</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Agent</span><span class="p">,</span><span class="n">MCP</span><span class="o">:</span><span class="w"> </span><span class="kt">Token</span><span class="w"> </span><span class="n">refresh</span><span class="w"> </span><span class="nf">loop</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="kt">Token</span><span class="w"> </span><span class="n">expires</span><span class="w"> </span><span class="kr">in</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="nf">min</span>
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">Auth</span><span class="o">:</span><span class="w"> </span><span class="n">Refresh</span><span class="w"> </span><span class="kt">token</span><span class="w"> </span><span class="n">exchange</span>
+<span class="w">    </span><span class="n">Auth</span><span class="o">-&gt;&gt;</span><span class="n">Agent</span><span class="o">:</span><span class="w"> </span><span class="n">New</span><span class="w"> </span><span class="n">access</span><span class="w"> </span><span class="kt">token</span>
+</code></pre></div>
+
+<h3 id="token-management">Token Management</h3>
+<p>The agent manages three token lifecycle concerns:</p>
+<p><strong>Storage.</strong> Access tokens and refresh tokens are stored in the OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) -- never in plain-text configuration files. The agent's credential store maps <code>(server_url, user_id)</code> to <code>(access_token, refresh_token, expiry)</code>.</p>
+<p><strong>Refresh.</strong> Before a token expires, the agent proactively refreshes it. The refresh happens in the background, 5 minutes before expiry, so that tool calls never fail due to an expired token.</p>
+<p><strong>Revocation.</strong> When a user disconnects from a remote MCP server (removes it from configuration), the agent revokes the tokens if the auth server supports revocation. This prevents stale tokens from lingering in the credential store.</p>
+<h3 id="api-key-authentication">API Key Authentication</h3>
+<p>For simpler remote servers that use API keys instead of OAuth, the key is provided through environment variables in the server configuration:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;remote-api&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://mcp.example.com/v1&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;headers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;Authorization&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Bearer ${MCP_API_KEY}&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>${MCP_API_KEY}</code> reference is resolved from the user's environment at connection time. The key never appears in the configuration file, logs, or protocol messages.</p>
+<hr />
+<h2 id="229-monitoring-and-observability">22.9 Monitoring and Observability</h2>
+<p>In production deployments, operators need visibility into MCP server health, performance, and resource consumption.</p>
+<h3 id="metrics-collection">Metrics Collection</h3>
+<p>The lifecycle manager tracks per-server metrics:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Connection state</td>
+<td>Gauge</td>
+<td>Current state of each server</td>
+</tr>
+<tr>
+<td>Tool call count</td>
+<td>Counter</td>
+<td>Usage patterns, billing</td>
+</tr>
+<tr>
+<td>Tool call latency</td>
+<td>Histogram</td>
+<td>Performance monitoring</td>
+</tr>
+<tr>
+<td>Error count</td>
+<td>Counter</td>
+<td>Reliability tracking</td>
+</tr>
+<tr>
+<td>Reconnection count</td>
+<td>Counter</td>
+<td>Stability assessment</td>
+</tr>
+<tr>
+<td>Uptime</td>
+<td>Gauge</td>
+<td>Availability calculation</td>
+</tr>
+<tr>
+<td>Process memory (stdio)</td>
+<td>Gauge</td>
+<td>Resource consumption</td>
+</tr>
+</tbody>
+</table>
+<p>These metrics integrate with the agent's broader observability infrastructure. As discussed in Chapter 32, the agent uses structured logging and OpenTelemetry-compatible tracing. MCP lifecycle events produce structured log entries:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-12T10:15:30Z&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;info&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp.connection.ready&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;server&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;copilot-mem&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;transport&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;stdio&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;negotiation_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1247</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;tools_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;capabilities&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;resources&quot;</span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="diagnostic-commands">Diagnostic Commands</h3>
+<p>The agent provides diagnostic commands for MCP troubleshooting:</p>
+<div class="codehilite"><pre><span></span><code><span class="o">/</span><span class="n">mcp</span><span class="w"> </span><span class="n">status</span><span class="w">              </span><span class="n">Show</span><span class="w"> </span><span class="n">all</span><span class="w"> </span><span class="n">servers</span><span class="p">:</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">state</span><span class="p">,</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">count</span><span class="p">,</span><span class="w"> </span><span class="n">uptime</span>
+<span class="o">/</span><span class="n">mcp</span><span class="w"> </span><span class="n">restart</span><span class="w"> </span><span class="o">&lt;</span><span class="n">name</span><span class="o">&gt;</span><span class="w">      </span><span class="n">Restart</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">specific</span><span class="w"> </span><span class="n">server</span>
+<span class="o">/</span><span class="n">mcp</span><span class="w"> </span><span class="n">logs</span><span class="w"> </span><span class="o">&lt;</span><span class="n">name</span><span class="o">&gt;</span><span class="w">         </span><span class="n">Show</span><span class="w"> </span><span class="n">recent</span><span class="w"> </span><span class="n">stderr</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">server</span>
+<span class="o">/</span><span class="n">mcp</span><span class="w"> </span><span class="n">ping</span><span class="w"> </span><span class="o">&lt;</span><span class="n">name</span><span class="o">&gt;</span><span class="w">         </span><span class="n">Manual</span><span class="w"> </span><span class="n">ping</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">check</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="n">responsiveness</span>
+</code></pre></div>
+
+<p>These commands are essential for debugging. When a user reports "the memory tool stopped working," the first step is <code>/mcp status</code> to see if the memory server is in an error state.</p>
+<hr />
+<h2 id="2210-putting-it-all-together">22.10 Putting It All Together</h2>
+<p>The complete MCP server lifecycle, from agent startup to shutdown:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Agent</span><span class="w"> </span><span class="n">Starts</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">Load</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Configs</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Merge</span><span class="o">:</span><span class="w"> </span><span class="n">Policy</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Project</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Env</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Validate</span><span class="w"> </span><span class="n">each</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="n">definition</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">{</span><span class="n">Any</span><span class="w"> </span><span class="n">orphan</span><span class="w"> </span><span class="n">PIDs</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Kill</span><span class="w"> </span><span class="n">orphans</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Start</span><span class="w"> </span><span class="n">connection</span><span class="w"> </span><span class="n">manager</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">G</span>
+
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="n">For</span><span class="w"> </span><span class="n">each</span><span class="w"> </span><span class="n">server</span><span class="o">:</span><span class="w"> </span><span class="n">spawn</span><span class="o">/</span><span class="n">connect</span><span class="p">]</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">[</span><span class="n">Initialize</span><span class="w"> </span><span class="n">handshake</span><span class="p">]</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">J</span><span class="p">[</span><span class="n">Fetch</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">list</span><span class="p">]</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">K</span><span class="p">[</span><span class="n">Register</span><span class="w"> </span><span class="n">tools</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">agent</span><span class="p">]</span>
+<span class="w">    </span><span class="n">K</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L</span><span class="p">[</span><span class="n">Start</span><span class="w"> </span><span class="n">health</span><span class="w"> </span><span class="n">monitoring</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">L</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M</span><span class="p">{</span><span class="n">Agent</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="n">active</span><span class="p">}</span>
+<span class="w">    </span><span class="n">M</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Tool</span><span class="w"> </span><span class="n">call</span><span class="o">|</span><span class="w"> </span><span class="n">N</span><span class="p">[</span><span class="n">Route</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">appropriate</span><span class="w"> </span><span class="n">server</span><span class="p">]</span>
+<span class="w">    </span><span class="n">M</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Server</span><span class="w"> </span><span class="n">error</span><span class="o">|</span><span class="w"> </span><span class="n">O</span><span class="p">[</span><span class="n">Enter</span><span class="w"> </span><span class="n">error</span><span class="w"> </span><span class="n">state</span><span class="p">]</span>
+<span class="w">    </span><span class="n">M</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Config</span><span class="w"> </span><span class="n">change</span><span class="o">|</span><span class="w"> </span><span class="n">P</span><span class="p">[</span><span class="n">Hot</span><span class="w"> </span><span class="n">reload</span><span class="p">]</span>
+<span class="w">    </span><span class="n">M</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Shutdown</span><span class="o">|</span><span class="w"> </span><span class="n">Q</span><span class="p">[</span><span class="n">Graceful</span><span class="w"> </span><span class="n">disconnect</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">O</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R</span><span class="p">[</span><span class="n">Exponential</span><span class="w"> </span><span class="n">backoff</span><span class="w"> </span><span class="n">reconnect</span><span class="p">]</span>
+<span class="w">    </span><span class="n">R</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span>
+
+<span class="w">    </span><span class="n">P</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S</span><span class="p">[</span><span class="n">Diff</span><span class="w"> </span><span class="n">configs</span><span class="p">,</span><span class="w"> </span><span class="n">connect</span><span class="o">/</span><span class="n">disconnect</span><span class="w"> </span><span class="n">as</span><span class="w"> </span><span class="n">needed</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M</span>
+
+<span class="w">    </span><span class="n">Q</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">T</span><span class="p">[</span><span class="n">Close</span><span class="w"> </span><span class="n">stdin</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="n">connection</span><span class="p">]</span>
+<span class="w">    </span><span class="n">T</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">U</span><span class="p">[</span><span class="n">Wait</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">graceful</span><span class="w"> </span><span class="n">shutdown</span><span class="p">]</span>
+<span class="w">    </span><span class="n">U</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">V</span><span class="p">[</span><span class="n">SIGTERM</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">needed</span><span class="p">]</span>
+<span class="w">    </span><span class="n">V</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">W</span><span class="p">[</span><span class="n">SIGKILL</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">needed</span><span class="p">]</span>
+<span class="w">    </span><span class="n">W</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">X</span><span class="p">[</span><span class="n">Collect</span><span class="w"> </span><span class="n">exit</span><span class="w"> </span><span class="n">status</span><span class="p">]</span>
+<span class="w">    </span><span class="n">X</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Y</span><span class="p">[</span><span class="n">Remove</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">PID</span><span class="w"> </span><span class="n">file</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Y</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Z</span><span class="p">[</span><span class="n">Agent</span><span class="w"> </span><span class="n">exits</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">N</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">2</span><span class="n">d3748</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Z</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">2</span><span class="n">d3748</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">K</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">276749</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">O</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c53030</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Q</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c05621</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<h3 id="design-principles">Design Principles</h3>
+<p>Several principles run through the lifecycle architecture:</p>
+<p><strong>Fail open, not closed.</strong> When an MCP server fails, the agent continues operating. It loses some capabilities but does not stop. This is the opposite of fail-closed (where any failure halts the system). For an interactive tool that engineers use all day, fail-open is the correct default -- losing memory search is annoying; losing the entire session is unacceptable.</p>
+<p><strong>Separate server lifecycles from session lifecycles.</strong> MCP servers can come and go without restarting the agent session. Hot reload, reconnection, and graceful degradation all serve this principle. The user's conversation, context, and work-in-progress are never disrupted by MCP server lifecycle events.</p>
+<p><strong>Monitor everything, expose diagnostics.</strong> Every state transition, every health check, every reconnection attempt is logged and metered. When something goes wrong (and it will), the diagnostic data is already there. Retroactive debugging of production issues is orders of magnitude harder without observability.</p>
+<p><strong>Defense in depth for cleanup.</strong> Orphan prevention uses three independent mechanisms (process groups, PID files, server-side timeouts). Any one of them can fail, and the system still cleans up. This is not over-engineering -- orphaned processes consuming memory and CPU are a real operational problem that accumulates over time.</p>
+<p><strong>Graceful shutdown is as important as startup.</strong> A clean shutdown -- draining in-flight tool calls, closing connections, terminating processes, collecting exit statuses -- prevents resource leaks and ensures the next startup is clean. Too many systems invest heavily in startup and treat shutdown as an afterthought.</p>
+<p>In the next chapter, we move from managing MCP servers to designing them. Chapter 23 covers the patterns, security considerations, and performance trade-offs that determine whether an MCP integration works well in practice or becomes a liability.</p>
+<div class="chapter-nav">
+  <a href="chapter-21.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-23.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

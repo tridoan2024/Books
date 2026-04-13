@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 27: Terminal UI Architecture — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-28.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-27-terminal-ui-architecture">Chapter 27: Terminal UI Architecture</h1>
+<p>Every terminal application eventually faces a fundamental design question: how do you build a rich, interactive interface inside a medium that only understands sequential streams of characters? The browser answered this decades ago with HTML, CSS, and a layout engine. Native applications have toolkit frameworks like Cocoa, GTK, and Qt. Terminal applications, historically, have had two options: raw ANSI escape sequences (fast, brittle, impossible to maintain) or curses-style libraries (stable, but locked into a cell-grid paradigm from the 1970s). Neither is adequate for an AI CLI agent that needs to render streaming markdown, manage virtual scroll through conversations spanning thousands of lines, display overlapping panels, and maintain 30fps responsiveness while an LLM generates tokens at full speed.</p>
+<p>This chapter examines the architectural decisions behind building a modern terminal UI for an AI agent. We will cover why a declarative component model like React/Ink beats imperative alternatives, how the component hierarchy organizes a complex interactive application, how streaming content gets parsed and rendered incrementally, how the rendering pipeline transforms application state into terminal output, how state management scales to 80+ behavioral concerns, and how responsive design adapts to terminal dimensions. The patterns here apply to any interactive CLI application, but the constraints of an AI agent -- real-time streaming, long-running sessions, multi-panel layouts -- push them to their limits.</p>
+<hr />
+<h2 id="271-why-reactink-for-a-terminal-application">27.1 Why React/Ink for a Terminal Application</h2>
+<p>The choice of React as the UI framework for a terminal application surprises most engineers. React is a browser technology. Terminals are not browsers. But the choice is not about React's DOM rendering -- it is about React's component model, and that model solves problems that terminal UI developers have struggled with for decades.</p>
+<h3 id="the-three-candidates">The Three Candidates</h3>
+<p>When designing a terminal UI for an AI agent, three architectural approaches compete:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Terminal</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="n">Approaches</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">Raw</span><span class="w"> </span><span class="n">ANSI</span><span class="p">]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Curses</span><span class="o">/</span><span class="n">blessed</span><span class="p">]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Declarative</span><span class="o">/</span><span class="n">React</span><span class="o">-</span><span class="n">Ink</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B1</span><span class="p">[</span><span class="n">Direct</span><span class="w"> </span><span class="n">escape</span><span class="w"> </span><span class="n">sequences</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B2</span><span class="p">[</span><span class="n">Manual</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="n">tracking</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C1</span><span class="p">[</span><span class="n">Cell</span><span class="o">-</span><span class="n">grid</span><span class="w"> </span><span class="n">abstraction</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C2</span><span class="p">[</span><span class="n">Widget</span><span class="w"> </span><span class="n">toolkit</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D1</span><span class="p">[</span><span class="n">Component</span><span class="w"> </span><span class="n">model</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D2</span><span class="p">[</span><span class="n">Virtual</span><span class="w"> </span><span class="n">DOM</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Layout</span><span class="w"> </span><span class="n">engine</span><span class="p">]</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Strengths</th>
+<th>Weaknesses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Raw ANSI</strong></td>
+<td>Zero overhead, full control</td>
+<td>No abstraction, manual cursor math, impossible to compose</td>
+</tr>
+<tr>
+<td><strong>Curses/blessed</strong></td>
+<td>Stable APIs, widget library</td>
+<td>Imperative paradigm, cell-by-cell updates, no layout engine</td>
+</tr>
+<tr>
+<td><strong>React/Ink</strong></td>
+<td>Declarative, composable, layout engine, differential rendering</td>
+<td>Larger dependency tree, React learning curve, custom fork needed</td>
+</tr>
+</tbody>
+</table>
+<p>Raw ANSI works for simple tools -- a progress bar, a colored log line. But an AI agent's UI has dozens of independently updating regions: the message list, the streaming response, tool execution spinners, the input area, the status bar, the typeahead overlay, the permission prompt. Managing the cursor position and redraw regions for all of these imperatively is a combinatorial nightmare.</p>
+<p>Curses-style libraries (blessed, neo-blessed) provide widgets and event handling but operate on a cell-grid model. Every character occupies exactly one cell. There is no concept of flexbox layout, percentage-based widths, or nested overflow clipping. Building a responsive two-panel layout where the sidebar takes 35% of the terminal width requires manual arithmetic on every resize event. Worse, the imperative update model means every state change requires explicit widget.setContent() calls -- there is no reconciliation, no differential updates, no declarative description of "what should be on screen."</p>
+<p>React/Ink solves both problems. The component model gives you composition: build a <code>&lt;MessageList&gt;</code>, a <code>&lt;PromptInput&gt;</code>, a <code>&lt;StatusBar&gt;</code>, and assemble them into a screen. The virtual DOM gives you differential rendering: describe the desired state, and the framework computes the minimum terminal writes needed. The Yoga layout engine gives you flexbox: declare <code>flexGrow={1}</code> on the message area and it consumes all available space after fixed-height components claim their rows.</p>
+<h3 id="the-declarative-advantage">The Declarative Advantage</h3>
+<p>The core argument for a declarative UI in a terminal is the same as in a browser: when state changes are frequent and interleaved, describing <strong>what</strong> the screen should look like is simpler and less error-prone than describing <strong>how</strong> to transform the current screen into the next state.</p>
+<p>Consider a streaming response. Tokens arrive every 10-20ms. Each token appends to the current message. The message list may need to scroll. A tool call might start mid-stream, requiring a spinner. The input area must remain responsive. In an imperative model, each of these events requires explicit code to update exactly the right screen region without corrupting adjacent content. In a declarative model, you update the state (append token to buffer), and the framework figures out what changed on screen.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Imperative: you manage every screen region manually</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">onToken</span><span class="p">(</span><span class="nx">token</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">buffer</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">token</span><span class="p">;</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">lines</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">wrapText</span><span class="p">(</span><span class="nx">buffer</span><span class="p">,</span><span class="w"> </span><span class="nx">termWidth</span><span class="p">);</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">visibleLines</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">lines</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="o">-</span><span class="nx">viewportHeight</span><span class="p">);</span>
+<span class="w">  </span><span class="nx">moveCursor</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="nx">messageAreaTop</span><span class="p">);</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">line</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">visibleLines</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">clearLine</span><span class="p">();</span>
+<span class="w">    </span><span class="nx">writeLine</span><span class="p">(</span><span class="nx">line</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="c1">// Don&#39;t forget to restore the input area...</span>
+<span class="w">  </span><span class="nx">moveCursor</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="nx">inputAreaTop</span><span class="p">);</span>
+<span class="w">  </span><span class="nx">redrawInput</span><span class="p">();</span>
+<span class="w">  </span><span class="c1">// And the status bar...</span>
+<span class="w">  </span><span class="nx">moveCursor</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="nx">statusBarTop</span><span class="p">);</span>
+<span class="w">  </span><span class="nx">redrawStatus</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="c1">// Declarative: you update state, framework handles rendering</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">onToken</span><span class="p">(</span><span class="nx">token</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">setStreamBuffer</span><span class="p">(</span><span class="nx">prev</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">prev</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">token</span><span class="p">);</span>
+<span class="w">  </span><span class="c1">// React re-renders only the changed components</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The declarative version is not just shorter -- it is <strong>correct by construction</strong>. The imperative version has a bug if any component's position changes (resize, new tool result expands, sidebar toggles). The declarative version handles all of that through the layout engine.</p>
+<h3 id="the-cost">The Cost</h3>
+<p>The React/Ink approach is not free. The dependency tree is larger. Startup time includes React initialization and Yoga WASM loading. A custom Ink fork is needed for production-quality terminal rendering, because upstream Ink does not handle adaptive render throttling, ANSI-aware text measurement, or deep overflow clipping.</p>
+<p>For simple CLI tools, this cost is not justified. For an AI agent that runs sessions lasting hours with conversations spanning thousands of rendered lines, the investment pays for itself in the first week of development.</p>
+<hr />
+<h2 id="272-component-hierarchy">27.2 Component Hierarchy</h2>
+<p>The component hierarchy of an AI CLI agent's terminal UI is deliberately flat. Deep nesting costs layout performance -- every intermediate <code>&lt;Box&gt;</code> node creates a Yoga layout calculation. The hierarchy looks like this:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">App</span><span class="p">[</span><span class="n">App</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">REPL</span><span class="p">[</span><span class="n">REPL</span><span class="w"> </span><span class="n">Screen</span><span class="p">]</span>
+<span class="w">    </span><span class="n">REPL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ML</span><span class="p">[</span><span class="n">MessageList</span><span class="p">]</span>
+<span class="w">    </span><span class="n">REPL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PI</span><span class="p">[</span><span class="n">PromptInput</span><span class="p">]</span>
+<span class="w">    </span><span class="n">REPL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PP</span><span class="p">[</span><span class="n">PermissionPrompt</span><span class="p">]</span>
+<span class="w">    </span><span class="n">REPL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SP</span><span class="p">[</span><span class="n">SidePanel</span><span class="p">]</span>
+<span class="w">    </span><span class="n">REPL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">BTB</span><span class="p">[</span><span class="n">BackgroundTaskBar</span><span class="p">]</span>
+<span class="w">    </span><span class="n">REPL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SL</span><span class="p">[</span><span class="n">StatusLine</span><span class="p">]</span>
+<span class="w">    </span><span class="n">ML</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">UM</span><span class="p">[</span><span class="n">UserMessage</span><span class="p">]</span>
+<span class="w">    </span><span class="n">ML</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">AM</span><span class="p">[</span><span class="n">AssistantMessage</span><span class="p">]</span>
+<span class="w">    </span><span class="n">ML</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SM</span><span class="p">[</span><span class="n">SystemMessage</span><span class="p">]</span>
+<span class="w">    </span><span class="n">AM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TB</span><span class="p">[</span><span class="n">TextBlock</span><span class="p">]</span>
+<span class="w">    </span><span class="n">AM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TUB</span><span class="p">[</span><span class="n">ToolUseBlock</span><span class="p">]</span>
+<span class="w">    </span><span class="n">AM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ThB</span><span class="p">[</span><span class="n">ThinkingBlock</span><span class="p">]</span>
+<span class="w">    </span><span class="n">TUB</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TR</span><span class="p">[</span><span class="n">ToolResult</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TI</span><span class="p">[</span><span class="n">TextInput</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TAO</span><span class="p">[</span><span class="n">TypeaheadOverlay</span><span class="p">]</span>
+</code></pre></div>
+
+<p>Three design decisions shape this hierarchy:</p>
+<p><strong>The REPL is a god component.</strong> It owns nearly all application state and passes it down via props. In web development, this is an anti-pattern. In terminal UIs, it is often the correct choice. Terminal applications have fundamentally different constraints: no CSS cascade, no event bubbling, no browser layout engine handling reflows. The REPL needs to know the terminal dimensions, scroll position, streaming state, permission mode, and input state simultaneously to make rendering decisions. Centralizing this state eliminates coordination overhead.</p>
+<p><strong>The hierarchy is two levels deep for most paths.</strong> REPL contains MessageList contains message components. REPL contains PromptInput contains its sub-components. No intermediate "layout containers" or "wrapper components" exist. Each intermediate component would add a Yoga node, a reconciliation step, and a potential reflow. For a UI rendering at 30fps, these costs add up.</p>
+<p><strong>Composition happens through hooks, not components.</strong> The REPL component calls 80+ custom hooks, each managing one behavioral concern. This is the inverse of the typical React advice to "break components into smaller components." In terminal UIs, break <em>behavior</em> into smaller hooks and keep the component that composes them as a single unit. The hooks are individually testable without a terminal. The component is the assembly point.</p>
+<h3 id="the-render-function">The Render Function</h3>
+<p>After thousands of lines of hooks and state management, the REPL's render function is structurally simple -- a vertical flex column:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">return</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="o">&lt;</span><span class="nx">Box</span><span class="w"> </span><span class="nx">flexDirection</span><span class="o">=</span><span class="s2">&quot;column&quot;</span><span class="w"> </span><span class="nx">height</span><span class="o">=</span><span class="p">{</span><span class="nx">terminalHeight</span><span class="p">}</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="p">{</span><span class="cm">/* Main content area */</span><span class="p">}</span>
+<span class="w">    </span><span class="o">&lt;</span><span class="nx">Box</span><span class="w"> </span><span class="nx">flexGrow</span><span class="o">=</span><span class="p">{</span><span class="mf">1</span><span class="p">}</span><span class="w"> </span><span class="nx">flexDirection</span><span class="o">=</span><span class="s2">&quot;row&quot;</span><span class="o">&gt;</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="nx">Box</span><span class="w"> </span><span class="nx">flexGrow</span><span class="o">=</span><span class="p">{</span><span class="mf">1</span><span class="p">}</span><span class="w"> </span><span class="nx">flexDirection</span><span class="o">=</span><span class="s2">&quot;column&quot;</span><span class="o">&gt;</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="nx">MessageList</span>
+<span class="w">          </span><span class="nx">messages</span><span class="o">=</span><span class="p">{</span><span class="nx">messages</span><span class="p">}</span>
+<span class="w">          </span><span class="nx">visibleRange</span><span class="o">=</span><span class="p">{</span><span class="nx">scroll</span><span class="p">.</span><span class="nx">visibleRange</span><span class="p">}</span>
+<span class="w">          </span><span class="nx">streamingMessage</span><span class="o">=</span><span class="p">{</span><span class="nx">isStreaming</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">streamBuffer</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">null</span><span class="p">}</span>
+<span class="w">          </span><span class="nx">activeTools</span><span class="o">=</span><span class="p">{</span><span class="nx">activeTools</span><span class="p">}</span>
+<span class="w">        </span><span class="o">/&gt;</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+<span class="w">      </span><span class="p">{</span><span class="nx">sidePanelVisible</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="nx">Box</span><span class="w"> </span><span class="nx">width</span><span class="o">=</span><span class="p">{</span><span class="nb">Math</span><span class="p">.</span><span class="nx">floor</span><span class="p">(</span><span class="nx">terminalWidth</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">0.35</span><span class="p">)}</span><span class="w"> </span><span class="nx">borderStyle</span><span class="o">=</span><span class="s2">&quot;single&quot;</span><span class="o">&gt;</span>
+<span class="w">          </span><span class="o">&lt;</span><span class="nx">SidePanel</span><span class="w"> </span><span class="nx">content</span><span class="o">=</span><span class="p">{</span><span class="nx">sidePanelContent</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+<span class="w">      </span><span class="p">)}</span>
+<span class="w">    </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nx">backgroundTasks</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">&lt;</span><span class="nx">BackgroundTaskBar</span><span class="w"> </span><span class="nx">tasks</span><span class="o">=</span><span class="p">{</span><span class="nx">backgroundTasks</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span><span class="p">}</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nx">mode</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;permission&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="nx">PermissionPrompt</span><span class="w"> </span><span class="nx">request</span><span class="o">=</span><span class="p">{</span><span class="nx">permissionRequest</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span>
+<span class="w">    </span><span class="p">)}</span>
+
+<span class="w">    </span><span class="o">&lt;</span><span class="nx">StatusLine</span><span class="w"> </span><span class="nx">mode</span><span class="o">=</span><span class="p">{</span><span class="nx">mode</span><span class="p">}</span><span class="w"> </span><span class="nx">model</span><span class="o">=</span><span class="p">{</span><span class="nx">session</span><span class="p">.</span><span class="nx">model</span><span class="p">}</span><span class="w"> </span><span class="nx">tokens</span><span class="o">=</span><span class="p">{</span><span class="nx">tokens</span><span class="p">}</span><span class="w"> </span><span class="nx">cost</span><span class="o">=</span><span class="p">{</span><span class="nx">cost</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span>
+<span class="w">    </span><span class="o">&lt;</span><span class="nx">PromptInput</span><span class="w"> </span><span class="nx">value</span><span class="o">=</span><span class="p">{</span><span class="nx">inputValue</span><span class="p">}</span><span class="w"> </span><span class="nx">cursor</span><span class="o">=</span><span class="p">{</span><span class="nx">cursorPosition</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span>
+<span class="w">    </span><span class="p">{</span><span class="nx">typeahead</span><span class="p">.</span><span class="nx">visible</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">&lt;</span><span class="nx">TypeaheadOverlay</span><span class="w"> </span><span class="nx">results</span><span class="o">=</span><span class="p">{</span><span class="nx">typeahead</span><span class="p">.</span><span class="nx">results</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span><span class="p">}</span>
+<span class="w">  </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+<span class="p">);</span>
+</code></pre></div>
+
+<p>The layout uses Ink's flexbox model. The message list gets <code>flexGrow={1}</code>, consuming all vertical space after fixed-height components (status line, input area, task bar) claim their rows. The side panel, when visible, takes 35% of terminal width. Components that appear conditionally (permission prompt, background task bar, typeahead overlay) are rendered only when their state is active, avoiding layout computation when not needed.</p>
+<hr />
+<h2 id="273-state-management-architecture">27.3 State Management Architecture</h2>
+<p>An AI agent's terminal UI manages more state than most web applications. The streaming response, scroll position, input buffer, permission prompts, tool execution tracking, background tasks, typeahead suggestions, terminal dimensions, vim mode, search state -- all of these interact with each other across dozens of event handlers.</p>
+<h3 id="the-80-hooks-pattern">The 80+ Hooks Pattern</h3>
+<p>Rather than a centralized state management library like Redux or Zustand, the state is decomposed into 80+ custom React hooks, each owning one behavioral concern:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Count</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Input handling</td>
+<td>12</td>
+<td>useTextInput, useKeyBindings, useHistorySearch, usePasteDetection, useVimMode</td>
+</tr>
+<tr>
+<td>Scroll management</td>
+<td>6</td>
+<td>useVirtualScroll, useScrollSearch, useMessageAnchors</td>
+</tr>
+<tr>
+<td>Typeahead &amp; completion</td>
+<td>8</td>
+<td>useTypeahead, useTabCompletion, useSlashCommandSuggestion, useFileSuggestion</td>
+</tr>
+<tr>
+<td>Streaming &amp; messages</td>
+<td>10</td>
+<td>useStreamingResponse, useStreamBuffer, useMessageFormatting, useToolTracking</td>
+</tr>
+<tr>
+<td>Session &amp; lifecycle</td>
+<td>15</td>
+<td>useSession, useSessionPersistence, useSessionForking, useIdleDetection</td>
+</tr>
+<tr>
+<td>Layout &amp; rendering</td>
+<td>10</td>
+<td>useTerminalLayout, useTerminalSize, useResponsiveLayout, useTheme</td>
+</tr>
+<tr>
+<td>Integration &amp; side effects</td>
+<td>19+</td>
+<td>useMemory, usePermissions, useNotifications, useHookExecution, useMCPServers</td>
+</tr>
+</tbody>
+</table>
+<p>Why this many? Testability and composability.</p>
+<p>Each hook can be tested in isolation. <code>useVirtualScroll</code> needs a message array and viewport height -- no terminal, no React DOM, no API connection. <code>usePasteDetection</code> needs keystroke timestamps -- feed it synthetic events and assert on detection thresholds. Small hooks mean small test surfaces.</p>
+<p>Composability matters because not every screen mode needs every hook. The compact mode during <code>/compact</code> uses a subset. The permission prompt overlay uses only keyboard and layout hooks. Granular hooks let each mode pick exactly what it needs.</p>
+<h3 id="why-not-zustand-or-redux">Why Not Zustand or Redux?</h3>
+<p>External state management adds latency that terminal rendering cannot afford. At 30fps with 33ms per frame, the rendering pipeline from state change to terminal output must complete within budget. Direct <code>useState</code> with careful update batching is faster than dispatching through an external store, and -- critically -- easier to debug when frames drop.</p>
+<p>The exception is global state that genuinely needs to be shared across component boundaries without prop drilling. Theme configuration, session metadata, and feature flags are candidates for a lightweight store. But the majority of UI state (scroll position, input buffer, streaming buffer) is local to the REPL component and should stay there.</p>
+<h3 id="ref-based-state-for-high-frequency-updates">Ref-Based State for High-Frequency Updates</h3>
+<p>Values that change every frame -- spinner positions, stream buffer text, animation counters -- use <code>useRef</code> instead of <code>useState</code>. The difference is critical: <code>useState</code> triggers React reconciliation on every update. <code>useRef</code> mutates silently. A single <code>useState</code> counter increments on a fixed tick (e.g., 100ms) to trigger the actual re-render, which reads all the refs:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Anti-pattern: useState for every spinner frame</span>
+<span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">spinnerFrame</span><span class="p">,</span><span class="w"> </span><span class="nx">setSpinnerFrame</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useState</span><span class="p">(</span><span class="mf">0</span><span class="p">);</span>
+<span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">setSpinnerFrame</span><span class="p">(</span><span class="nx">f</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">f</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1</span><span class="p">)</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mf">10</span><span class="p">),</span><span class="w"> </span><span class="mf">100</span><span class="p">);</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">id</span><span class="p">);</span>
+<span class="p">},</span><span class="w"> </span><span class="p">[]);</span>
+<span class="c1">// This triggers a full React reconciliation every 100ms</span>
+
+<span class="c1">// Better: ref + periodic render tick</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">spinnerFrameRef</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useRef</span><span class="p">(</span><span class="mf">0</span><span class="p">);</span>
+<span class="kd">const</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="nx">forceRender</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useState</span><span class="p">(</span><span class="mf">0</span><span class="p">);</span>
+<span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">spinnerFrameRef</span><span class="p">.</span><span class="nx">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">spinnerFrameRef</span><span class="p">.</span><span class="nx">current</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1</span><span class="p">)</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mf">10</span><span class="p">;</span>
+<span class="w">    </span><span class="nx">forceRender</span><span class="p">(</span><span class="nx">n</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span><span class="w"> </span><span class="c1">// Batch with other ref updates</span>
+<span class="w">  </span><span class="p">},</span><span class="w"> </span><span class="mf">100</span><span class="p">);</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">id</span><span class="p">);</span>
+<span class="p">},</span><span class="w"> </span><span class="p">[]);</span>
+</code></pre></div>
+
+<p>This pattern collapses multiple high-frequency state changes into a single render tick, keeping the reconciliation budget under control.</p>
+<hr />
+<h2 id="274-streaming-markdown-rendering">27.4 Streaming Markdown Rendering</h2>
+<p>Streaming markdown is the defining rendering challenge of an AI agent's UI. Tokens arrive one at a time from the API -- a few characters every 10-20ms. The UI must render each token as it arrives, showing the user a progressively building response. But markdown is not designed for incremental parsing.</p>
+<h3 id="the-fundamental-problem">The Fundamental Problem</h3>
+<p>Markdown requires lookahead. Consider these partial streams:</p>
+<div class="codehilite"><pre><span></span><code>Stream so far: &quot;Here is some <span class="sb">`code&quot;</span>
+<span class="sb">Is this inline code or a stray backtick? You need the closing `</span> to know.
+
+Stream so far: &quot;```python\ndef hello&quot;
+Is this a fenced code block? You need the closing ``` to confirm.
+
+Stream so far: &quot;**bold text&quot;
+Is this bold? You need the closing ** to know.
+</code></pre></div>
+
+<p>If you parse greedily -- treating every opening delimiter as the start of a formatted block -- you will render half the response as code or bold text until the closing delimiter arrives. If you parse conservatively -- waiting for closing delimiters before formatting -- the response looks like plain text with scattered punctuation until blocks complete.</p>
+<h3 id="the-solution-incremental-parsing-with-rollback">The Solution: Incremental Parsing with Rollback</h3>
+<p>The architecture uses a two-phase approach:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">Stream</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Buffer</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Stream</span><span class="w"> </span><span class="n">Buffer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Parser</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Incremental</span><span class="w"> </span><span class="n">Parser</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Render</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Renderer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Terminal</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Terminal</span><span class="w"> </span><span class="kr">Output</span>
+
+<span class="w">    </span><span class="n">API</span><span class="o">-&gt;&gt;</span><span class="n">Buffer</span><span class="o">:</span><span class="w"> </span><span class="kt">token</span><span class="w"> </span><span class="n">chunk</span>
+<span class="w">    </span><span class="n">Buffer</span><span class="o">-&gt;&gt;</span><span class="n">Parser</span><span class="o">:</span><span class="w"> </span><span class="n">accumulated</span><span class="w"> </span><span class="n">text</span>
+<span class="w">    </span><span class="n">Parser</span><span class="o">-&gt;&gt;</span><span class="n">Parser</span><span class="o">:</span><span class="w"> </span><span class="nf">Parse</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">optimistic</span><span class="w"> </span><span class="n">formatting</span>
+<span class="w">    </span><span class="n">Parser</span><span class="o">-&gt;&gt;</span><span class="n">Parser</span><span class="o">:</span><span class="w"> </span><span class="n">Detect</span><span class="w"> </span><span class="n">unclosed</span><span class="w"> </span><span class="n">delimiters</span>
+<span class="w">    </span><span class="n">Parser</span><span class="o">-&gt;&gt;</span><span class="n">Parser</span><span class="o">:</span><span class="w"> </span><span class="n">Rollback</span><span class="w"> </span><span class="n">unclosed</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">plain</span><span class="w"> </span><span class="n">text</span>
+<span class="w">    </span><span class="n">Parser</span><span class="o">-&gt;&gt;</span><span class="n">Render</span><span class="o">:</span><span class="w"> </span><span class="n">Styled</span><span class="w"> </span><span class="n">spans</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">cursor</span>
+<span class="w">    </span><span class="n">Render</span><span class="o">-&gt;&gt;</span><span class="n">Terminal</span><span class="o">:</span><span class="w"> </span><span class="n">ANSI</span><span class="o">-</span><span class="n">styled</span><span class="w"> </span><span class="kr">output</span>
+</code></pre></div>
+
+<p><strong>Phase 1: Optimistic parse.</strong> The parser processes the accumulated buffer as if it were complete markdown. Opening delimiters start formatted blocks. The parser tracks which blocks are "open" (started but not closed).</p>
+<p><strong>Phase 2: Rollback.</strong> Open blocks at the end of the buffer are treated as plain text in the rendered output. The parser remembers their positions so that when the next chunk arrives, it can re-parse from the last known-good boundary.</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">ParseState</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">buffer</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">lastGoodBoundary</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w"> </span><span class="c1">// Position of last fully-closed block</span>
+<span class="w">  </span><span class="nx">openBlocks</span><span class="o">:</span><span class="w"> </span><span class="kt">OpenBlock</span><span class="p">[];</span><span class="w">  </span><span class="c1">// Stack of unclosed formatting</span>
+<span class="p">}</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">parseIncremental</span><span class="p">(</span><span class="nx">state</span><span class="o">:</span><span class="w"> </span><span class="kt">ParseState</span><span class="p">,</span><span class="w"> </span><span class="nx">newChunk</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">StyledSpan</span><span class="p">[]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">state</span><span class="p">.</span><span class="nx">buffer</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">newChunk</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Re-parse from last known-good boundary</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">toParse</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">state</span><span class="p">.</span><span class="nx">buffer</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">lastGoodBoundary</span><span class="p">);</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">parseMarkdown</span><span class="p">(</span><span class="nx">toParse</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Identify unclosed blocks</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">unclosed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">blocks</span><span class="p">.</span><span class="nx">filter</span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="o">!</span><span class="nx">b</span><span class="p">.</span><span class="nx">closed</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Render closed blocks with formatting, unclosed as plain text</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">spans</span><span class="o">:</span><span class="w"> </span><span class="kt">StyledSpan</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[];</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">block</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">blocks</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">closed</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">spans</span><span class="p">.</span><span class="nx">push</span><span class="p">(...</span><span class="nx">renderFormattedBlock</span><span class="p">(</span><span class="nx">block</span><span class="p">));</span>
+<span class="w">      </span><span class="nx">state</span><span class="p">.</span><span class="nx">lastGoodBoundary</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">rawLength</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">spans</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span><span class="w"> </span><span class="nx">text</span><span class="o">:</span><span class="w"> </span><span class="kt">block.rawText</span><span class="p">,</span><span class="w"> </span><span class="nx">style</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;plain&#39;</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Append the blinking cursor</span>
+<span class="w">  </span><span class="nx">spans</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span><span class="w"> </span><span class="nx">text</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;\u258B&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">style</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;cursor&#39;</span><span class="w"> </span><span class="p">});</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">spans</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>lastGoodBoundary</code> is the key optimization. When a new chunk arrives, the parser does not re-parse the entire conversation -- only the text from the last fully-closed block forward. For a response that is 90% complete, this means re-parsing only the trailing partial paragraph, not the 5,000 words before it.</p>
+<h3 id="fenced-code-block-handling">Fenced Code Block Handling</h3>
+<p>Fenced code blocks (triple backticks) deserve special treatment because they are the most common "long-running open block" in AI agent output. The agent frequently generates multi-line code, and the user needs to see syntax highlighting as the code streams.</p>
+<p>The solution: treat an opening <code>```</code> as the start of a code block immediately. Apply syntax highlighting to content as it arrives. Show a visual indicator (dimmed bottom border) that the block is still open. When the closing <code>```</code> arrives, finalize the block and update the border to solid.</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">renderStreamingCodeBlock</span><span class="p">(</span><span class="nx">block</span><span class="o">:</span><span class="w"> </span><span class="kt">OpenCodeBlock</span><span class="p">,</span><span class="w"> </span><span class="nx">width</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">Box</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="o">&lt;</span><span class="nx">Box</span><span class="w"> </span><span class="nx">flexDirection</span><span class="o">=</span><span class="s2">&quot;column&quot;</span><span class="w"> </span><span class="nx">borderStyle</span><span class="o">=</span><span class="p">{</span><span class="nx">block</span><span class="p">.</span><span class="nx">closed</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s2">&quot;single&quot;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;single&quot;</span><span class="p">}</span><span class="o">&gt;</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="nx">Box</span><span class="o">&gt;</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="nx">Text</span><span class="w"> </span><span class="nx">dimColor</span><span class="o">&gt;</span><span class="p">{</span><span class="nx">block</span><span class="p">.</span><span class="nx">language</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="s1">&#39;code&#39;</span><span class="p">}</span><span class="o">&lt;</span><span class="err">/Text&gt;</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="nx">Box</span><span class="o">&gt;</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="nx">Text</span><span class="o">&gt;</span><span class="p">{</span><span class="nx">highlightSyntax</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">content</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">language</span><span class="p">)}</span><span class="o">&lt;</span><span class="err">/Text&gt;</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+<span class="w">      </span><span class="p">{</span><span class="o">!</span><span class="nx">block</span><span class="p">.</span><span class="nx">closed</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="nx">Box</span><span class="o">&gt;</span>
+<span class="w">          </span><span class="o">&lt;</span><span class="nx">Text</span><span class="w"> </span><span class="nx">dimColor</span><span class="o">&gt;</span><span class="p">{</span><span class="s1">&#39;...&#39;</span><span class="p">}</span><span class="o">&lt;</span><span class="sr">/Text&gt;  {/</span><span class="o">*</span><span class="w"> </span><span class="nx">Streaming</span><span class="w"> </span><span class="nx">indicator</span><span class="w"> </span><span class="o">*</span><span class="err">/}</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+<span class="w">      </span><span class="p">)}</span>
+<span class="w">    </span><span class="o">&lt;</span><span class="err">/Box&gt;</span>
+<span class="w">  </span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This gives the user immediate visual feedback that code is being generated, with proper highlighting, without waiting for the block to complete.</p>
+<hr />
+<h2 id="275-the-rendering-pipeline">27.5 The Rendering Pipeline</h2>
+<p>The full rendering pipeline transforms API tokens into terminal output through five stages:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">API</span><span class="w"> </span><span class="n">Token</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">Message</span><span class="w"> </span><span class="n">State</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">React</span><span class="w"> </span><span class="n">Component</span><span class="w"> </span><span class="n">Tree</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Virtual</span><span class="w"> </span><span class="n">DOM</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Yoga</span><span class="w"> </span><span class="n">Layout</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Character</span><span class="w"> </span><span class="n">Grid</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Terminal</span><span class="w"> </span><span class="n">Output</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e1f5fe</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">f3e5f5</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">f5f5f5</span>
+</code></pre></div>
+
+<p><strong>Stage 1: API Token to Message State.</strong> Tokens arrive via SSE. The stream buffer accumulates them, debouncing at 16ms intervals to batch multiple tokens into a single state update. This prevents render thrashing -- 50-100 tokens per second would otherwise trigger 50-100 re-renders.</p>
+<p><strong>Stage 2: Message State to React Component Tree.</strong> State changes trigger React reconciliation. The MessageList component receives the updated messages array. Virtual scrolling (Section 27.6) filters to only the visible range. Each visible message maps to its component type: UserMessage, AssistantMessage, SystemMessage.</p>
+<p><strong>Stage 3: React Component Tree to Virtual DOM / Yoga Layout.</strong> React's reconciler creates or updates virtual DOM nodes. The Ink fork maps these to Yoga layout nodes. Yoga computes flexbox positions for every element -- widths, heights, offsets relative to parent. This happens in a single <code>calculateLayout()</code> call, typically completing in under 2ms.</p>
+<p><strong>Stage 4: Virtual DOM to Character Grid.</strong> The renderer traverses the laid-out tree, writing text content at computed positions into a two-dimensional character array. ANSI escape sequences for colors, bold, and underline are applied through composable transform functions. Overflow clipping masks content that extends beyond its container. Borders are drawn as Unicode box-drawing characters.</p>
+<p><strong>Stage 5: Character Grid to Terminal Output.</strong> The character grid is serialized to a string. A differential renderer compares with the previous frame's output. If identical, no write occurs. If different, ANSI erase-lines commands clear the previous output and the new content is written. A throttle (32ms leading+trailing) ensures no more than 30 terminal writes per second.</p>
+<h3 id="the-performance-budget">The Performance Budget</h3>
+<p>At 30fps, each frame has ~33ms:</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Typical Duration</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>React reconciliation</td>
+<td>&lt; 1ms</td>
+<td>Minimal with memoization</td>
+</tr>
+<tr>
+<td>Yoga layout</td>
+<td>&lt; 2ms</td>
+<td>Fast even for hundreds of nodes</td>
+</tr>
+<tr>
+<td>Tree-to-grid rendering</td>
+<td>1-5ms</td>
+<td>Scales with visible content</td>
+</tr>
+<tr>
+<td>Grid serialization</td>
+<td>2-10ms</td>
+<td>Scales with terminal dimensions</td>
+</tr>
+<tr>
+<td>Terminal write</td>
+<td>1-5ms</td>
+<td>Depends on diff size</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>5-23ms</strong></td>
+<td><strong>Under 33ms budget</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The bottleneck is grid serialization for large terminals. A 200-column by 50-row terminal produces 10,000 characters per frame. Each character must be tokenized for ANSI awareness. This is where the rendering budget gets tight on older hardware.</p>
+<hr />
+<h2 id="276-virtual-scrolling">27.6 Virtual Scrolling</h2>
+<p>A Claude Code conversation can reach 10,000+ rendered lines over a session. Rendering all of them every frame would blow the performance budget. Virtual scrolling solves this by rendering only the lines visible in the viewport, plus a small buffer for smooth scrolling.</p>
+<h3 id="core-data-structure">Core Data Structure</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">ScrollState</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">offset</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w">         </span><span class="c1">// Lines scrolled from top</span>
+<span class="w">  </span><span class="nx">totalLines</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w">     </span><span class="c1">// Total rendered lines across all messages</span>
+<span class="w">  </span><span class="nx">viewportHeight</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w"> </span><span class="c1">// Visible rows in terminal</span>
+<span class="p">}</span>
+
+<span class="c1">// Derived values</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">visibleStart</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">offset</span><span class="p">;</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">visibleEnd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="nx">offset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">viewportHeight</span><span class="p">,</span><span class="w"> </span><span class="nx">totalLines</span><span class="p">);</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">maxOffset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="nx">totalLines</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">viewportHeight</span><span class="p">);</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">isAtBottom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">offset</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">maxOffset</span><span class="p">;</span>
+</code></pre></div>
+
+<h3 id="the-auto-scroll-contract">The Auto-Scroll Contract</h3>
+<p>Auto-scroll is the behavior users expect but never think about:</p>
+<ol>
+<li><strong>Starts ON.</strong> New content snaps the viewport to the bottom.</li>
+<li><strong>Any upward scroll disables it.</strong> Even one line up.</li>
+<li><strong>Scrolling to the exact bottom re-enables it.</strong> <code>offset &gt;= maxOffset</code>.</li>
+<li><strong>Explicit "go to bottom" shortcut forces it on.</strong> Cmd+End or <code>G</code> in vim mode.</li>
+</ol>
+<p>The critical edge case: when streaming content arrives while the user is scrolled up, <code>totalLines</code> increases but <code>offset</code> stays fixed. A subtle indicator shows "N new lines below." Only when they scroll down far enough does auto-scroll re-engage.</p>
+<h3 id="viewport-sliced-rendering">Viewport-Sliced Rendering</h3>
+<p>The performance win comes from skipping layout computation for off-screen messages:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">computeVisibleMessages</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">messages</span><span class="o">:</span><span class="w"> </span><span class="kt">Message</span><span class="p">[],</span>
+<span class="w">  </span><span class="nx">visibleRange</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">start</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w"> </span><span class="nx">end</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">},</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">RenderedMessage</span><span class="p">[]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">result</span><span class="o">:</span><span class="w"> </span><span class="kt">RenderedMessage</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[];</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">lineAccumulator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span>
+
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">msg</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">messages</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">msgEnd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">lineAccumulator</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">msg</span><span class="p">.</span><span class="nx">renderedHeight</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Skip messages entirely above viewport</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">msgEnd</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="nx">visibleRange</span><span class="p">.</span><span class="nx">start</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">lineAccumulator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">msgEnd</span><span class="p">;</span>
+<span class="w">      </span><span class="k">continue</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// Stop once we pass below viewport</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">lineAccumulator</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">visibleRange</span><span class="p">.</span><span class="nx">end</span><span class="p">)</span><span class="w"> </span><span class="k">break</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Partially visible: slice the rendered lines</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">sliceStart</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="nx">visibleRange</span><span class="p">.</span><span class="nx">start</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">lineAccumulator</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">sliceEnd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">renderedHeight</span><span class="p">,</span><span class="w"> </span><span class="nx">visibleRange</span><span class="p">.</span><span class="nx">end</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">lineAccumulator</span><span class="p">);</span>
+
+<span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span>
+<span class="w">      </span><span class="p">...</span><span class="nx">renderMessage</span><span class="p">(</span><span class="nx">msg</span><span class="p">),</span>
+<span class="w">      </span><span class="nx">lines</span><span class="o">:</span><span class="w"> </span><span class="kt">renderMessage</span><span class="p">(</span><span class="nx">msg</span><span class="p">).</span><span class="nx">lines</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="nx">sliceStart</span><span class="p">,</span><span class="w"> </span><span class="nx">sliceEnd</span><span class="p">),</span>
+<span class="w">    </span><span class="p">});</span>
+
+<span class="w">    </span><span class="nx">lineAccumulator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">msgEnd</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">result</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>A message that renders to 500 lines of markdown but is only partially visible (lines 490-500 in the viewport) produces only 10 line objects for the layout engine. Without slicing, every frame would compute layout for all 500 lines and discard 490.</p>
+<h3 id="pre-computing-heights">Pre-Computing Heights</h3>
+<p>Virtual scrolling requires knowing each message's rendered height before rendering it. This is a chicken-and-egg problem: you need the height to decide visibility, but you need to render to know the height.</p>
+<p>The solution is a two-pass approach. When a message arrives or the terminal resizes, a lightweight estimator computes approximate heights based on content type and terminal width. The estimation is imprecise -- it does not account for complex table layouts or Unicode wide characters -- but the viewport buffer (rendering a few extra lines above and below) absorbs small mismatches.</p>
+<hr />
+<h2 id="277-responsive-terminal-design">27.7 Responsive Terminal Design</h2>
+<p>Terminals range from 40 columns (a narrow split pane) to 300+ columns (an ultra-wide monitor). The UI must adapt gracefully across this range without requiring user configuration.</p>
+<h3 id="breakpoint-architecture">Breakpoint Architecture</h3>
+<p>Rather than continuous scaling, the UI defines discrete breakpoints:</p>
+<div class="codehilite"><pre><span></span><code><span class="kr">type</span><span class="w"> </span><span class="nx">LayoutMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;narrow&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;normal&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;wide&#39;</span><span class="p">;</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">computeLayoutMode</span><span class="p">(</span><span class="nx">columns</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">LayoutMode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">columns</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">60</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;narrow&#39;</span><span class="p">;</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">columns</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">120</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;normal&#39;</span><span class="p">;</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;wide&#39;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Columns</th>
+<th>Adaptations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Narrow</strong> (&lt; 60)</td>
+<td>40-59</td>
+<td>No side panel, compact status line, truncated tool names, no borders on code blocks</td>
+</tr>
+<tr>
+<td><strong>Normal</strong> (60-119)</td>
+<td>60-119</td>
+<td>Full layout, optional side panel, standard status line</td>
+</tr>
+<tr>
+<td><strong>Wide</strong> (120+)</td>
+<td>120+</td>
+<td>Side panel default visible, expanded tool output, line numbers in code blocks</td>
+</tr>
+</tbody>
+</table>
+<h3 id="resize-handling">Resize Handling</h3>
+<p>Terminal resize events (SIGWINCH) trigger a re-layout. The resize handler debounces at 100ms to avoid layout thrashing during continuous resize (dragging a terminal edge):</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">useTerminalSize</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">size</span><span class="p">,</span><span class="w"> </span><span class="nx">setSize</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useState</span><span class="p">({</span>
+<span class="w">    </span><span class="nx">columns</span><span class="o">:</span><span class="w"> </span><span class="kt">process.stdout.columns</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">rows</span><span class="o">:</span><span class="w"> </span><span class="kt">process.stdout.rows</span><span class="p">,</span>
+<span class="w">  </span><span class="p">});</span>
+
+<span class="w">  </span><span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="nx">timer</span><span class="o">:</span><span class="w"> </span><span class="kt">NodeJS.Timeout</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">handler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">clearTimeout</span><span class="p">(</span><span class="nx">timer</span><span class="p">);</span>
+<span class="w">      </span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setTimeout</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">setSize</span><span class="p">({</span>
+<span class="w">          </span><span class="nx">columns</span><span class="o">:</span><span class="w"> </span><span class="kt">process.stdout.columns</span><span class="p">,</span>
+<span class="w">          </span><span class="nx">rows</span><span class="o">:</span><span class="w"> </span><span class="kt">process.stdout.rows</span><span class="p">,</span>
+<span class="w">        </span><span class="p">});</span>
+<span class="w">      </span><span class="p">},</span><span class="w"> </span><span class="mf">100</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="nx">process</span><span class="p">.</span><span class="nx">stdout</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;resize&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">handler</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">process</span><span class="p">.</span><span class="nx">stdout</span><span class="p">.</span><span class="nx">off</span><span class="p">(</span><span class="s1">&#39;resize&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">handler</span><span class="p">);</span>
+<span class="w">      </span><span class="nx">clearTimeout</span><span class="p">(</span><span class="nx">timer</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">  </span><span class="p">},</span><span class="w"> </span><span class="p">[]);</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">size</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>On resize, message heights are invalidated and re-estimated. The virtual scroll offset is adjusted to keep the same content visible (or as close as possible if the new terminal is too narrow to display the same amount of content).</p>
+<hr />
+<h2 id="278-the-staticdynamic-rendering-split">27.8 The Static/Dynamic Rendering Split</h2>
+<p>Terminal rendering has a unique challenge that browser rendering does not: the "page" is rewritten every frame. In a browser, old content stays on screen and new content appends below. In a terminal UI framework, the entire visible area is cleared and redrawn 30 times per second.</p>
+<p>This creates a problem for completed content. A tool result that finished rendering 30 seconds ago gets re-rendered every frame, consuming layout budget for content that will never change. The <code>&lt;Static&gt;</code> component pattern solves this by splitting rendering into two channels:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Dynamic Channel (redrawn every frame)&quot;</span>
+<span class="w">        </span><span class="n">DC</span><span class="p">[</span><span class="n">Current</span><span class="w"> </span><span class="n">streaming</span><span class="w"> </span><span class="n">message</span><span class="p">]</span>
+<span class="w">        </span><span class="n">DC2</span><span class="p">[</span><span class="n">Active</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">spinners</span><span class="p">]</span>
+<span class="w">        </span><span class="n">DC3</span><span class="p">[</span><span class="n">Input</span><span class="w"> </span><span class="n">area</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="n">line</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Static Channel (rendered once, pushed up)&quot;</span>
+<span class="w">        </span><span class="n">SC</span><span class="p">[</span><span class="n">Completed</span><span class="w"> </span><span class="n">messages</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SC2</span><span class="p">[</span><span class="n">Finished</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">results</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SC3</span><span class="p">[</span><span class="n">System</span><span class="w"> </span><span class="n">messages</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">DC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Terminal</span><span class="p">[</span><span class="n">Terminal</span><span class="w"> </span><span class="n">Output</span><span class="p">]</span>
+<span class="w">    </span><span class="n">SC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Terminal</span>
+</code></pre></div>
+
+<p><strong>Static content</strong> is rendered once and written permanently above the dynamic area. It scrolls up as new content arrives. It never re-renders.</p>
+<p><strong>Dynamic content</strong> is the live, changing portion of the UI. The streaming response, active spinners, the input area. This gets redrawn every frame.</p>
+<p>The boundary between static and dynamic shifts as the conversation progresses. When a streaming response completes, it moves from the dynamic channel to the static channel. When a tool finishes executing, its result moves to static. This keeps the per-frame rendering cost proportional to the amount of actively-changing content, not the conversation length.</p>
+<h3 id="implementation-pattern">Implementation Pattern</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">MessageDisplay</span><span class="p">({</span><span class="w"> </span><span class="nx">messages</span><span class="p">,</span><span class="w"> </span><span class="nx">streamingMessage</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// Completed messages render in Static (once, permanently)</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">completedMessages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">messages</span><span class="p">.</span><span class="nx">filter</span><span class="p">(</span><span class="nx">m</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;complete&#39;</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Active messages render in the dynamic area (every frame)</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">activeMessages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">messages</span><span class="p">.</span><span class="nx">filter</span><span class="p">(</span><span class="nx">m</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;streaming&#39;</span><span class="p">);</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="o">&lt;&gt;</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="nx">Static</span><span class="w"> </span><span class="nx">items</span><span class="o">=</span><span class="p">{</span><span class="nx">completedMessages</span><span class="p">}</span><span class="o">&gt;</span>
+<span class="w">        </span><span class="p">{(</span><span class="nx">msg</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="o">&lt;</span><span class="nx">CompletedMessage</span><span class="w"> </span><span class="nx">key</span><span class="o">=</span><span class="p">{</span><span class="nx">msg</span><span class="p">.</span><span class="nx">id</span><span class="p">}</span><span class="w"> </span><span class="nx">message</span><span class="o">=</span><span class="p">{</span><span class="nx">msg</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span><span class="p">}</span>
+<span class="w">      </span><span class="o">&lt;</span><span class="err">/Static&gt;</span>
+
+<span class="w">      </span><span class="p">{</span><span class="nx">activeMessages</span><span class="p">.</span><span class="nx">map</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="nx">StreamingMessage</span><span class="w"> </span><span class="nx">key</span><span class="o">=</span><span class="p">{</span><span class="nx">msg</span><span class="p">.</span><span class="nx">id</span><span class="p">}</span><span class="w"> </span><span class="nx">message</span><span class="o">=</span><span class="p">{</span><span class="nx">msg</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span>
+<span class="w">      </span><span class="p">))}</span>
+
+<span class="w">      </span><span class="p">{</span><span class="nx">streamingMessage</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="nx">StreamingMessage</span><span class="w"> </span><span class="nx">message</span><span class="o">=</span><span class="p">{</span><span class="nx">streamingMessage</span><span class="p">}</span><span class="w"> </span><span class="o">/&gt;</span>
+<span class="w">      </span><span class="p">)}</span>
+<span class="w">    </span><span class="o">&lt;</span><span class="err">/&gt;</span>
+<span class="w">  </span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>&lt;Static&gt;</code> component tracks which items it has already rendered and only processes new additions. Old items are never re-rendered, never re-laid-out, never re-measured. This is what makes a terminal UI viable for conversations that span thousands of messages.</p>
+<hr />
+<h2 id="279-the-component-model-reusable-ui-pieces">27.9 The Component Model: Reusable UI Pieces</h2>
+<p>Building a terminal UI from reusable components requires patterns adapted for the terminal's constraints.</p>
+<h3 id="message-components">Message Components</h3>
+<p>Each message role has its own component with a consistent interface:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">MessageProps</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">content</span><span class="o">:</span><span class="w"> </span><span class="kt">ContentBlock</span><span class="p">[];</span>
+<span class="w">  </span><span class="nx">width</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">collapsed?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// UserMessage: simple text with a role indicator</span>
+<span class="c1">// AssistantMessage: markdown rendering, code highlighting, tool blocks</span>
+<span class="c1">// SystemMessage: dimmed text, often single-line</span>
+<span class="c1">// ErrorMessage: red-highlighted with recovery actions</span>
+<span class="c1">// ToolResultMessage: collapsible output with truncation</span>
+</code></pre></div>
+
+<p>The <code>width</code> prop is critical. Every message component must know the available width for word wrapping. This flows from the terminal dimensions, through the layout engine, down to each component. Without explicit width, components cannot compute their rendered height, which breaks virtual scrolling.</p>
+<h3 id="tool-execution-components">Tool Execution Components</h3>
+<p>Tool executions are the most complex visual elements:</p>
+<div class="codehilite"><pre><span></span><code>Phase 1 (running):    spinner Reading src/auth.ts...  3.2s
+Phase 2 (complete):   checkmark Read src/auth.ts (142 lines, 3.2s)
+Phase 3 (expanded):   [full file content, syntax-highlighted]
+</code></pre></div>
+
+<p>The three phases are distinct rendering states managed by a single ToolUseBlock component. The transition from phase 1 to phase 2 is driven by a tool completion event. Phase 3 is user-triggered (clicking or pressing Enter on a collapsed result).</p>
+<p>The spinner animation cycles through Braille-pattern characters (<code>['braille1', 'braille2', ...]</code>) at 100ms intervals. Running tools are tracked by a dedicated <code>useToolTracking</code> hook that manages the spinner state and elapsed time display. When the tool completes, the spinner is replaced with a status icon and the elapsed time freezes.</p>
+<h3 id="the-statusline-component">The StatusLine Component</h3>
+<p>The status line at the bottom of the screen provides persistent context:</p>
+<div class="codehilite"><pre><span></span><code>mode | model | tokens used | cost | context % | git branch
+</code></pre></div>
+
+<p>This single-row component updates frequently but cheaply -- it is a simple horizontal flex layout with text content. The status line reads from multiple hooks (session state, cost tracking, git integration) but renders a single <code>&lt;Box&gt;</code> with <code>&lt;Text&gt;</code> children. Because it is always visible and frequently updated, it is kept in the dynamic rendering channel, never promoted to static.</p>
+<hr />
+<h2 id="2710-mermaid-full-component-architecture">27.10 Mermaid: Full Component Architecture</h2>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Application Shell&quot;</span>
+<span class="w">        </span><span class="n">App</span><span class="p">[</span><span class="n">App</span><span class="w"> </span><span class="n">Component</span><span class="p">]</span>
+<span class="w">        </span><span class="n">App</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Router</span><span class="p">[</span><span class="n">Screen</span><span class="w"> </span><span class="n">Router</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Router</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">REPL</span><span class="p">[</span><span class="n">REPL</span><span class="w"> </span><span class="n">Screen</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Router</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Settings</span><span class="p">[</span><span class="n">Settings</span><span class="w"> </span><span class="n">Screen</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Router</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Auth</span><span class="p">[</span><span class="n">Auth</span><span class="w"> </span><span class="n">Screen</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;REPL Screen (God Component)&quot;</span>
+<span class="w">        </span><span class="n">REPL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Hooks</span><span class="p">[</span><span class="mi">80</span><span class="o">+</span><span class="w"> </span><span class="n">Custom</span><span class="w"> </span><span class="n">Hooks</span><span class="p">]</span>
+
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Hook Categories&quot;</span>
+<span class="w">            </span><span class="n">H1</span><span class="p">[</span><span class="n">Input</span><span class="o">:</span><span class="w"> </span><span class="mi">12</span><span class="w"> </span><span class="n">hooks</span><span class="p">]</span>
+<span class="w">            </span><span class="n">H2</span><span class="p">[</span><span class="n">Scroll</span><span class="o">:</span><span class="w"> </span><span class="mi">6</span><span class="w"> </span><span class="n">hooks</span><span class="p">]</span>
+<span class="w">            </span><span class="n">H3</span><span class="p">[</span><span class="n">Typeahead</span><span class="o">:</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="n">hooks</span><span class="p">]</span>
+<span class="w">            </span><span class="n">H4</span><span class="p">[</span><span class="n">Streaming</span><span class="o">:</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="n">hooks</span><span class="p">]</span>
+<span class="w">            </span><span class="n">H5</span><span class="p">[</span><span class="n">Session</span><span class="o">:</span><span class="w"> </span><span class="mi">15</span><span class="w"> </span><span class="n">hooks</span><span class="p">]</span>
+<span class="w">            </span><span class="n">H6</span><span class="p">[</span><span class="n">Layout</span><span class="o">:</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="n">hooks</span><span class="p">]</span>
+<span class="w">            </span><span class="n">H7</span><span class="p">[</span><span class="n">Integration</span><span class="o">:</span><span class="w"> </span><span class="mi">19</span><span class="o">+</span><span class="w"> </span><span class="n">hooks</span><span class="p">]</span>
+<span class="w">        </span><span class="n">end</span>
+
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Rendered Components&quot;</span>
+<span class="w">            </span><span class="n">ML2</span><span class="p">[</span><span class="n">MessageList</span><span class="p">]</span>
+<span class="w">            </span><span class="n">PI2</span><span class="p">[</span><span class="n">PromptInput</span><span class="p">]</span>
+<span class="w">            </span><span class="n">PP2</span><span class="p">[</span><span class="n">PermissionPrompt</span><span class="p">]</span>
+<span class="w">            </span><span class="n">SP2</span><span class="p">[</span><span class="n">SidePanel</span><span class="p">]</span>
+<span class="w">            </span><span class="n">BTB2</span><span class="p">[</span><span class="n">BackgroundTaskBar</span><span class="p">]</span>
+<span class="w">            </span><span class="n">SL2</span><span class="p">[</span><span class="n">StatusLine</span><span class="p">]</span>
+<span class="w">            </span><span class="n">TAO2</span><span class="p">[</span><span class="n">TypeaheadOverlay</span><span class="p">]</span>
+<span class="w">        </span><span class="n">end</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Rendering Engine&quot;</span>
+<span class="w">        </span><span class="n">VDOM</span><span class="p">[</span><span class="n">Virtual</span><span class="w"> </span><span class="n">DOM</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Yoga</span><span class="p">[</span><span class="n">Yoga</span><span class="w"> </span><span class="n">Layout</span><span class="w"> </span><span class="n">Engine</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Grid</span><span class="p">[</span><span class="n">Character</span><span class="w"> </span><span class="n">Grid</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Diff</span><span class="p">[</span><span class="n">Differential</span><span class="w"> </span><span class="n">Renderer</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Term</span><span class="p">[</span><span class="n">Terminal</span><span class="w"> </span><span class="n">Write</span><span class="p">]</span>
+
+<span class="w">        </span><span class="n">VDOM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Yoga</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Grid</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Diff</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Term</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">Hooks</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ML2</span>
+<span class="w">    </span><span class="n">Hooks</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PI2</span>
+<span class="w">    </span><span class="n">ML2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VDOM</span>
+<span class="w">    </span><span class="n">PI2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VDOM</span>
+</code></pre></div>
+
+<hr />
+<h2 id="2711-performance-optimization-patterns">27.11 Performance Optimization Patterns</h2>
+<p>Five optimization patterns keep the UI responsive during heavy streaming:</p>
+<p><strong>1. Memoized message rendering.</strong> Each message is memoized by ID and terminal width. A message rendered in the previous frame returns its cached output instantly. Only new or resized messages trigger re-rendering.</p>
+<p><strong>2. Stream debouncing.</strong> Instead of re-rendering on every token (50-100/sec), the stream buffer batches tokens into 60fps render cycles (16ms). Multiple tokens arriving within one cycle produce a single state update.</p>
+<p><strong>3. Virtual scrolling.</strong> Only messages within the visible viewport (plus buffer) are laid out. A conversation with 500 messages but a 40-row viewport lays out ~45 rows of content.</p>
+<p><strong>4. Ref-based high-frequency state.</strong> Spinner positions, stream buffer text, and animation counters use <code>useRef</code> to avoid triggering reconciliation. A periodic tick reads all refs and triggers a single render.</p>
+<p><strong>5. Lazy tool result expansion.</strong> Tool results longer than 20 lines render as a collapsed summary. Expanding triggers a one-time full render that is then cached. Most tool results are never expanded.</p>
+<p>These optimizations compose. During streaming, the per-frame cost is: reconcile only the changed message (memoization), lay out only the visible viewport (virtual scroll), batch tokens (debouncing), skip spinner state updates from reconciliation (refs), and keep completed tool results collapsed (lazy expansion). The result is sub-16ms frame times even on modest hardware.</p>
+<hr />
+<h2 id="2712-design-lessons">27.12 Design Lessons</h2>
+<p>Building a terminal UI for an AI CLI agent teaches several lessons that transfer to any complex interactive system:</p>
+<p><strong>Centralize state when coordination dominates.</strong> If most state updates require knowing other state (scroll position depends on message count, which depends on streaming status, which depends on permission mode), centralizing in one component eliminates prop drilling and subscription patterns. The cost is a large file. The benefit is that every state transition is visible in one place.</p>
+<p><strong>Decompose behavior, not components.</strong> The 80+ hooks are the decomposition. Each is testable, reusable, and single-purpose. The component composes them. Terminal UIs cannot afford the layout overhead of deep component trees.</p>
+<p><strong>Optimize the hot path, tolerate the cold path.</strong> Streaming renders happen 60 times per second -- they must be fast. Initial conversation load happens once -- it can be slower. Message height computation happens on arrival -- it can be approximate. Optimize aggressively for the hot path, be relaxed about everything else.</p>
+<p><strong>The static/dynamic split is essential for long-running sessions.</strong> Without it, rendering cost grows linearly with conversation length. With it, cost is proportional to active content. This is the single most important optimization for an AI agent UI.</p>
+<p><strong>Declarative rendering eliminates a class of bugs.</strong> Every time you add a new UI element that updates independently (a new spinner, a new status indicator, a new overlay), the imperative approach requires updating every other element's redraw logic. The declarative approach just renders the new element -- the framework handles the composition. This is why React/Ink is worth the dependency cost.</p>
+<p>In Chapter 28, we zoom into the input system -- where keystrokes become commands, file mentions resolve to content, and the slash command router dispatches to 70+ registered handlers.</p>
+<div class="chapter-nav">
+  <a href="chapter-26.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-28.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

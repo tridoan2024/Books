@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 6: Session Lifecycle — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-07.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-6-session-lifecycle">Chapter 6: Session Lifecycle</h1>
+<h2 id="what-is-a-session">What Is a Session?</h2>
+<p>A session is the unit of continuity in a CLI agent. It begins when the user types <code>claude</code> and ends when they exit. Between those moments, the session accumulates state: conversation messages, tool results, file edits, cost tracking, and permission decisions. When the user types <code>claude --resume</code>, a previous session's state is reconstructed. When the process crashes, session data survives in append-only transcript files.</p>
+<p>This chapter examines the architecture of session management in Claude Code: how sessions are created, how their state is persisted, how they survive crashes, how they resume, and how they shut down. We'll pay particular attention to the Atomic Switch Pattern -- a coordination mechanism that prevents a class of bugs where session identity and session data directory can drift apart.</p>
+<hr />
+<h2 id="session-creation">Session Creation</h2>
+<p>Session creation happens in Phase 11 of the startup pipeline (Chapter 4). The critical data produced:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">initializeSession</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">state</span><span class="p">.</span><span class="nx">sessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">generateSessionId</span><span class="p">();</span><span class="w">  </span><span class="c1">// UUID v4</span>
+<span class="w">  </span><span class="nx">state</span><span class="p">.</span><span class="nx">sessionStartTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">();</span>
+
+<span class="w">  </span><span class="c1">// Derive transcript path from project identity</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">transcriptDir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">path</span><span class="p">.</span><span class="nx">join</span><span class="p">(</span>
+<span class="w">    </span><span class="nx">os</span><span class="p">.</span><span class="nx">homedir</span><span class="p">(),</span><span class="w"> </span><span class="s1">&#39;.claude&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;projects&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">hashProjectPath</span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">projectRoot</span><span class="p">),</span>
+<span class="w">    </span><span class="s1">&#39;sessions&#39;</span>
+<span class="w">  </span><span class="p">);</span>
+<span class="w">  </span><span class="nx">ensureDirSync</span><span class="p">(</span><span class="nx">transcriptDir</span><span class="p">);</span>
+<span class="w">  </span><span class="nx">state</span><span class="p">.</span><span class="nx">transcriptPath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">path</span><span class="p">.</span><span class="nx">join</span><span class="p">(</span>
+<span class="w">    </span><span class="nx">transcriptDir</span><span class="p">,</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">state</span><span class="p">.</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">.jsonl`</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Register in active sessions registry</span>
+<span class="w">  </span><span class="nx">registerActiveSession</span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">sessionId</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">pid</span><span class="o">:</span><span class="w"> </span><span class="kt">process.pid</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">cwd</span><span class="o">:</span><span class="w"> </span><span class="kt">state.cwd</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">startTime</span><span class="o">:</span><span class="w"> </span><span class="kt">state.sessionStartTime</span><span class="p">,</span>
+<span class="w">  </span><span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Three architectural decisions stand out:</p>
+<h3 id="uuid-v4-for-session-identity">UUID v4 for Session Identity</h3>
+<p>The session ID is a UUID v4 -- 128 bits of randomness. No timestamp component, no sequential counter. This means:</p>
+<ul>
+<li>Two sessions started simultaneously will never collide (collision probability: 2^-122).</li>
+<li>Session IDs don't leak timing information (useful for telemetry anonymization).</li>
+<li>Sessions can't be ordered by ID alone (the transcript file's modification time provides ordering).</li>
+</ul>
+<p>The alternative -- timestamp-based IDs like <code>2026-04-12T14:30:00-session-1</code> -- would be human-readable but create collision risk when sessions start within the same second. UUID v4 trades readability for uniqueness guarantees.</p>
+<h3 id="project-scoped-transcript-directory">Project-Scoped Transcript Directory</h3>
+<p>Transcripts are stored under a project-specific directory:</p>
+<div class="codehilite"><pre><span></span><code>~/.claude/projects/{hash(projectRoot)}/sessions/{sessionId}.jsonl
+</code></pre></div>
+
+<p>The <code>hashProjectPath()</code> function hashes the absolute path to produce a stable, filesystem-safe directory name. This scoping means:</p>
+<ul>
+<li>Each project has its own session history. <code>claude --resume</code> only shows sessions from the current project.</li>
+<li>Changing your working directory doesn't contaminate other projects' session lists.</li>
+<li>The hash prevents filesystem issues from long paths or special characters.</li>
+</ul>
+<p>The hash is a SHA-256 of the normalized, NFC-encoded project root path, truncated to 16 hex characters. This gives 2^64 unique directories -- sufficient to avoid collisions across a developer's entire career of projects.</p>
+<h3 id="active-session-registry">Active Session Registry</h3>
+<p>The <code>registerActiveSession()</code> call writes to <code>~/.claude/active_sessions.json</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;sessions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;a1b2c3d4-...&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;pid&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12345</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;cwd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/Users/dev/myproject&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;startTime&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1712956800000</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;e5f6g7h8-...&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;pid&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12346</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;cwd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/Users/dev/another-project&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;startTime&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1712956803000</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This registry enables three features:
+1. <strong>Concurrent session detection.</strong> When a new session starts, it checks for existing sessions in the same project. Multiple sessions in the same project can cause file conflicts.
+2. <strong>Bridge/remote-control discovery.</strong> The <code>claude remote-control</code> command uses this registry to find running sessions to connect to.
+3. <strong>Stale session cleanup.</strong> On startup, sessions whose PIDs no longer exist are pruned from the registry.</p>
+<hr />
+<h2 id="the-global-state-singleton">The Global State Singleton</h2>
+<p>As discussed in Chapter 3, Claude Code uses a global mutable state singleton rather than dependency injection. For session lifecycle, the relevant fields are:</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">classDiagram</span>
+<span class="w">    </span><span class="kd">class</span><span class="w"> </span><span class="nx">State</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">sessionId</span><span class="p">:</span><span class="w"> </span><span class="nx">SessionId</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">parentSessionId</span><span class="p">:</span><span class="w"> </span><span class="nx">SessionId</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nx">undefined</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">sessionProjectDir</span><span class="p">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nx">null</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">sessionSource</span><span class="p">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nx">undefined</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">originalCwd</span><span class="p">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">projectRoot</span><span class="p">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">cwd</span><span class="p">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">sessionStartTime</span><span class="p">:</span><span class="w"> </span><span class="nx">number</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">transcriptPath</span><span class="p">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">isInteractive</span><span class="p">:</span><span class="w"> </span><span class="nx">boolean</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">sessionTrustAccepted</span><span class="p">:</span><span class="w"> </span><span class="nx">boolean</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">sessionPersistenceDisabled</span><span class="p">:</span><span class="w"> </span><span class="nx">boolean</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">totalCostUSD</span><span class="p">:</span><span class="w"> </span><span class="nx">number</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">totalAPIDuration</span><span class="p">:</span><span class="w"> </span><span class="nx">number</span>
+<span class="w">        </span><span class="o">+</span><span class="nx">modelUsage</span><span class="p">:</span><span class="w"> </span><span class="nx">Record</span><span class="o">~</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">ModelUsage</span><span class="o">~</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">class</span><span class="w"> </span><span class="nx">SessionId</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">&lt;&lt;</span><span class="nx">branded</span><span class="w"> </span><span class="k">type</span><span class="o">&gt;&gt;</span>
+<span class="w">        </span><span class="kt">string</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="o">~</span><span class="nx">__sessionId</span><span class="o">~</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">State</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">SessionId</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="nx">uses</span>
+</code></pre></div>
+
+<h3 id="90-fields-130-accessor-functions">90+ Fields, ~130 Accessor Functions</h3>
+<p>The state object contains over 90 fields. For session management, the key insight is the separation into three categories:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Examples</th>
+<th>Lifetime</th>
+<th>Persisted?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Identity</td>
+<td><code>sessionId</code>, <code>parentSessionId</code>, <code>sessionSource</code></td>
+<td>Session</td>
+<td>As transcript metadata</td>
+</tr>
+<tr>
+<td>Navigation</td>
+<td><code>originalCwd</code>, <code>projectRoot</code>, <code>cwd</code></td>
+<td>Session</td>
+<td>As transcript metadata</td>
+</tr>
+<tr>
+<td>Accumulators</td>
+<td><code>totalCostUSD</code>, <code>modelUsage</code>, <code>totalLinesAdded</code></td>
+<td>Session</td>
+<td>Computed from transcript</td>
+</tr>
+<tr>
+<td>Ephemeral</td>
+<td><code>turnHookDurationMs</code>, <code>pendingPostCompaction</code></td>
+<td>Turn or moment</td>
+<td>Never</td>
+</tr>
+</tbody>
+</table>
+<p>Identity fields are set once at session creation (or switch) and don't change. Navigation fields are set at creation but <code>cwd</code> updates when the user changes directories. Accumulators grow monotonically throughout the session. Ephemeral fields reset per-turn or per-event.</p>
+<h3 id="why-global-state-over-di-for-sessions">Why Global State Over DI for Sessions</h3>
+<p>The argument from Chapter 3 applies directly to session state. Consider how many layers need to access <code>sessionId</code>:</p>
+<ul>
+<li>The API client (to correlate requests)</li>
+<li>Telemetry events (to group by session)</li>
+<li>The transcript writer (to name the file)</li>
+<li>The permission system (to log decisions)</li>
+<li>The cost tracker (to attribute spending)</li>
+<li>The hook system (to pass session context)</li>
+<li>The bridge/remote-control (to identify the session)</li>
+<li>The resume system (to match session IDs)</li>
+</ul>
+<p>Threading <code>sessionId</code> through 8+ subsystems via constructor parameters would require a <code>SessionContext</code> object passed everywhere. In a single-process CLI with one session at a time, this is ceremony without benefit. The global accessor <code>getSessionId()</code> is simpler, greppable, and sufficient.</p>
+<p>The trade-off materializes in testing: every test must call <code>resetStateForTests()</code> to clean up session state. But as Chapter 3 describes, that pattern works -- Claude Code has thousands of tests using it.</p>
+<hr />
+<h2 id="jsonl-transcript-persistence">JSONL Transcript Persistence</h2>
+<p>Every conversation message, tool call, tool result, and state change is recorded in a JSONL (JSON Lines) transcript file. JSONL was chosen over alternatives for three architectural reasons:</p>
+<h3 id="why-jsonl">Why JSONL?</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Write Pattern&quot;</span>
+<span class="w">        </span><span class="n">A</span><span class="p">[</span><span class="n">Message</span><span class="w"> </span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">Append</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">file</span><span class="p">]</span>
+<span class="w">        </span><span class="n">B</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Call</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span>
+<span class="w">        </span><span class="n">C</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Result</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span>
+<span class="w">        </span><span class="n">D</span><span class="p">[</span><span class="n">State</span><span class="w"> </span><span class="n">Change</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;transcript.jsonl&quot;</span>
+<span class="w">        </span><span class="n">L1</span><span class="p">[</span><span class="s">&quot;{&#39;type&#39;:&#39;message&#39;,&#39;role&#39;:&#39;user&#39;,&#39;content&#39;:&#39;Fix auth.ts&#39;}</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L2</span><span class="p">[</span><span class="s">&quot;{&#39;type&#39;:&#39;tool_use&#39;,&#39;name&#39;:&#39;Read&#39;,&#39;input&#39;:{&#39;path&#39;:&#39;auth.ts&#39;}}</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L3</span><span class="p">[</span><span class="s">&quot;{&#39;type&#39;:&#39;tool_result&#39;,&#39;output&#39;:&#39;...&#39;}</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">L4</span><span class="p">[</span><span class="s">&quot;{&#39;type&#39;:&#39;message&#39;,&#39;role&#39;:&#39;assistant&#39;,&#39;content&#39;:&#39;Found the bug...&#39;}</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L1</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L2</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L3</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L4</span>
+</code></pre></div>
+
+<p><strong>1. Crash safety.</strong> Each entry is an independent JSON object followed by a newline. An append of <code>{...}\n</code> is atomic on most filesystems for reasonable message sizes (under the filesystem's block size, typically 4KB). If the process crashes mid-write, at most one partial line is corrupted -- all previous entries are intact. Compare this to a single JSON file (<code>[{...}, {...}]</code>) where a crash mid-write can corrupt the entire array.</p>
+<p><strong>2. Streaming writes.</strong> The transcript writer never needs to read the existing file. Each entry is appended:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">appendToTranscript</span><span class="p">(</span><span class="nx">entry</span><span class="o">:</span><span class="w"> </span><span class="kt">TranscriptEntry</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">(</span><span class="nx">entry</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s1">&#39;\n&#39;</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">fs</span><span class="p">.</span><span class="nx">appendFileSync</span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">transcriptPath</span><span class="p">,</span><span class="w"> </span><span class="nx">line</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;utf-8&#39;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>No read-modify-write cycle. No file locking. The <code>appendFileSync</code> call is the entire persistence operation. This is O(1) per entry regardless of transcript size.</p>
+<p><strong>3. Replay-friendly.</strong> Resuming a session means reading the transcript line by line and reconstructing the conversation:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">loadTranscript</span><span class="p">(</span><span class="nx">path</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">TranscriptEntry</span><span class="p">[]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">fs</span><span class="p">.</span><span class="nx">readFileSync</span><span class="p">(</span><span class="nx">path</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;utf-8&#39;</span><span class="p">);</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">content</span>
+<span class="w">    </span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="s1">&#39;\n&#39;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="nx">filter</span><span class="p">(</span><span class="nx">line</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">line</span><span class="p">.</span><span class="nx">trim</span><span class="p">().</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="nx">map</span><span class="p">(</span><span class="nx">line</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">parse</span><span class="p">(</span><span class="nx">line</span><span class="p">);</span>
+<span class="w">      </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span><span class="w">  </span><span class="c1">// Skip corrupted lines</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="nx">filter</span><span class="p">(</span><span class="nb">Boolean</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Corrupted lines (from crashes) are silently skipped. The transcript degrades gracefully -- a crash during a tool result write means the result is lost, but all previous messages survive.</p>
+<h3 id="transcript-entry-types">Transcript Entry Types</h3>
+<p>Each JSONL entry is a discriminated union:</p>
+<div class="codehilite"><pre><span></span><code><span class="kr">type</span><span class="w"> </span><span class="nx">TranscriptEntry</span><span class="w"> </span><span class="o">=</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;session_start&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w"> </span><span class="nx">cwd</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;message&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">role</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;user&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;assistant&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">content</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;tool_use&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="kt">unknown</span><span class="p">;</span><span class="w"> </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;tool_result&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">toolUseId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">output</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">isError</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w"> </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;state_change&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">oldValue</span><span class="o">:</span><span class="w"> </span><span class="kt">unknown</span><span class="p">;</span><span class="w"> </span><span class="nx">newValue</span><span class="o">:</span><span class="w"> </span><span class="kt">unknown</span><span class="p">;</span><span class="w"> </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;session_end&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w"> </span><span class="nx">totalCost</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w"> </span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+
+<p>Every entry carries a <code>timestamp</code>. This enables:
+- <strong>Duration computation.</strong> Time between <code>tool_use</code> and <code>tool_result</code> is the tool's execution time.
+- <strong>Idle detection.</strong> Long gaps between entries indicate the user was away.
+- <strong>Replay pacing.</strong> A debugger could replay the session in real-time using timestamps.</p>
+<h3 id="comparison-with-alternatives">Comparison with Alternatives</h3>
+<table>
+<thead>
+<tr>
+<th>Format</th>
+<th>Crash Safety</th>
+<th>Write Performance</th>
+<th>Resume Cost</th>
+<th>Space Efficiency</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>JSONL</strong> (chosen)</td>
+<td>Excellent (line-level)</td>
+<td>O(1) append</td>
+<td>O(n) read + parse</td>
+<td>Moderate</td>
+</tr>
+<tr>
+<td>Single JSON file</td>
+<td>Poor (whole-file corrupt)</td>
+<td>O(n) rewrite</td>
+<td>O(n) read + parse</td>
+<td>Good</td>
+</tr>
+<tr>
+<td>SQLite</td>
+<td>Excellent (WAL mode)</td>
+<td>O(1) insert</td>
+<td>O(1) query</td>
+<td>Excellent</td>
+</tr>
+<tr>
+<td>Binary protobuf</td>
+<td>Excellent (length-prefixed)</td>
+<td>O(1) append</td>
+<td>O(n) read</td>
+<td>Best</td>
+</tr>
+</tbody>
+</table>
+<p>JSONL wins on simplicity. SQLite would give better query performance (e.g., "find all sessions where I used the Edit tool") but adds a native dependency and 15ms to startup. Binary protobuf would be more space-efficient but unreadable without tools. JSONL files are human-readable, debuggable with <code>cat</code> and <code>jq</code>, and require zero dependencies.</p>
+<hr />
+<h2 id="session-resume">Session Resume</h2>
+<p>When the user runs <code>claude --resume</code>, the system reconstructs a previous session:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">User</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CLI</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">CLI</span><span class="w"> </span><span class="n">Parser</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Resume</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Resume</span><span class="w"> </span><span class="n">System</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">State</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Global</span><span class="w"> </span><span class="n">State</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Transcript</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Transcript</span><span class="w"> </span><span class="n">File</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">REPL</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">REPL</span>
+
+<span class="w">    </span><span class="n">User</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">claude</span><span class="w"> </span><span class="o">--</span><span class="n">resume</span><span class="w"> </span><span class="p">[</span><span class="n">sessionId</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">Resume</span><span class="p">:</span><span class="w"> </span><span class="n">initResume</span><span class="p">(</span><span class="n">sessionId</span><span class="err">?</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">alt</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">sessionId</span><span class="w"> </span><span class="n">specified</span>
+<span class="w">        </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">Resume</span><span class="p">:</span><span class="w"> </span><span class="n">List</span><span class="w"> </span><span class="n">recent</span><span class="w"> </span><span class="n">sessions</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">project</span>
+<span class="w">        </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">User</span><span class="p">:</span><span class="w"> </span><span class="n">Show</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="n">picker</span>
+<span class="w">        </span><span class="n">User</span><span class="o">-&gt;&gt;</span><span class="n">Resume</span><span class="p">:</span><span class="w"> </span><span class="n">Select</span><span class="w"> </span><span class="n">session</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">Transcript</span><span class="p">:</span><span class="w"> </span><span class="n">loadTranscript</span><span class="p">(</span><span class="n">sessionId</span><span class="o">.</span><span class="n">jsonl</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Transcript</span><span class="o">--&gt;&gt;</span><span class="n">Resume</span><span class="p">:</span><span class="w"> </span><span class="n">TranscriptEntry</span><span class="p">[]</span>
+
+<span class="w">    </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">State</span><span class="p">:</span><span class="w"> </span><span class="n">switchSession</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">projectDir</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">State</span><span class="p">:</span><span class="w"> </span><span class="n">Atomic</span><span class="w"> </span><span class="n">update</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">sessionId</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">projectDir</span>
+
+<span class="w">    </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">Resume</span><span class="p">:</span><span class="w"> </span><span class="n">Reconstruct</span><span class="w"> </span><span class="n">conversation</span><span class="w"> </span><span class="n">messages</span>
+<span class="w">    </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">Resume</span><span class="p">:</span><span class="w"> </span><span class="n">Reconstruct</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">state</span>
+<span class="w">    </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">Resume</span><span class="p">:</span><span class="w"> </span><span class="n">Compute</span><span class="w"> </span><span class="n">accumulated</span><span class="w"> </span><span class="n">metrics</span>
+
+<span class="w">    </span><span class="n">Resume</span><span class="o">-&gt;&gt;</span><span class="n">REPL</span><span class="p">:</span><span class="w"> </span><span class="n">Launch</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">pre</span><span class="o">-</span><span class="n">populated</span><span class="w"> </span><span class="n">state</span>
+<span class="w">    </span><span class="n">REPL</span><span class="o">-&gt;&gt;</span><span class="n">User</span><span class="p">:</span><span class="w"> </span><span class="n">Show</span><span class="w"> </span><span class="n">conversation</span><span class="w"> </span><span class="n">history</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">cursor</span>
+</code></pre></div>
+
+<h3 id="project-directory-anchoring">Project Directory Anchoring</h3>
+<p>A resumed session must operate in the same project context as the original session. The <code>session_start</code> transcript entry records the original <code>cwd</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// At session start</span>
+<span class="nx">appendToTranscript</span><span class="p">({</span>
+<span class="w">  </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;session_start&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="kt">state.sessionId</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">Date.now</span><span class="p">(),</span>
+<span class="w">  </span><span class="nx">cwd</span><span class="o">:</span><span class="w"> </span><span class="kt">state.projectRoot</span><span class="p">,</span>
+<span class="p">});</span>
+</code></pre></div>
+
+<p>When resuming:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">resumeSession</span><span class="p">(</span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">transcript</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">loadTranscript</span><span class="p">(</span><span class="nx">sessionId</span><span class="p">);</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">startEntry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">transcript</span><span class="p">.</span><span class="nx">find</span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;session_start&#39;</span><span class="p">);</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">startEntry</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Anchor to original project directory</span>
+<span class="w">    </span><span class="nx">switchSession</span><span class="p">(</span>
+<span class="w">      </span><span class="nx">sessionId</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">SessionId</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">startEntry</span><span class="p">.</span><span class="nx">cwd</span><span class="w">  </span><span class="c1">// Original project directory</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>switchSession()</code> call is the Atomic Switch Pattern (detailed below) -- it updates both <code>sessionId</code> and <code>sessionProjectDir</code> together, preventing them from drifting apart.</p>
+<h3 id="session-listing-and-selection">Session Listing and Selection</h3>
+<p>When <code>--resume</code> is called without a specific session ID, the system lists recent sessions:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">listRecentSessions</span><span class="p">(</span><span class="nx">projectDir</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">SessionSummary</span><span class="p">[]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">sessionsDir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">path</span><span class="p">.</span><span class="nx">join</span><span class="p">(</span>
+<span class="w">    </span><span class="nx">os</span><span class="p">.</span><span class="nx">homedir</span><span class="p">(),</span><span class="w"> </span><span class="s1">&#39;.claude&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;projects&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">hashProjectPath</span><span class="p">(</span><span class="nx">projectDir</span><span class="p">),</span>
+<span class="w">    </span><span class="s1">&#39;sessions&#39;</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">fs</span><span class="p">.</span><span class="nx">readdirSync</span><span class="p">(</span><span class="nx">sessionsDir</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="nx">filter</span><span class="p">(</span><span class="nx">f</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">f</span><span class="p">.</span><span class="nx">endsWith</span><span class="p">(</span><span class="s1">&#39;.jsonl&#39;</span><span class="p">))</span>
+<span class="w">    </span><span class="p">.</span><span class="nx">map</span><span class="p">(</span><span class="nx">f</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">transcript</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">loadTranscript</span><span class="p">(</span><span class="nx">path</span><span class="p">.</span><span class="nx">join</span><span class="p">(</span><span class="nx">sessionsDir</span><span class="p">,</span><span class="w"> </span><span class="nx">f</span><span class="p">));</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">transcript</span><span class="p">.</span><span class="nx">find</span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;session_start&#39;</span><span class="p">);</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">transcript</span><span class="p">.</span><span class="nx">find</span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;session_end&#39;</span><span class="p">);</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">firstMessage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">transcript</span><span class="p">.</span><span class="nx">find</span><span class="p">(</span>
+<span class="w">        </span><span class="nx">e</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;message&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">role</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;user&#39;</span>
+<span class="w">      </span><span class="p">);</span>
+
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="kt">f.replace</span><span class="p">(</span><span class="s1">&#39;.jsonl&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">),</span>
+<span class="w">        </span><span class="nx">startTime</span><span class="o">:</span><span class="w"> </span><span class="kt">start?.timestamp</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">endTime</span><span class="o">:</span><span class="w"> </span><span class="kt">end?.timestamp</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">preview</span><span class="o">:</span><span class="w"> </span><span class="kt">firstMessage?.content.slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">80</span><span class="p">),</span>
+<span class="w">        </span><span class="nx">messageCount</span><span class="o">:</span><span class="w"> </span><span class="kt">transcript.filter</span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;message&#39;</span><span class="p">).</span><span class="nx">length</span><span class="p">,</span>
+<span class="w">      </span><span class="p">};</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="nx">sort</span><span class="p">((</span><span class="nx">a</span><span class="p">,</span><span class="w"> </span><span class="nx">b</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="p">.</span><span class="nx">startTime</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="p">(</span><span class="nx">a</span><span class="p">.</span><span class="nx">startTime</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">));</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Sessions are sorted by start time (most recent first) and displayed with a preview of the first user message. This gives the user enough context to identify which session they want to resume.</p>
+<hr />
+<h2 id="the-atomic-switch-pattern">The Atomic Switch Pattern</h2>
+<p>The <code>switchSession()</code> function is one of the most important coordination mechanisms in the codebase. It solves a bug class where two related pieces of state can drift apart:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">switchSession</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="kt">SessionId</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">projectDir</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// 1. Clean up outgoing session</span>
+<span class="w">  </span><span class="nx">STATE</span><span class="p">.</span><span class="nx">planSlugCache</span><span class="p">.</span><span class="ow">delete</span><span class="p">(</span><span class="nx">STATE</span><span class="p">.</span><span class="nx">sessionId</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// 2. Atomically update both fields</span>
+<span class="w">  </span><span class="nx">STATE</span><span class="p">.</span><span class="nx">sessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">sessionId</span><span class="p">;</span>
+<span class="w">  </span><span class="nx">STATE</span><span class="p">.</span><span class="nx">sessionProjectDir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">projectDir</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// 3. Notify listeners</span>
+<span class="w">  </span><span class="nx">sessionSwitched</span><span class="p">.</span><span class="nx">emit</span><span class="p">(</span><span class="nx">sessionId</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="why-atomic">Why Atomic?</h3>
+<p><code>sessionId</code> and <code>sessionProjectDir</code> are semantically coupled. The session ID determines which transcript file to read; the project directory determines where to look for that file. If they're updated separately, a race condition exists:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// BAD: Non-atomic update</span>
+<span class="n">setSessionId</span><span class="p">(</span><span class="n">newId</span><span class="p">);</span><span class="w">          </span><span class="c1">// sessionId = &quot;abc-123&quot;</span>
+<span class="c1">// &lt;-- Another module reads sessionId here</span>
+<span class="c1">//     but sessionProjectDir still points to the OLD directory</span>
+<span class="c1">//     → looks for abc-123.jsonl in the wrong place → crash</span>
+<span class="n">setSessionProjectDir</span><span class="p">(</span><span class="n">newDir</span><span class="p">);</span><span class="w"> </span><span class="c1">// sessionProjectDir = &quot;/new/dir&quot;</span>
+</code></pre></div>
+
+<p>With <code>switchSession()</code>, both fields update in a single function call. There's no intermediate state where one is new and the other is old. The comment in the source (referencing internal bug <code>CC-34</code>) says these fields "cannot drift out of sync."</p>
+<h3 id="no-separate-setters">No Separate Setters</h3>
+<p>There is no <code>setSessionId()</code> or <code>setSessionProjectDir()</code> exposed from the state module. The only way to change either field is through <code>switchSession()</code>. This is enforced by API design, not runtime checks -- the accessor functions simply don't exist.</p>
+<p>This is a pattern worth generalizing: <strong>when two fields must always change together, expose a single function that changes both</strong>. Don't rely on documentation or code review to enforce the invariant. Make the invariant structurally impossible to violate.</p>
+<h3 id="signal-notification">Signal Notification</h3>
+<p>The <code>sessionSwitched.emit(sessionId)</code> call notifies listeners that the session changed. Consumers include:</p>
+<table>
+<thead>
+<tr>
+<th>Listener</th>
+<th>Reaction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Concurrent sessions manager</td>
+<td>Updates PID file with new session ID</td>
+</tr>
+<tr>
+<td>Transcript writer</td>
+<td>Opens new transcript file</td>
+</tr>
+<tr>
+<td>Telemetry</td>
+<td>Flushes old session events, starts new correlation</td>
+</tr>
+<tr>
+<td>MCP connections</td>
+<td>Re-announces session identity to servers</td>
+</tr>
+<tr>
+<td>REPL header</td>
+<td>Updates session display</td>
+</tr>
+</tbody>
+</table>
+<p>The signal pattern (Chapter 3) decouples the state module from its consumers. <code>bootstrap/state.ts</code> doesn't import any of these modules -- it just emits a signal, and interested parties subscribe.</p>
+<hr />
+<h2 id="crash-recovery">Crash Recovery</h2>
+<p>When the process terminates unexpectedly (SIGKILL, out-of-memory, power failure), what survives?</p>
+<h3 id="what-survives">What Survives</h3>
+<table>
+<thead>
+<tr>
+<th>Data</th>
+<th>Survival Mechanism</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Conversation history</td>
+<td>JSONL transcript (all completed writes)</td>
+</tr>
+<tr>
+<td>File edits made by tools</td>
+<td>Already written to disk</td>
+</tr>
+<tr>
+<td>Session identity</td>
+<td>Transcript's <code>session_start</code> entry</td>
+</tr>
+<tr>
+<td>Original project directory</td>
+<td>Transcript's <code>session_start</code> entry</td>
+</tr>
+<tr>
+<td>Cost and token counts</td>
+<td>Can be recomputed from transcript entries</td>
+</tr>
+<tr>
+<td>Active session registry</td>
+<td>Stale entry cleaned on next startup</td>
+</tr>
+</tbody>
+</table>
+<h3 id="what-doesnt-survive">What Doesn't Survive</h3>
+<table>
+<thead>
+<tr>
+<th>Data</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>In-flight API response</td>
+<td>Streaming response buffer isn't persisted until complete</td>
+</tr>
+<tr>
+<td>Pending tool execution</td>
+<td>Mid-execution tool state isn't checkpointed</td>
+</tr>
+<tr>
+<td>Unsaved REPL input</td>
+<td>Terminal buffer is process-local</td>
+</tr>
+<tr>
+<td>Per-turn ephemeral state</td>
+<td>By design -- these reset each turn anyway</td>
+</tr>
+<tr>
+<td>The last JSONL entry (maybe)</td>
+<td>If crash happened mid-write, the partial line is corrupted</td>
+</tr>
+</tbody>
+</table>
+<h3 id="recovery-flow">Recovery Flow</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">stateDiagram</span><span class="o">-</span><span class="n">v2</span>
+<span class="w">    </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Running</span><span class="p">:</span><span class="w"> </span><span class="n">Session</span><span class="w"> </span><span class="n">starts</span>
+<span class="w">    </span><span class="n">Running</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Running</span><span class="p">:</span><span class="w"> </span><span class="n">Normal</span><span class="w"> </span><span class="n">operation</span>
+<span class="w">    </span><span class="n">Running</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">GracefulShutdown</span><span class="p">:</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">exits</span><span class="w"> </span><span class="p">(</span><span class="n">Ctrl</span><span class="o">+</span><span class="n">D</span><span class="p">,</span><span class="w"> </span><span class="o">/</span><span class="n">exit</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Running</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CrashRecovery</span><span class="p">:</span><span class="w"> </span><span class="n">Unexpected</span><span class="w"> </span><span class="n">termination</span>
+
+<span class="w">    </span><span class="n">GracefulShutdown</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Persisted</span><span class="p">:</span><span class="w"> </span><span class="n">session_end</span><span class="w"> </span><span class="n">written</span>
+<span class="w">    </span><span class="n">CrashRecovery</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Persisted</span><span class="p">:</span><span class="w"> </span><span class="n">Last</span><span class="w"> </span><span class="n">complete</span><span class="w"> </span><span class="n">JSONL</span><span class="w"> </span><span class="n">entry</span>
+
+<span class="w">    </span><span class="n">Persisted</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="p">]:</span><span class="w"> </span><span class="n">Session</span><span class="w"> </span><span class="n">complete</span>
+<span class="w">    </span><span class="n">Persisted</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Resumed</span><span class="p">:</span><span class="w"> </span><span class="n">claude</span><span class="w"> </span><span class="o">--</span><span class="n">resume</span>
+
+<span class="w">    </span><span class="n">Resumed</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Running</span><span class="p">:</span><span class="w"> </span><span class="n">State</span><span class="w"> </span><span class="n">reconstructed</span>
+
+<span class="w">    </span><span class="n">state</span><span class="w"> </span><span class="n">GracefulShutdown</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">FlushBuffers</span>
+<span class="w">        </span><span class="n">FlushBuffers</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">WriteSessionEnd</span>
+<span class="w">        </span><span class="n">WriteSessionEnd</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CleanupHooks</span>
+<span class="w">        </span><span class="n">CleanupHooks</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DeregisterSession</span>
+<span class="w">        </span><span class="n">DeregisterSession</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">state</span><span class="w"> </span><span class="n">CrashRecovery</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">StaleRegistryEntry</span>
+<span class="w">        </span><span class="n">StaleRegistryEntry</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TranscriptIntact</span>
+<span class="w">        </span><span class="n">TranscriptIntact</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">LastLineMaybeCorrupt</span>
+<span class="w">        </span><span class="n">LastLineMaybeCorrupt</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+<p>The JSONL format's crash resilience means resume after a crash works almost identically to resume after a graceful exit. The only difference: the transcript might be missing the last in-flight entry, and there's no <code>session_end</code> marker. The resume system detects this:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">isSessionCrashed</span><span class="p">(</span><span class="nx">transcript</span><span class="o">:</span><span class="w"> </span><span class="kt">TranscriptEntry</span><span class="p">[])</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">hasEnd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">transcript</span><span class="p">.</span><span class="nx">some</span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;session_end&#39;</span><span class="p">);</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="o">!</span><span class="nx">hasEnd</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>A session without a <code>session_end</code> entry either crashed or is still running. The system checks the active session registry to distinguish: if the PID is still alive, the session is active; if the PID is dead, it crashed.</p>
+<hr />
+<h2 id="graceful-shutdown">Graceful Shutdown</h2>
+<p>When the user exits normally, a cleanup sequence runs in a specific order:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">gracefulShutdown</span><span class="p">(</span><span class="nx">reason</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="ow">void</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// 1. Signal the REPL to stop accepting input</span>
+<span class="w">  </span><span class="nx">state</span><span class="p">.</span><span class="nx">shuttingDown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// 2. Abort any in-flight API requests</span>
+<span class="w">  </span><span class="nx">abortActiveRequests</span><span class="p">();</span>
+
+<span class="w">  </span><span class="c1">// 3. Flush telemetry buffers</span>
+<span class="w">  </span><span class="k">await</span><span class="w"> </span><span class="nx">flushTelemetry</span><span class="p">();</span>
+
+<span class="w">  </span><span class="c1">// 4. Run registered cleanup handlers</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">cleanup</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">registeredCleanups</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">await</span><span class="w"> </span><span class="nx">cleanup</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="c1">// Log but don&#39;t throw -- other cleanups must still run</span>
+<span class="w">      </span><span class="nx">logError</span><span class="p">(</span><span class="s1">&#39;Cleanup handler failed&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// 5. Write session end marker to transcript</span>
+<span class="w">  </span><span class="nx">appendToTranscript</span><span class="p">({</span>
+<span class="w">    </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;session_end&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">Date.now</span><span class="p">(),</span>
+<span class="w">    </span><span class="nx">totalCost</span><span class="o">:</span><span class="w"> </span><span class="kt">state.totalCostUSD</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">reason</span><span class="p">,</span>
+<span class="w">  </span><span class="p">});</span>
+
+<span class="w">  </span><span class="c1">// 6. Deregister from active sessions</span>
+<span class="w">  </span><span class="nx">deregisterActiveSession</span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">sessionId</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// 7. Restore terminal state</span>
+<span class="w">  </span><span class="nx">process</span><span class="p">.</span><span class="nx">stdin</span><span class="p">.</span><span class="nx">setRawMode</span><span class="o">?</span><span class="p">.(</span><span class="kc">false</span><span class="p">);</span>
+<span class="w">  </span><span class="nx">process</span><span class="p">.</span><span class="nx">stdout</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="s1">&#39;\n&#39;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="cleanup-ordering">Cleanup Ordering</h3>
+<p>The ordering is intentional:</p>
+<ol>
+<li><strong>Stop input first.</strong> Prevents new operations from starting during shutdown.</li>
+<li><strong>Abort API requests.</strong> In-flight requests would waste money and time. The abort signal is checked by the streaming handler.</li>
+<li><strong>Flush telemetry.</strong> Telemetry buffers may contain unbatched events. Flushing ensures the session's final metrics are recorded.</li>
+<li><strong>Registered cleanups.</strong> Subsystems register cleanup functions during <code>init()</code>:</li>
+</ol>
+<div class="codehilite"><pre><span></span><code><span class="c1">// During init()</span>
+<span class="nx">registerCleanup</span><span class="p">(</span><span class="nx">shutdownLspServerManager</span><span class="p">);</span><span class="w">  </span><span class="c1">// Stop language servers</span>
+<span class="nx">registerCleanup</span><span class="p">(</span><span class="nx">cleanupSessionTeams</span><span class="p">);</span><span class="w">        </span><span class="c1">// Kill tmux teammates</span>
+<span class="nx">registerCleanup</span><span class="p">(</span><span class="nx">closeMcpConnections</span><span class="p">);</span><span class="w">        </span><span class="c1">// Disconnect MCP servers</span>
+</code></pre></div>
+
+<ol>
+<li><strong>Transcript end marker.</strong> Must happen after all other work -- the <code>session_end</code> entry records the final cost, which accumulates during cleanup (telemetry flush might trigger final cost calculations).</li>
+<li><strong>Deregister session.</strong> Removes the entry from <code>active_sessions.json</code> so other processes know this session is done.</li>
+<li><strong>Terminal restore.</strong> Raw mode must be turned off so the user's shell works normally after exit.</li>
+</ol>
+<h3 id="error-isolation-in-cleanup">Error Isolation in Cleanup</h3>
+<p>Each cleanup handler is wrapped in a try/catch. A failed LSP shutdown must not prevent MCP disconnection or transcript persistence. The handlers run sequentially (not in parallel) to avoid resource contention -- stopping a language server and killing tmux sessions simultaneously could interfere with each other.</p>
+<hr />
+<h2 id="session-lineage-parent-child-relationships">Session Lineage: Parent-Child Relationships</h2>
+<p>When Claude Code spawns subagents (via the teammate system or <code>context: fork</code> skills), each subagent is a separate process with its own session. The parent-child relationship is tracked via <code>parentSessionId</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">S1</span><span class="p">[</span><span class="s">&quot;Parent Session&lt;br/&gt;sessionId: abc-123&lt;br/&gt;parentSessionId: undefined&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S2</span><span class="p">[</span><span class="s">&quot;Subagent 1&lt;br/&gt;sessionId: def-456&lt;br/&gt;parentSessionId: abc-123&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S3</span><span class="p">[</span><span class="s">&quot;Subagent 2&lt;br/&gt;sessionId: ghi-789&lt;br/&gt;parentSessionId: abc-123&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S4</span><span class="p">[</span><span class="s">&quot;Nested Subagent&lt;br/&gt;sessionId: jkl-012&lt;br/&gt;parentSessionId: def-456&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">S1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S2</span>
+<span class="w">    </span><span class="n">S1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S3</span>
+<span class="w">    </span><span class="n">S2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S4</span>
+</code></pre></div>
+
+<p>The parent session ID is passed via CLI flags when spawning a subprocess:</p>
+<div class="codehilite"><pre><span></span><code>claude<span class="w"> </span>--parent-session-id<span class="w"> </span>abc-123<span class="w"> </span><span class="se">\</span>
+<span class="w">       </span>--agent-id<span class="w"> </span>agent-1<span class="w"> </span><span class="se">\</span>
+<span class="w">       </span>--agent-name<span class="w"> </span><span class="s2">&quot;Security Reviewer&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">       </span>--teammate-mode<span class="w"> </span><span class="se">\</span>
+<span class="w">       </span>-p<span class="w"> </span><span class="s2">&quot;Review auth.ts for vulnerabilities&quot;</span>
+</code></pre></div>
+
+<p>This lineage enables:
+- <strong>Cost attribution.</strong> The parent session's cost includes all child sessions.
+- <strong>Telemetry correlation.</strong> All events in a tree of sessions share the root session ID.
+- <strong>Cascading shutdown.</strong> When the parent exits, it can signal children to shut down.
+- <strong>Session source tracking.</strong> The <code>sessionSource</code> field records how the session was initiated: <code>"interactive"</code>, <code>"teammate"</code>, <code>"bridge"</code>, <code>"sdk"</code>, etc.</p>
+<hr />
+<h2 id="session-state-diagram">Session State Diagram</h2>
+<p>The complete lifecycle of a session, including all states and transitions:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">stateDiagram</span><span class="o">-</span><span class="n">v2</span>
+<span class="w">    </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Creating</span><span class="p">:</span><span class="w"> </span><span class="n">claude</span><span class="w"> </span><span class="n">invoked</span>
+
+<span class="w">    </span><span class="n">Creating</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Initializing</span><span class="p">:</span><span class="w"> </span><span class="n">UUID</span><span class="w"> </span><span class="n">generated</span><span class="p">,</span><span class="w"> </span><span class="n">transcript</span><span class="w"> </span><span class="n">opened</span>
+<span class="w">    </span><span class="n">Initializing</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TrustCheck</span><span class="p">:</span><span class="w"> </span><span class="n">Config</span><span class="w"> </span><span class="n">loaded</span><span class="p">,</span><span class="w"> </span><span class="n">auth</span><span class="w"> </span><span class="n">resolved</span>
+
+<span class="w">    </span><span class="n">TrustCheck</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Active</span><span class="p">:</span><span class="w"> </span><span class="n">Directory</span><span class="w"> </span><span class="n">trusted</span>
+<span class="w">    </span><span class="n">TrustCheck</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Restricted</span><span class="p">:</span><span class="w"> </span><span class="n">Trust</span><span class="w"> </span><span class="n">declined</span>
+
+<span class="w">    </span><span class="n">Active</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Active</span><span class="p">:</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">prompts</span><span class="p">,</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">calls</span><span class="p">,</span><span class="w"> </span><span class="n">responses</span>
+<span class="w">    </span><span class="n">Restricted</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Restricted</span><span class="p">:</span><span class="w"> </span><span class="n">Limited</span><span class="w"> </span><span class="n">functionality</span>
+
+<span class="w">    </span><span class="n">Active</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Resuming</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="n">resume</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="o">--</span><span class="n">resume</span>
+<span class="w">    </span><span class="n">Resuming</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Active</span><span class="p">:</span><span class="w"> </span><span class="n">Transcript</span><span class="w"> </span><span class="n">replayed</span>
+
+<span class="w">    </span><span class="n">Active</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Switching</span><span class="p">:</span><span class="w"> </span><span class="n">switchSession</span><span class="p">()</span><span class="w"> </span><span class="n">called</span>
+<span class="w">    </span><span class="n">Switching</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Active</span><span class="p">:</span><span class="w"> </span><span class="n">New</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="n">ID</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">project</span><span class="w"> </span><span class="n">dir</span>
+
+<span class="w">    </span><span class="n">Active</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Compacting</span><span class="p">:</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">window</span><span class="w"> </span><span class="n">full</span>
+<span class="w">    </span><span class="n">Compacting</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Active</span><span class="p">:</span><span class="w"> </span><span class="n">Conversation</span><span class="w"> </span><span class="n">summarized</span>
+
+<span class="w">    </span><span class="n">Active</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ShuttingDown</span><span class="p">:</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">exits</span>
+<span class="w">    </span><span class="n">Active</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Crashed</span><span class="p">:</span><span class="w"> </span><span class="n">Unexpected</span><span class="w"> </span><span class="n">termination</span>
+
+<span class="w">    </span><span class="n">ShuttingDown</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Ended</span><span class="p">:</span><span class="w"> </span><span class="n">Cleanup</span><span class="w"> </span><span class="n">complete</span>
+<span class="w">    </span><span class="n">Crashed</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Ended</span><span class="p">:</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">cleanup</span>
+
+<span class="w">    </span><span class="n">Ended</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Resuming</span><span class="p">:</span><span class="w"> </span><span class="n">claude</span><span class="w"> </span><span class="o">--</span><span class="n">resume</span>
+<span class="w">    </span><span class="n">Ended</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="p">]:</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">resume</span>
+
+<span class="w">    </span><span class="n">Restricted</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ShuttingDown</span><span class="p">:</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">exits</span>
+</code></pre></div>
+
+<p>Notable transitions:</p>
+<ul>
+<li><strong>Active -&gt; Switching.</strong> The <code>switchSession()</code> call (Atomic Switch Pattern) transitions to a different session without restarting the process. This happens during <code>--resume</code> within a running session.</li>
+<li><strong>Active -&gt; Compacting.</strong> When the context window approaches capacity, the compaction system summarizes the conversation. The session continues with a compressed history.</li>
+<li><strong>Crashed -&gt; Ended.</strong> A crashed session has no <code>session_end</code> marker. It's implicitly ended when the PID is no longer alive.</li>
+<li><strong>Ended -&gt; Resuming.</strong> Any ended session can be resumed, whether it ended gracefully or crashed.</li>
+</ul>
+<hr />
+<h2 id="session-data-architecture">Session Data Architecture</h2>
+<p>Here's how session data is organized on disk:</p>
+<div class="codehilite"><pre><span></span><code>~/.claude/
+├── active_sessions.json           # Registry of running sessions
+├── trust.json                     # Per-directory trust decisions
+├── projects/
+│   ├── {hash(project-a)}/
+│   │   ├── sessions/
+│   │   │   ├── abc-123.jsonl      # Transcript for session abc-123
+│   │   │   ├── def-456.jsonl      # Transcript for session def-456
+│   │   │   └── ...
+│   │   ├── CLAUDE.md              # Project-level memory (auto-generated)
+│   │   └── memory/                # Auto-memory files
+│   └── {hash(project-b)}/
+│       └── sessions/
+│           └── ...
+└── config.json                    # Global config (migration version, etc.)
+</code></pre></div>
+
+<p>Session data is isolated per project. Each project gets its own directory (identified by a path hash), containing all sessions, auto-memory, and project-level configuration.</p>
+<h3 id="data-retention">Data Retention</h3>
+<p>JSONL transcript files are not automatically deleted. They accumulate over time. The expected lifecycle:</p>
+<table>
+<thead>
+<tr>
+<th>Age</th>
+<th>Size (typical)</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&lt; 1 day</td>
+<td>50-500 KB</td>
+<td>Active use, may be resumed</td>
+</tr>
+<tr>
+<td>1-7 days</td>
+<td>-</td>
+<td>Available for resume if needed</td>
+</tr>
+<tr>
+<td>7-30 days</td>
+<td>-</td>
+<td>Rarely resumed, but valuable for audit</td>
+</tr>
+<tr>
+<td>&gt; 30 days</td>
+<td>-</td>
+<td>Candidate for cleanup (manual or automated)</td>
+</tr>
+</tbody>
+</table>
+<p>A heavy user might generate 1-5 MB of transcripts per day. After a month, that's 30-150 MB -- noticeable but not problematic. There's no built-in garbage collection; users who want to clean up can delete old <code>.jsonl</code> files directly.</p>
+<hr />
+<h2 id="architectural-lessons">Architectural Lessons</h2>
+<h3 id="1-use-branded-types-for-identity">1. Use Branded Types for Identity</h3>
+<p><code>SessionId</code> is a branded type -- <code>string &amp; { __sessionId: true }</code>. This means you can't accidentally pass a regular string where a session ID is expected. TypeScript catches the error at compile time:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// This compiles</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">SessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">generateSessionId</span><span class="p">();</span>
+
+<span class="c1">// This doesn&#39;t compile</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">SessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;some-random-string&quot;</span><span class="p">;</span><span class="w">  </span><span class="c1">// Type error</span>
+</code></pre></div>
+
+<p>Branded types cost nothing at runtime (they compile to plain strings) but prevent a class of bugs where identifiers get mixed up. When your system has session IDs, agent IDs, message IDs, and tool-use IDs all represented as strings, branding prevents passing the wrong one.</p>
+<h3 id="2-append-only-logs-for-crash-resilience">2. Append-Only Logs for Crash Resilience</h3>
+<p>JSONL's append-only nature means the transcript is a commit log. Every write extends the log; no write modifies or deletes previous entries. This matches the reality of conversation: messages happen in sequence and can't be un-said. The format matches the domain.</p>
+<p>For any persistent state that grows monotonically (logs, event streams, conversation history), append-only formats are the simplest way to achieve crash resilience. The trade-off is query performance -- finding a specific message requires scanning the entire file. For session transcripts (typically hundreds to thousands of entries), this is acceptable.</p>
+<h3 id="3-atomic-state-transitions-for-coupled-fields">3. Atomic State Transitions for Coupled Fields</h3>
+<p>The Atomic Switch Pattern (<code>switchSession()</code>) prevents drift between <code>sessionId</code> and <code>sessionProjectDir</code>. The principle generalizes: <strong>when two or more fields are semantically coupled, enforce atomic updates by exposing a single mutation function and no individual setters</strong>.</p>
+<p>This is a design-time decision, not a runtime enforcement. There's no lock, no transaction, no CAS operation. The protection comes from the API surface: if the only way to change the fields is through a function that changes both, they can't drift.</p>
+<h3 id="4-signal-based-decoupling-for-lifecycle-events">4. Signal-Based Decoupling for Lifecycle Events</h3>
+<p>The <code>sessionSwitched</code> signal allows consumers to react to session changes without the state module importing them. This is particularly important for <code>bootstrap/state.ts</code>, which must remain a leaf in the import DAG (Chapter 3). Signals provide the indirection that decouples the emitter from all listeners.</p>
+<h3 id="5-graceful-shutdown-is-ordered-cleanup">5. Graceful Shutdown Is Ordered Cleanup</h3>
+<p>The shutdown sequence matters. Stop input before aborting requests. Abort requests before flushing telemetry. Flush telemetry before writing the end marker. Write the end marker before deregistering. Each step depends on the previous step's completion.</p>
+<p>Error isolation (try/catch per handler) ensures that a failure in one cleanup step doesn't cascade. The principle: <strong>never let a cleanup error prevent other cleanups from running</strong>.</p>
+<h3 id="6-design-for-resume-from-day-one">6. Design for Resume from Day One</h3>
+<p>Session resume isn't a feature you bolt on later. The transcript format, the project-scoped storage, the session registry -- these are all decisions made at the architecture level that enable resume as a first-class capability.</p>
+<p>If you're building a CLI agent and think "we'll add resume later," you'll discover that your state isn't serializable, your conversation history isn't persisted in a resumable format, and your session identity doesn't survive process restarts. Design for resume from the start, even if you ship it later.</p>
+<p>In Chapter 7, we'll examine the query engine -- the <code>while(true)</code> agent loop that reads from state, calls the API, executes tools, and writes results back to the transcript.</p>
+<div class="chapter-nav">
+  <a href="chapter-05.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-07.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

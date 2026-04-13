@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 16: Tool Extensibility via MCP — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-17.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-16-tool-extensibility-via-mcp">Chapter 16: Tool Extensibility via MCP</h1>
+<p>A closed tool set is a ceiling on an agent's usefulness. The built-in tools — file read, file write, grep, glob, bash — cover the core operations of a software engineer. But software engineering does not happen in a vacuum. Engineers query databases, interact with cloud APIs, manage CI/CD pipelines, search documentation, control browsers, and interface with dozens of domain-specific tools. No agent team can build and maintain tools for every possible integration.</p>
+<p>The Model Context Protocol (MCP) solves this problem by defining a standard interface through which external servers expose tools, resources, and prompts to an AI agent at runtime. Instead of building a database query tool into the agent, you run an MCP server that wraps your database client. Instead of building a Jira integration, you run an MCP server that wraps the Jira API. The agent discovers these tools at startup, presents them to the model alongside its built-in tools, and invokes them through the same pipeline that handles built-in tool calls.</p>
+<p>This chapter examines the architectural decisions that make tool extensibility work in production: dynamic registration, namespace isolation, capability annotations, result handling, security boundaries, and the design principles for MCP tools that are safe, discoverable, and composable.</p>
+<hr />
+<h2 id="161-the-extensibility-problem">16.1 The Extensibility Problem</h2>
+<p>Before examining the solution, let us understand the problem clearly. An AI CLI agent with a fixed tool set faces four constraints:</p>
+<p><strong>Integration scope.</strong> Every new integration (database client, cloud API, project management tool) requires the agent team to build, test, and maintain a dedicated tool. With hundreds of potential integrations and frequent API changes, this approach does not scale.</p>
+<p><strong>Deployment coupling.</strong> Built-in tools ship with the agent. Adding a new tool means releasing a new agent version. Users who need a custom integration must wait for the agent team to prioritize it — or fork the agent and maintain their own version.</p>
+<p><strong>Domain specificity.</strong> Different users need different tools. A data scientist needs tools for notebooks and data pipelines. A DevOps engineer needs tools for Kubernetes and Terraform. A security researcher needs tools for vulnerability scanners. Building all of these into a single agent bloats the binary and the model's tool context for every user.</p>
+<p><strong>Organizational control.</strong> Enterprise users need to provision agent capabilities through their existing infrastructure — corporate identity providers, policy management systems, approved vendor lists. A fixed tool set cannot accommodate this governance model.</p>
+<p>MCP addresses all four constraints by moving tool implementation outside the agent. The agent provides the runtime (transport, discovery, execution, security), and external servers provide the tools.</p>
+<hr />
+<h2 id="162-protocol-architecture">16.2 Protocol Architecture</h2>
+<p>MCP defines a client-server architecture where the AI agent is the client and tool providers are servers. Communication follows a JSON-RPC 2.0 protocol over multiple transport types:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;AI CLI Agent (MCP Client)&quot;</span>
+<span class="w">        </span><span class="n">MC</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Client</span><span class="w"> </span><span class="n">Manager</span><span class="p">]</span>
+<span class="w">        </span><span class="n">TD</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Discovery</span><span class="p">]</span>
+<span class="w">        </span><span class="n">TE</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Execution</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PS</span><span class="p">[</span><span class="n">Permission</span><span class="w"> </span><span class="n">System</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Transport Layer&quot;</span>
+<span class="w">        </span><span class="n">T1</span><span class="p">[</span><span class="n">stdio</span><span class="o">:</span><span class="w"> </span><span class="n">Local</span><span class="w"> </span><span class="n">processes</span><span class="p">]</span>
+<span class="w">        </span><span class="n">T2</span><span class="p">[</span><span class="n">HTTP</span><span class="o">:</span><span class="w"> </span><span class="n">Remote</span><span class="w"> </span><span class="n">servers</span><span class="p">]</span>
+<span class="w">        </span><span class="n">T3</span><span class="p">[</span><span class="n">WebSocket</span><span class="o">:</span><span class="w"> </span><span class="n">Real</span><span class="o">-</span><span class="n">time</span><span class="p">]</span>
+<span class="w">        </span><span class="n">T4</span><span class="p">[</span><span class="n">In</span><span class="o">-</span><span class="n">process</span><span class="o">:</span><span class="w"> </span><span class="n">Embedded</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;MCP Servers&quot;</span>
+<span class="w">        </span><span class="n">S1</span><span class="p">[</span><span class="s">&quot;Database Server&lt;br/&gt;(PostgreSQL, SQLite)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S2</span><span class="p">[</span><span class="s">&quot;Cloud API Server&lt;br/&gt;(AWS, Azure, GCP)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S3</span><span class="p">[</span><span class="s">&quot;Browser Automation&lt;br/&gt;(Playwright)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S4</span><span class="p">[</span><span class="s">&quot;Custom Internal Tools&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">MC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">T1</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">T2</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">T3</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">T4</span>
+<span class="w">    </span><span class="n">T1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S1</span>
+<span class="w">    </span><span class="n">T2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S2</span>
+<span class="w">    </span><span class="n">T3</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S3</span>
+<span class="w">    </span><span class="n">T4</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S4</span>
+<span class="w">    </span><span class="n">TD</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MC</span>
+<span class="w">    </span><span class="n">TE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MC</span>
+<span class="w">    </span><span class="n">PS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TE</span>
+</code></pre></div>
+
+<h3 id="the-handshake">The Handshake</h3>
+<p>When a client connects to a server, they exchange capability declarations:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Client</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Server</span><span class="p">:</span><span class="w"> </span><span class="n">initialize</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="n">clientInfo</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;agent-name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">capabilities</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">roots</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="n">elicitation</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="n">Server</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">initialize</span><span class="w"> </span><span class="n">response</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="n">serverInfo</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;db-server&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2.0&quot;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">capabilities</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">tools</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="n">resources</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">instructions</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;This server provides PostgreSQL query tools...&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+</code></pre></div>
+
+<p>The capability exchange tells each side what the other supports. A client that declares <code>elicitation</code> capability can receive user input requests from the server. A server that declares <code>tools</code> capability can provide tool definitions. This negotiation prevents runtime failures from unsupported operations.</p>
+<h3 id="transport-types">Transport Types</h3>
+<p>The protocol supports multiple transports because MCP servers run in fundamentally different environments:</p>
+<table>
+<thead>
+<tr>
+<th>Transport</th>
+<th>Protocol</th>
+<th>Use Case</th>
+<th>Connection Model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>stdio</td>
+<td>stdin/stdout pipes</td>
+<td>Local processes (Python scripts, Node modules)</td>
+<td>One process per server</td>
+</tr>
+<tr>
+<td>Streamable HTTP</td>
+<td>HTTP POST/GET</td>
+<td>Remote API servers</td>
+<td>Stateless or session-based</td>
+</tr>
+<tr>
+<td>WebSocket</td>
+<td>WS/WSS</td>
+<td>Real-time bidirectional servers</td>
+<td>Persistent connection</td>
+</tr>
+<tr>
+<td>In-process</td>
+<td>Function calls</td>
+<td>Embedded servers (same process)</td>
+<td>Zero-copy message passing</td>
+</tr>
+</tbody>
+</table>
+<p><strong>stdio</strong> is the most common transport for local tools. The agent spawns a child process and communicates over stdin/stdout. This is simple, universal, and requires no network configuration. The limitation is that stdio servers are process-per-server — each server is a separate child process with its own memory footprint.</p>
+<p><strong>Streamable HTTP</strong> is the current standard for remote servers. The client sends tool call requests as HTTP POST requests and receives responses. Long-running operations can use Server-Sent Events (SSE) for streaming results. This transport supports standard HTTP infrastructure — load balancers, authentication proxies, CDNs.</p>
+<p><strong>WebSocket</strong> provides persistent bidirectional communication for servers that need to push updates to the client. This is useful for monitoring tools, real-time collaboration servers, and tools that maintain long-lived sessions.</p>
+<p><strong>In-process</strong> transport eliminates serialization overhead for servers that run inside the agent process. Instead of JSON-RPC over pipes, messages are passed as JavaScript objects via <code>queueMicrotask()</code>. This saves approximately 325MB of memory per server (the cost of spawning a separate Node/Bun process) and eliminates serialization latency.</p>
+<p>The <code>queueMicrotask()</code> call in in-process transports is architecturally significant. Without it, a synchronous request-response cycle would overflow the call stack — the client sends a request, the server synchronously processes it and sends a response, the client synchronously processes the response and sends another request, and so on. The microtask boundary breaks this chain by deferring message delivery to the next microtask checkpoint.</p>
+<hr />
+<h2 id="163-dynamic-tool-registration">16.3 Dynamic Tool Registration</h2>
+<p>MCP tools are not known at compile time. They are discovered at runtime through the server's <code>tools/list</code> endpoint and can change during a session through notification events.</p>
+<h3 id="discovery-at-startup">Discovery at Startup</h3>
+<p>During connection establishment, the client queries each server for its available tools:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Client</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Server</span><span class="p">:</span><span class="w"> </span><span class="n">tools</span><span class="o">/</span><span class="n">list</span>
+<span class="n">Server</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Client</span><span class="p">:</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="n">tools</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="p">{</span>
+<span class="w">        </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;query&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">description</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Execute a SQL query against the database&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">inputSchema</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">type</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">properties</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">sql</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">type</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="n">annotations</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">readOnlyHint</span><span class="p">:</span><span class="w"> </span><span class="bp">false</span><span class="p">,</span><span class="w"> </span><span class="n">destructiveHint</span><span class="p">:</span><span class="w"> </span><span class="bp">true</span><span class="w"> </span><span class="p">}</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="p">{</span>
+<span class="w">        </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list_tables&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">description</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;List all tables in the database&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">inputSchema</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">type</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">properties</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="n">annotations</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">readOnlyHint</span><span class="p">:</span><span class="w"> </span><span class="bp">true</span><span class="w"> </span><span class="p">}</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="w">  </span><span class="p">}</span>
+</code></pre></div>
+
+<p>Each tool definition includes:
+- <strong>name:</strong> The tool's identifier within the server namespace
+- <strong>description:</strong> Human-readable text explaining what the tool does (capped at 2,048 characters)
+- <strong>inputSchema:</strong> JSON Schema defining the tool's parameters
+- <strong>annotations:</strong> Capability hints that inform the permission system</p>
+<p>The client converts each MCP tool into its internal tool format, wrapping the MCP-specific invocation logic in the same interface that built-in tools implement. From the model's perspective, MCP tools are indistinguishable from built-in tools except for their namespaced names.</p>
+<h3 id="notification-driven-updates">Notification-Driven Updates</h3>
+<p>Servers can modify their tool set mid-session by sending a <code>tools/listChanged</code> notification. The client invalidates its tool cache, re-fetches the tool list, and updates the model's available tools. This enables dynamic tool sets — a server that discovers new database tables can expose query tools for each table as they appear.</p>
+<p>Three notification types drive different cache invalidations:</p>
+<table>
+<thead>
+<tr>
+<th>Notification</th>
+<th>Cache Cleared</th>
+<th>What Changes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ToolListChanged</code></td>
+<td>Tool definitions</td>
+<td>Tools available to the model</td>
+</tr>
+<tr>
+<td><code>ResourceListChanged</code></td>
+<td>Resource definitions + skills</td>
+<td>Files and data the server provides</td>
+</tr>
+<tr>
+<td><code>PromptListChanged</code></td>
+<td>Prompt templates + skills</td>
+<td>Pre-built prompt templates</td>
+</tr>
+</tbody>
+</table>
+<h3 id="deferred-loading">Deferred Loading</h3>
+<p>Not every MCP tool needs to be in the model's active context. A server with 200 tools would consume a significant portion of the model's context window just with tool descriptions. Deferred loading solves this through a search hint mechanism:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;complex_analysis_tool&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Performs detailed statistical analysis...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;_meta&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;anthropic/searchHint&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;statistics, regression, correlation, p-value&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Tools with <code>searchHint</code> metadata are not loaded into the model's context by default. Instead, their names and search hints are stored in a lightweight index. When the user's prompt or conversation context matches the search hints (keyword matching), the full tool definition is loaded. This preserves prompt cache efficiency — non-deferred MCP tools disable global prompt caching because they vary per user.</p>
+<p>The inverse mechanism — <code>anthropic/alwaysLoad: true</code> — forces a tool into the model's context regardless of relevance scoring. Use this sparingly for tools that the model should always know about, like authentication or session management tools.</p>
+<hr />
+<h2 id="164-namespace-isolation">16.4 Namespace Isolation</h2>
+<p>When tools come from multiple servers, name collisions are inevitable. Two servers might both expose a tool called <code>query</code>. Without namespacing, the agent cannot distinguish between them.</p>
+<h3 id="the-naming-convention">The Naming Convention</h3>
+<p>MCP tools use a three-part namespaced name:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">mcp__</span><span class="o">&lt;</span><span class="n">server_name</span><span class="o">&gt;</span><span class="n">__</span><span class="o">&lt;</span><span class="n">tool_name</span><span class="o">&gt;</span>
+</code></pre></div>
+
+<p>The double-underscore delimiter separates the three segments: the <code>mcp</code> prefix, the server name, and the tool name. Both server and tool names are normalized to match <code>[a-zA-Z0-9_-]{1,64}</code> — non-alphanumeric characters are replaced with underscores.</p>
+<p>Examples:
+- <code>mcp__postgres__query</code> — The "query" tool from the "postgres" server
+- <code>mcp__github__create_pr</code> — The "create_pr" tool from the "github" server
+- <code>mcp__browser__navigate</code> — The "navigate" tool from the "browser" server</p>
+<h3 id="permission-rule-integration">Permission Rule Integration</h3>
+<p>The namespace convention integrates directly with the permission system. Rules can target individual tools or entire servers:</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Matches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mcp__postgres__query</code></td>
+<td>Only the query tool from the postgres server</td>
+</tr>
+<tr>
+<td><code>mcp__postgres</code></td>
+<td>All tools from the postgres server</td>
+</tr>
+<tr>
+<td><code>mcp__postgres__*</code></td>
+<td>All tools from the postgres server (explicit wildcard)</td>
+</tr>
+</tbody>
+</table>
+<p>Server-level rules are particularly useful for enterprise policy. An admin can deny all tools from an untrusted server with a single rule: <code>deny: ["mcp__untrusted_server"]</code>.</p>
+<h3 id="known-limitation-double-underscore-ambiguity">Known Limitation: Double-Underscore Ambiguity</h3>
+<p>The naming scheme has a known limitation: if a server name contains <code>__</code>, parsing becomes ambiguous. <code>mcp__my__server__tool</code> could mean server "my" with tool "server__tool" or server "my__server" with tool "tool". The parser splits on the first two <code>__</code> boundaries, choosing the first interpretation. This is rarely a problem in practice because server names typically do not contain double underscores, but it is a design constraint that MCP server authors should be aware of.</p>
+<hr />
+<h2 id="165-capability-annotations">16.5 Capability Annotations</h2>
+<p>MCP tools carry annotations that inform the agent's security and scheduling systems about the tool's behavior. These annotations are hints, not guarantees — the server declares them, and the agent uses them to make better decisions.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">ANN</span><span class="p">[</span><span class="n">Tool</span><span class="w"> </span><span class="n">Annotations</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RO</span><span class="p">[</span><span class="n">readOnlyHint</span><span class="p">]</span>
+<span class="w">    </span><span class="n">ANN</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DEST</span><span class="p">[</span><span class="n">destructiveHint</span><span class="p">]</span>
+<span class="w">    </span><span class="n">ANN</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">OW</span><span class="p">[</span><span class="n">openWorldHint</span><span class="p">]</span>
+<span class="w">    </span><span class="n">ANN</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">IDEM</span><span class="p">[</span><span class="n">idempotentHint</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">RO</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">true</span><span class="o">|</span><span class="w"> </span><span class="n">RO_EFF</span><span class="p">[</span><span class="s">&quot;Auto-allow in permissive modes&lt;br/&gt;Safe to parallelize&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">RO</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">false</span><span class="o">/</span><span class="n">absent</span><span class="o">|</span><span class="w"> </span><span class="n">RO_DEF</span><span class="p">[</span><span class="s">&quot;Require permission check&lt;br/&gt;Serialize with other writes&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">DEST</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">true</span><span class="o">|</span><span class="w"> </span><span class="n">DEST_EFF</span><span class="p">[</span><span class="s">&quot;Always require explicit approval&lt;br/&gt;Never auto-allow&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">DEST</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">false</span><span class="o">/</span><span class="n">absent</span><span class="o">|</span><span class="w"> </span><span class="n">DEST_DEF</span><span class="p">[</span><span class="s">&quot;Normal permission flow&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">OW</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">true</span><span class="o">|</span><span class="w"> </span><span class="n">OW_EFF</span><span class="p">[</span><span class="s">&quot;Tool accesses external systems&lt;br/&gt;Results may contain untrusted data&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">OW</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">false</span><span class="o">/</span><span class="n">absent</span><span class="o">|</span><span class="w"> </span><span class="n">OW_DEF</span><span class="p">[</span><span class="s">&quot;Tool operates locally&lt;br/&gt;Results are trusted&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">IDEM</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">true</span><span class="o">|</span><span class="w"> </span><span class="n">IDEM_EFF</span><span class="p">[</span><span class="s">&quot;Safe to retry on failure&lt;br/&gt;Duplicate calls are harmless&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">IDEM</span><span class="w"> </span><span class="o">--&gt;|</span><span class="nb">false</span><span class="o">/</span><span class="n">absent</span><span class="o">|</span><span class="w"> </span><span class="n">IDEM_DEF</span><span class="p">[</span><span class="s">&quot;Retry with caution&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="readonlyhint">readOnlyHint</h3>
+<p>When <code>true</code>, the tool does not modify any state. The agent can auto-allow it in permissive modes (similar to built-in Read tools) and execute it concurrently with other read-only tools. The query engine uses this hint to parallelize MCP tool calls — two read-only MCP tools can run simultaneously, but a destructive MCP tool serializes with everything else.</p>
+<h3 id="destructivehint">destructiveHint</h3>
+<p>When <code>true</code>, the tool can cause irreversible changes. The agent requires explicit user approval regardless of permission mode. Even in bypass mode, destructive MCP tools trigger a confirmation prompt. This is the MCP equivalent of the bypass-immune safety checks described in Chapter 9.</p>
+<h3 id="openworldhint">openWorldHint</h3>
+<p>When <code>true</code>, the tool accesses systems outside the agent's control — external APIs, databases, cloud services. This hint tells the agent that the tool's results may contain untrusted data (from the perspective of prompt injection defense) and that the tool's effects may be visible to external observers.</p>
+<h3 id="idempotenthint">idempotentHint</h3>
+<p>When <code>true</code>, calling the tool multiple times with the same arguments produces the same result. The agent can safely retry failed calls without risk of duplicate side effects. This is important for error recovery — if a tool call times out, the agent can retry it if the tool is idempotent, but should report the failure to the user if it is not.</p>
+<h3 id="the-trust-boundary">The Trust Boundary</h3>
+<p>Annotations are self-reported by the server. A malicious server could declare <code>readOnlyHint: true</code> on a tool that actually deletes data, bypassing the permission system's protection for write operations. This is why annotations are treated as hints, not guarantees. Defense in depth — the same principle that protects the Bash tool — applies here:</p>
+<ol>
+<li>Annotations influence permission decisions but do not override deny rules</li>
+<li>MCP tools from project-scoped configurations require explicit user approval before connection</li>
+<li>Enterprise policy can deny entire servers regardless of their self-reported capabilities</li>
+<li>The auto-mode classifier evaluates MCP tool calls in conversation context, independent of annotations</li>
+</ol>
+<hr />
+<h2 id="166-result-handling">16.6 Result Handling</h2>
+<p>MCP tool results cross a trust boundary — they come from an external server that may return malicious content (prompt injection), oversized content (context exhaustion), or binary content (images, PDFs) that needs special handling.</p>
+<h3 id="size-limits">Size Limits</h3>
+<p>MCP tool output is capped at a configurable token limit (default 25,000 tokens). The enforcement uses the same two-tier approach as built-in Read tools:</p>
+<ol>
+<li><strong>Heuristic estimate:</strong> A rough token count (bytes / 4) determines if the output is likely within limits. If the estimate is under 50% of the cap, the output passes without tokenizer API call.</li>
+<li><strong>Precise count:</strong> If the heuristic is inconclusive, the actual tokenizer computes an exact count.</li>
+</ol>
+<p>For text content, truncation preserves the beginning of the output (unlike Bash output, which preserves the end). The rationale is different: Bash command output has its summary at the end (test results, build status), while MCP tool output typically has the most relevant information at the beginning (query results, API responses).</p>
+<p>For array content (multiple content blocks), truncation removes trailing blocks until the total is within limits. Image blocks are compressed before removal is attempted.</p>
+<h3 id="timeout-management">Timeout Management</h3>
+<p>MCP tool calls have a two-tier timeout:</p>
+<table>
+<thead>
+<tr>
+<th>Timeout</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Connection timeout</td>
+<td>30 seconds</td>
+<td>Establishing the transport connection</td>
+</tr>
+<tr>
+<td>Tool call timeout</td>
+<td>10 minutes (configurable, can be much longer)</td>
+<td>Executing the tool and receiving the result</td>
+</tr>
+</tbody>
+</table>
+<p>The tool call timeout is deliberately permissive because MCP servers can perform long-running operations — training models, processing large datasets, running extensive test suites. The timeout is a safety net against stuck operations, not a bound on expected execution time.</p>
+<p>Timeouts are implemented through combined abort signals that merge the per-tool timeout with the parent abort signal (user pressing Ctrl+C). Whichever fires first wins, ensuring that tool calls are terminated promptly regardless of which signal triggers.</p>
+<h3 id="binary-content">Binary Content</h3>
+<p>MCP servers can return binary content — images, PDFs, audio files. The agent detects binary responses by content type and persists them to a tool-results directory on disk rather than injecting them directly into the conversation. The file path is returned as the tool result, allowing the model to use built-in tools (Read for images and PDFs) to examine the content.</p>
+<p>This indirection serves two purposes: it prevents binary blobs from consuming conversation context, and it applies the agent's existing content-specific handling (image compression, PDF page extraction) to MCP-sourced content.</p>
+<hr />
+<h2 id="167-security-boundaries">16.7 Security Boundaries</h2>
+<p>MCP servers are external code running on the user's machine or on remote servers. The security boundary between the agent and an MCP server must be clearly defined and enforced.</p>
+<h3 id="what-mcp-servers-can-do">What MCP Servers CAN Do</h3>
+<ul>
+<li>Expose tools with arbitrary input schemas and behavior</li>
+<li>Return arbitrary text and binary content as tool results</li>
+<li>Request user input through the elicitation mechanism</li>
+<li>Provide instructions that are injected into the agent's system prompt</li>
+<li>Notify the agent of tool, resource, and prompt changes</li>
+<li>Access the file system (stdio servers run as child processes with user privileges)</li>
+<li>Access the network (unless restricted by sandbox or firewall)</li>
+</ul>
+<h3 id="what-mcp-servers-cannot-do">What MCP Servers CANNOT Do</h3>
+<ul>
+<li>Bypass the agent's permission system — MCP tool calls go through the same permission pipeline as built-in tools</li>
+<li>Override deny rules from enterprise policy — deny rules take absolute precedence regardless of the tool source</li>
+<li>Read the agent's conversation history — the server only receives the specific tool call arguments, not the full conversation</li>
+<li>Modify the agent's configuration — the server cannot change permission rules, settings, or other server configurations</li>
+<li>Execute arbitrary code in the agent process — the transport layer is a message-passing boundary, not a code execution boundary</li>
+<li>Auto-connect without user approval (project-scoped servers) — servers defined in repository configuration require explicit user consent</li>
+</ul>
+<h3 id="the-project-server-approval-gate">The Project Server Approval Gate</h3>
+<p>Servers defined in a project's configuration file (<code>.mcp.json</code> committed to a repository) are untrusted by default. A malicious repository could include MCP server configurations that connect to attacker-controlled servers, enabling data exfiltration or prompt injection.</p>
+<p>The approval gate requires explicit user action before connecting to project-scoped servers:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Project</span><span class="w"> </span><span class="p">.</span><span class="n">mcp</span><span class="p">.</span><span class="n">json</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">defines</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">server</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">User</span><span class="w"> </span><span class="n">approval</span><span class="w"> </span><span class="n">status</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Approved</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Connect</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">server</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Rejected</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Skip</span><span class="w"> </span><span class="n">server</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Pending</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Show</span><span class="w"> </span><span class="n">placeholder</span><span class="w"> </span><span class="n">tool</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="n">User</span><span class="w"> </span><span class="n">invokes</span><span class="w"> </span><span class="n">placeholder</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Approval</span><span class="w"> </span><span class="n">dialog</span><span class="p">]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Approve</span><span class="o">|</span><span class="w"> </span><span class="n">C</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Reject</span><span class="o">|</span><span class="w"> </span><span class="n">D</span>
+</code></pre></div>
+
+<p>A critical security detail: the approval check reads from user, local, flag, and policy settings but NOT from project settings. This prevents a repository from approving its own MCP servers — the approval must come from a source the repository cannot control.</p>
+<h3 id="ssrf-protection">SSRF Protection</h3>
+<p>Remote MCP servers (HTTP, WebSocket) are validated against SSRF attacks before connection. The validation blocks private IP ranges and cloud metadata endpoints:</p>
+<table>
+<thead>
+<tr>
+<th>Blocked Range</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>10.0.0.0/8</code></td>
+<td>Private network</td>
+</tr>
+<tr>
+<td><code>172.16.0.0/12</code></td>
+<td>Private network</td>
+</tr>
+<tr>
+<td><code>192.168.0.0/16</code></td>
+<td>Private network</td>
+</tr>
+<tr>
+<td><code>169.254.0.0/16</code></td>
+<td>Link-local / cloud metadata</td>
+</tr>
+<tr>
+<td><code>fc00::/7</code></td>
+<td>IPv6 unique local</td>
+</tr>
+<tr>
+<td><code>fe80::/10</code></td>
+<td>IPv6 link-local</td>
+</tr>
+</tbody>
+</table>
+<p>SSRF validation runs at connection time, not at configuration time. This prevents DNS rebinding attacks where a hostname resolves to a safe IP during configuration but resolves to a private IP during connection.</p>
+<p>HTTPS is required for all non-localhost remote connections. HTTP connections to non-localhost URLs are rejected to prevent credential interception on untrusted networks.</p>
+<hr />
+<h2 id="168-permission-integration">16.8 Permission Integration</h2>
+<p>MCP tool permissions integrate with the existing permission system through the same pipeline that handles built-in tools. From the permission system's perspective, an MCP tool is just another tool with a namespaced name.</p>
+<h3 id="permission-evaluation">Permission Evaluation</h3>
+<p>When the model invokes <code>mcp__postgres__query</code>, the permission pipeline evaluates:</p>
+<ol>
+<li><strong>Deny rules:</strong> Is <code>mcp__postgres__query</code> or <code>mcp__postgres</code> in the deny list?</li>
+<li><strong>Ask rules:</strong> Is there an ask rule for this tool or server?</li>
+<li><strong>Tool annotations:</strong> Is the tool marked <code>readOnlyHint: true</code> (auto-allow in permissive modes)?</li>
+<li><strong>Allow rules:</strong> Is there an allow rule for this tool or server?</li>
+<li><strong>Mode default:</strong> What does the current permission mode say about unrecognized tools?</li>
+</ol>
+<p>The evaluation follows the same deny-first, allow-second ordering as built-in tools. Enterprise deny rules override all other considerations. Server-level rules apply to all tools from that server.</p>
+<h3 id="auto-mode-classifier-integration">Auto-Mode Classifier Integration</h3>
+<p>In auto mode, MCP tool calls that are not resolved by rules enter the AI classifier. The classifier receives the tool name, description, arguments, and conversation context. It evaluates whether the tool call is consistent with the user's intent.</p>
+<p>MCP tools present a unique challenge for the classifier: it cannot inspect the tool's implementation. For a built-in Bash command, the classifier can analyze the command structure. For an MCP tool, it can only evaluate the tool's declared description and the arguments. This makes the <code>destructiveHint</code> and <code>openWorldHint</code> annotations important — they provide the classifier with information it cannot determine independently.</p>
+<h3 id="rule-suggestions">Rule Suggestions</h3>
+<p>When the permission system prompts the user to approve an MCP tool call, it suggests permission rules at two granularity levels:</p>
+<ul>
+<li><strong>Tool-level:</strong> <code>allow: ["mcp__postgres__query"]</code> — approve only this specific tool</li>
+<li><strong>Server-level:</strong> <code>allow: ["mcp__postgres"]</code> — approve all tools from this server</li>
+</ul>
+<p>The suggestion defaults to tool-level (more restrictive). The user can upgrade to server-level if they trust the entire server. This follows the principle of least privilege — start with the narrowest permission and broaden only when requested.</p>
+<hr />
+<h2 id="169-connection-lifecycle-management">16.9 Connection Lifecycle Management</h2>
+<p>MCP servers have complex lifecycles: they must be started, connected, health-checked, reconnected on failure, and cleanly shut down. Managing this lifecycle reliably is one of the hardest engineering challenges in MCP integration.</p>
+<h3 id="startup-sequencing">Startup Sequencing</h3>
+<p>MCP server connections are batched at startup with different concurrency limits for local and remote servers:</p>
+<table>
+<thead>
+<tr>
+<th>Server Type</th>
+<th>Concurrency</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Local (stdio)</td>
+<td>3</td>
+<td>Each spawns a child process — resource contention at higher concurrency</td>
+</tr>
+<tr>
+<td>Remote (HTTP/WS)</td>
+<td>20</td>
+<td>Network connections parallelize well</td>
+</tr>
+</tbody>
+</table>
+<p>This tuning prevents the "thundering herd" problem where spawning 20 local MCP servers simultaneously overwhelms the system's process table and file descriptors.</p>
+<h3 id="reconnection-with-backoff">Reconnection with Backoff</h3>
+<p>Remote servers disconnect due to network issues, server restarts, session expiry, and load balancer rotations. The reconnection strategy uses exponential backoff:</p>
+<div class="codehilite"><pre><span></span><code><span class="nv">Attempt</span><span class="w"> </span><span class="mi">1</span>:<span class="w"> </span><span class="k">Wait</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="nv">second</span>
+<span class="nv">Attempt</span><span class="w"> </span><span class="mi">2</span>:<span class="w"> </span><span class="k">Wait</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="nv">seconds</span>
+<span class="nv">Attempt</span><span class="w"> </span><span class="mi">3</span>:<span class="w"> </span><span class="k">Wait</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="nv">seconds</span>
+<span class="nv">Attempt</span><span class="w"> </span><span class="mi">4</span>:<span class="w"> </span><span class="k">Wait</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="nv">seconds</span>
+<span class="nv">Attempt</span><span class="w"> </span><span class="mi">5</span>:<span class="w"> </span><span class="k">Wait</span><span class="w"> </span><span class="mi">16</span><span class="w"> </span><span class="nv">seconds</span><span class="w"> </span><span class="ss">(</span><span class="nv">capped</span><span class="w"> </span><span class="nv">at</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="nv">seconds</span><span class="ss">)</span>
+<span class="nv">After</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="nv">failures</span>:<span class="w"> </span><span class="nv">Transition</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">Failed</span><span class="w"> </span><span class="nv">state</span>
+</code></pre></div>
+
+<p>Local servers (stdio) do not reconnect. If the child process dies, restarting it requires re-initialization that the client cannot guarantee is idempotent. Instead, local server failures are reported to the user, who can restart the server manually or fix the underlying issue.</p>
+<h3 id="graceful-shutdown">Graceful Shutdown</h3>
+<p>Stdio server cleanup uses signal escalation:</p>
+<ol>
+<li><strong>SIGINT</strong> (100ms timeout) — polite "please stop"</li>
+<li><strong>SIGTERM</strong> (400ms timeout) — standard termination</li>
+<li><strong>SIGKILL</strong> — force kill (cannot be caught)</li>
+</ol>
+<p>Between signals, the system polls with <code>kill(pid, 0)</code> every 50ms to detect if the server has already exited. A 600ms absolute timeout ensures cleanup never blocks indefinitely.</p>
+<h3 id="cache-invalidation">Cache Invalidation</h3>
+<p>When a server disconnects, all associated caches are invalidated — tool definitions, resource definitions, prompt templates, and the connection itself. This prevents stale tool objects (whose <code>call()</code> closures reference a dead client) from persisting across reconnections.</p>
+<hr />
+<h2 id="1610-designing-mcp-tools">16.10 Designing MCP Tools</h2>
+<p>For engineers building MCP servers, the design of individual tools significantly affects how well they integrate with AI agents. Here are the principles that emerge from production MCP deployments:</p>
+<h3 id="be-specific-in-descriptions">Be Specific in Descriptions</h3>
+<p>The model selects tools based on their descriptions. A description of "Manages database operations" tells the model nothing about what the tool actually does. A description of "Executes a read-only SQL SELECT query against the PostgreSQL database and returns results as a JSON array of row objects" tells the model exactly when and how to use the tool.</p>
+<p>Keep descriptions under 2,048 characters. Longer descriptions are truncated, potentially losing critical information about constraints, error cases, or expected input format.</p>
+<h3 id="use-annotations-honestly">Use Annotations Honestly</h3>
+<p>Declaring <code>readOnlyHint: true</code> on a tool that modifies state creates a security vulnerability — the permission system may auto-allow the tool based on this annotation. Declaring <code>destructiveHint: true</code> on a read-only tool creates unnecessary friction — the user will be prompted for approval on every call.</p>
+<p>Accurate annotations make the agent more useful and more secure. Inaccurate annotations make it worse at both.</p>
+<h3 id="return-structured-data">Return Structured Data</h3>
+<p>Tools that return structured data (JSON objects with typed fields) are more useful to the model than tools that return free-form text. The model can extract specific fields, compare values, and compose results with other tools. A tool that returns <code>"Found 42 matching records in table 'users'"</code> is less useful than one that returns <code>{"count": 42, "table": "users", "query_time_ms": 15}</code>.</p>
+<h3 id="handle-errors-explicitly">Handle Errors Explicitly</h3>
+<p>When a tool call fails, return a structured error with a clear error code and message. The model uses error information to decide whether to retry (transient error), try a different approach (permanent error), or report to the user (configuration error).</p>
+<p>Do not return errors as successful results with error text in the output. The model may not recognize the text as an error and may attempt to use the "result" in subsequent operations.</p>
+<h3 id="keep-tools-focused">Keep Tools Focused</h3>
+<p>A tool that does one thing well is more useful than a tool that does many things poorly. If your server provides database access, separate "execute query" from "list tables" from "describe table schema." The model can compose focused tools into complex workflows. It cannot decompose a monolithic tool into the specific operation it needs.</p>
+<hr />
+<h2 id="1611-design-lessons">16.11 Design Lessons</h2>
+<p>MCP extensibility transforms an AI CLI agent from a product into a platform. The architectural decisions examined in this chapter enable that transformation:</p>
+<p><strong>1. Protocol over plugin.</strong> MCP uses a network protocol (JSON-RPC) rather than a plugin API (shared libraries, dynamic loading). This means servers can be written in any language, run in any process, and deploy on any machine. The cost is serialization overhead. The benefit is universal compatibility and process isolation.</p>
+<p><strong>2. Namespace everything.</strong> The <code>mcp__server__tool</code> naming convention prevents collisions and enables per-server permission rules. Any extensibility mechanism that does not namespace its identifiers will eventually have collision problems at scale.</p>
+<p><strong>3. Treat annotations as hints, not guarantees.</strong> Self-reported capabilities from external servers cannot be trusted unconditionally. Use them to optimize decisions (auto-allow read-only tools, prompt for destructive tools) but maintain defense in depth (deny rules still override annotations, the classifier still evaluates in context).</p>
+<p><strong>4. Gate untrusted sources.</strong> Project-scoped MCP servers require explicit user approval because the project is a lower trust level than the user. This is the same principle that drives the permission system's deny-first evaluation: higher trust levels override lower trust levels, never the reverse.</p>
+<p><strong>5. Handle lifecycle explicitly.</strong> Connection, disconnection, reconnection, and shutdown are not edge cases — they are the normal operating conditions of a distributed system. Build retry logic, cache invalidation, and graceful degradation into the core architecture, not as afterthoughts.</p>
+<p><strong>6. Batch state updates.</strong> When 20 servers connect in rapid succession, 20 individual state updates cause 20 React renders. Batching updates to a 16ms window (one frame at 60fps) reduces this to one or two renders. Any system that processes concurrent events should batch its state updates.</p>
+<p>In Chapter 17, we examine the trust model that underlies all security decisions in an AI CLI agent — the three trust domains, the threat model, and the defense-in-depth architecture that makes these systems safe enough for production use.</p>
+<div class="chapter-nav">
+  <a href="chapter-15.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-17.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

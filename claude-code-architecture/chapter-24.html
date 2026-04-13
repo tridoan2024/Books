@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 24: Subagent Design Philosophy — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-25.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-24-subagent-design-philosophy">Chapter 24: Subagent Design Philosophy</h1>
+<p>A single AI agent, no matter how capable, eventually hits a wall. The context window fills up. The task requires expertise the current prompt does not emphasize. A security review and a code refactor need to happen simultaneously. The solution is delegation -- spawning subagents that operate in their own context windows, with their own system prompts, their own tool permissions, and their own constraints.</p>
+<p>But delegation is not free. Every subagent costs tokens. Every message passing boundary introduces latency. Every isolated context window means duplicated understanding. The design challenge is not "can we spawn subagents?" but "when should we, and how do we constrain them so they help more than they hurt?"</p>
+<p>This chapter lays out the architectural philosophy behind subagent design in AI CLI agents. We will cover the delegation decision framework, the principle of least authority applied to AI agents, a taxonomy of agent types with their tool access levels, model selection strategies, context isolation mechanics, and how to define custom agent types. As we discussed in Chapter 23 (Designing MCP Integrations), external tool surfaces expand the agent's capabilities -- subagents are the architectural mechanism for managing that expanded surface safely.</p>
+<hr />
+<h2 id="241-when-to-delegate-vs-when-to-do-it-yourself">24.1 When to Delegate vs. When to Do It Yourself</h2>
+<p>The first design question is not how to delegate, but whether to delegate at all. Every delegation has overhead: the parent agent must formulate a prompt, the subagent must bootstrap its context, results must be passed back, and the parent must interpret them. For simple tasks, this overhead exceeds the cost of just doing the work directly.</p>
+<h3 id="the-complexity-threshold">The Complexity Threshold</h3>
+<p>Delegation makes sense when the task crosses one or more of these thresholds:</p>
+<table>
+<thead>
+<tr>
+<th>Threshold</th>
+<th>Example</th>
+<th>Why Delegate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Context pollution</strong></td>
+<td>Security audit generates 2,000 tokens of findings</td>
+<td>Those findings bloat the parent's context for all subsequent turns</td>
+</tr>
+<tr>
+<td><strong>Expertise mismatch</strong></td>
+<td>Parent is mid-refactor, needs a security opinion</td>
+<td>The parent's system prompt is optimized for refactoring, not OWASP analysis</td>
+</tr>
+<tr>
+<td><strong>Parallelism opportunity</strong></td>
+<td>Code review AND security review of same PR</td>
+<td>Two independent analyses that can run concurrently</td>
+</tr>
+<tr>
+<td><strong>Tool restriction</strong></td>
+<td>Read-only codebase exploration</td>
+<td>A subagent with no write tools cannot accidentally modify files</td>
+</tr>
+<tr>
+<td><strong>Blast radius containment</strong></td>
+<td>Speculative fix that might break things</td>
+<td>A subagent in a worktree cannot corrupt the main workspace</td>
+</tr>
+<tr>
+<td><strong>Turn budget</strong></td>
+<td>Investigation that might take 30+ tool calls</td>
+<td>A subagent has its own turn limit, protecting the parent's budget</td>
+</tr>
+</tbody>
+</table>
+<p>The anti-patterns are equally important. Do not delegate when:</p>
+<ul>
+<li>The task is a single tool call (read a file, run a grep). The overhead of spawning a subagent exceeds the cost of just doing it.</li>
+<li>The result needs to be deeply integrated into the current conversation. Subagent results are injected as a single message -- if the parent needs to iterate on the result, the back-and-forth is expensive.</li>
+<li>The task requires understanding the full conversation history. Subagents get fresh context windows. They do not see the parent's conversation history unless the parent explicitly includes relevant context in the delegation prompt.</li>
+</ul>
+<h3 id="the-decision-tree">The Decision Tree</h3>
+<p>The delegation decision follows a structured path:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">New</span><span class="w"> </span><span class="n">task</span><span class="w"> </span><span class="n">identified</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">Single</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">call</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Execute</span><span class="w"> </span><span class="n">directly</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">{</span><span class="n">Independent</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="n">context</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">{</span><span class="n">Would</span><span class="w"> </span><span class="n">pollute</span><span class="w"> </span><span class="n">context</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">{</span><span class="n">Can</span><span class="w"> </span><span class="n">parallelize</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">other</span><span class="w"> </span><span class="n">tasks</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">C</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Delegate</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">subagent</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="n">Delegate</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">parallel</span><span class="w"> </span><span class="n">subagents</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">I</span><span class="p">{</span><span class="n">Requires</span><span class="w"> </span><span class="k">restricted</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">set</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">G</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">J</span><span class="p">{</span><span class="n">Exceeds</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">calls</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">G</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">C</span>
+</code></pre></div>
+
+<p>The key insight: delegation is primarily about <strong>context management</strong>, not capability. A parent agent with all tools could theoretically do everything a subagent does. The value of delegation is keeping the parent's context clean, restricting the blast radius, and enabling parallelism.</p>
+<hr />
+<h2 id="242-the-principle-of-least-authority-for-ai-agents">24.2 The Principle of Least Authority for AI Agents</h2>
+<p>In traditional software security, the principle of least privilege states that a process should only have the permissions it needs to accomplish its task. Applied to AI agents, this becomes the principle of least authority: a subagent should only have access to the tools, files, and actions required for its specific mission.</p>
+<p>This is not just a security principle -- it is a correctness principle. An agent with access to tools it does not need will occasionally use them. A code-review agent with write access will sometimes "helpfully" fix the issues it finds, corrupting the review's objectivity. A research agent with bash access might try to install packages instead of reporting what it learned. Restricting tools constrains behavior as effectively as system prompt instructions, and more reliably.</p>
+<h3 id="three-layers-of-authority-restriction">Three Layers of Authority Restriction</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Layer1</span><span class="p">[</span><span class="s2">&quot;Layer 1: System Prompt&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SP</span><span class="p">[</span><span class="s2">&quot;Role definition&lt;br/&gt;&#39;You are a read-only explorer&#39;&lt;br/&gt;&#39;You will NOT modify code&#39;&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Layer2</span><span class="p">[</span><span class="s2">&quot;Layer 2: Tool Schema&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">TS</span><span class="p">[</span><span class="s2">&quot;Tool allowlist&lt;br/&gt;Only Read, Grep, Glob available&lt;br/&gt;Write, Bash not in schema&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Layer3</span><span class="p">[</span><span class="s2">&quot;Layer 3: Permission Rules&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PR</span><span class="p">[</span><span class="s2">&quot;Runtime enforcement&lt;br/&gt;Even if tool is called, permission&lt;br/&gt;system blocks unauthorized actions&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">Layer1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Layer2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Layer3</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Layer1</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f4f8,stroke:#2196F3</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Layer2</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9,stroke:#4CAF50</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Layer3</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3e0,stroke:#FF9800</span>
+</code></pre></div>
+
+<p><strong>Layer 1: System Prompt.</strong> The subagent's system prompt explicitly states what it can and cannot do. This is a soft constraint -- the model might ignore it -- but it handles 95% of cases. A code-review agent told "You will NOT modify code -- only report findings" almost never attempts writes.</p>
+<p><strong>Layer 2: Tool Schema.</strong> The subagent only receives tool definitions for the tools it is authorized to use. If the <code>Write</code> tool is not in the schema, the model cannot generate a valid tool-use request for it. This is a hard constraint at the API level -- the model literally does not know the tool exists.</p>
+<p><strong>Layer 3: Permission Rules.</strong> Even if a tool is in the schema (because the agent type needs limited bash access, for example), the permission system can further restrict what commands are allowed. A security-review agent might have bash access for running <code>grep</code> and <code>find</code>, but the permission rules block destructive commands.</p>
+<p>The defense-in-depth approach means that no single layer's failure results in an unauthorized action. If the system prompt fails to constrain behavior, the tool schema catches it. If the tool schema is too permissive, the permission rules enforce boundaries.</p>
+<hr />
+<h2 id="243-agent-type-taxonomy">24.3 Agent Type Taxonomy</h2>
+<p>Not all subagents are equal. Different tasks require different capability profiles. The agent type taxonomy defines a set of predefined agent configurations, each optimized for a specific class of work.</p>
+<h3 id="the-type-hierarchy">The Type Hierarchy</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">GP</span><span class="p">[</span><span class="s2">&quot;general-purpose&lt;br/&gt;All tools, multi-step tasks&lt;br/&gt;Model: configurable&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">GP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">EX</span><span class="p">[</span><span class="s2">&quot;explore&lt;br/&gt;Read-only, fast search&lt;br/&gt;Model: Sonnet/Haiku&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">GP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PL</span><span class="p">[</span><span class="s2">&quot;plan&lt;br/&gt;Read-only, architecture&lt;br/&gt;Model: Opus&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">GP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SR</span><span class="p">[</span><span class="s2">&quot;security-reviewer&lt;br/&gt;Read + limited Bash&lt;br/&gt;Model: Opus&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">GP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CR</span><span class="p">[</span><span class="s2">&quot;code-reviewer&lt;br/&gt;Read + Grep&lt;br/&gt;Model: Sonnet&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">GP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DB</span><span class="p">[</span><span class="s2">&quot;debugger&lt;br/&gt;Read + Bash&lt;br/&gt;Model: Opus&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">GP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RS</span><span class="p">[</span><span class="s2">&quot;researcher&lt;br/&gt;Read + Web&lt;br/&gt;Model: Sonnet&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">GP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DW</span><span class="p">[</span><span class="s2">&quot;doc-writer&lt;br/&gt;Read + Write&lt;br/&gt;Model: Sonnet&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">GP</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f4f8,stroke:#2196F3</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EX</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9,stroke:#4CAF50</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">PL</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9,stroke:#4CAF50</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SR</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3e0,stroke:#FF9800</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">CR</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9,stroke:#4CAF50</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">DB</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3e0,stroke:#FF9800</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">RS</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f4f8,stroke:#2196F3</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">DW</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec,stroke:#E91E63</span>
+</code></pre></div>
+
+<h3 id="detailed-agent-profiles">Detailed Agent Profiles</h3>
+<p>Each agent type is defined by four dimensions: <strong>tools</strong>, <strong>model</strong>, <strong>system prompt</strong>, and <strong>constraints</strong>.</p>
+<h4 id="general-purpose">general-purpose</h4>
+<p>The unrestricted agent. Has access to all tools, can perform multi-step tasks, and operates with the same capabilities as the parent agent. Use this when you need a subagent to complete a complex task autonomously -- implementing a feature, fixing a bug end-to-end, or performing a multi-file refactoring.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>All available (Read, Write, Bash, Grep, Glob, Web, Agent)</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Configurable (defaults to parent's model)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>30</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Implement the pagination feature in the API module"</td>
+</tr>
+</tbody>
+</table>
+<p>The general-purpose agent is the only type that can itself spawn subagents. This enables hierarchical delegation -- a general-purpose agent might spawn an explore agent to investigate the codebase, then a doc-writer agent to document what it built.</p>
+<h4 id="explore">explore</h4>
+<p>The read-only scout. Optimized for fast codebase exploration -- finding files, reading code, answering questions about architecture. Cannot modify anything. This is the most commonly spawned agent type because investigation is the most common subtask.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>Read, Grep, Glob, Bash (read-only commands only)</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Sonnet or Haiku (speed over depth)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Find all files that import the AuthService class"</td>
+</tr>
+</tbody>
+</table>
+<p>The "read-only Bash" restriction means the explore agent can run commands like <code>wc -l</code>, <code>find</code>, <code>ls</code>, and <code>cat</code>, but the permission layer blocks any command that writes to the filesystem, starts processes, or modifies state.</p>
+<h4 id="plan">plan</h4>
+<p>The architect. Used for high-level planning that requires understanding the full system but should not touch any code. Given the same read-only tools as explore, but paired with a more capable model (Opus) and a system prompt that emphasizes architectural thinking.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>Read, Grep, Glob</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Opus (deep reasoning for architecture decisions)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Design the migration strategy for moving from REST to GraphQL"</td>
+</tr>
+</tbody>
+</table>
+<p>The distinction between explore and plan is model selection and prompt framing. Explore agents are fast and cheap -- they answer factual questions about the codebase. Plan agents are slow and expensive -- they reason about trade-offs, dependencies, and multi-step strategies.</p>
+<h4 id="security-reviewer">security-reviewer</h4>
+<p>The auditor with teeth. Has read access plus limited bash for running security scanners, checking file permissions, and inspecting configurations. Paired with Opus because security analysis requires deep reasoning about attack vectors, trust boundaries, and edge cases.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>Read, Grep, Glob, Bash (restricted to analysis commands)</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Opus (critical analysis requires strongest reasoning)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Audit the authentication module for OWASP Top 10 vulnerabilities"</td>
+</tr>
+</tbody>
+</table>
+<p>The bash restriction for security-reviewers allows commands like <code>grep -r "password" .</code>, <code>openssl s_client</code>, <code>pip audit</code>, and <code>npm audit</code>, but blocks any command that would modify files or install packages. The security reviewer observes -- it does not remediate.</p>
+<h4 id="code-reviewer">code-reviewer</h4>
+<p>The quality inspector. Reads code and reports findings. Explicitly cannot write code -- this prevents the common failure mode where a review agent "helpfully" applies its suggestions, conflating review with implementation.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>Read, Grep, Glob</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Sonnet (balanced cost/quality for code analysis)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Review the changes in this PR for bugs and logic errors"</td>
+</tr>
+</tbody>
+</table>
+<p>The code-reviewer's system prompt includes explicit output format instructions: findings must include severity (critical/high/medium/low), file path with line number, description, and suggested fix. This structured output makes it easy for the parent agent to aggregate and present findings.</p>
+<h4 id="debugger">debugger</h4>
+<p>The detective. Has full investigative powers -- can read code, run tests, check logs, reproduce issues, and execute diagnostic commands. Paired with Opus because root-cause analysis requires the kind of multi-step reasoning that weaker models often shortcut.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>Read, Grep, Glob, Bash (full access for investigation)</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Opus (multi-step causal reasoning)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>30</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Investigate why the payment webhook handler is returning 500 errors"</td>
+</tr>
+</tbody>
+</table>
+<p>Debugger agents often consume more turns than other agent types because debugging is inherently iterative: form hypothesis, gather evidence, refine hypothesis, repeat. The 30-turn limit gives them enough room to work while preventing runaway investigations.</p>
+<h4 id="researcher">researcher</h4>
+<p>The librarian. Has read access to the codebase plus web search and web fetch for looking up documentation, comparing alternatives, and finding recent information. Cannot modify code or run commands.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>Read, Grep, Glob, WebSearch, WebFetch</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Sonnet (balanced for synthesis tasks)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Research the latest approaches to rate limiting in distributed systems"</td>
+</tr>
+</tbody>
+</table>
+<p>The researcher agent is unique in having web access without bash access. This is a deliberate security decision -- web content is untrusted, and an agent that can both fetch web content and execute shell commands creates a prompt injection vector. By separating web access from execution, the researcher can safely consume untrusted content without risking command injection.</p>
+<h4 id="doc-writer">doc-writer</h4>
+<p>The technical writer. Has read access for understanding code plus write access for creating documentation files. Cannot run commands -- documentation should be derivable from reading the code, not from executing it.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tools</td>
+<td>Read, Grep, Glob, Write</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>Sonnet (good prose generation at reasonable cost)</td>
+</tr>
+<tr>
+<td>Max turns</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Context</td>
+<td>Fresh, isolated</td>
+</tr>
+<tr>
+<td>Typical use</td>
+<td>"Write API documentation for the /users endpoint"</td>
+</tr>
+</tbody>
+</table>
+<p>The doc-writer's write access is typically further restricted by permission rules to only allow writing to documentation directories (<code>docs/</code>, <code>*.md</code> files). This prevents a doc-writer from accidentally modifying source code.</p>
+<h3 id="comparison-table">Comparison Table</h3>
+<table>
+<thead>
+<tr>
+<th>Agent Type</th>
+<th>Read</th>
+<th>Write</th>
+<th>Bash</th>
+<th>Web</th>
+<th>Agent</th>
+<th>Model</th>
+<th>Turns</th>
+<th>Primary Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>general-purpose</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Config</td>
+<td>30</td>
+<td>Full autonomy</td>
+</tr>
+<tr>
+<td>explore</td>
+<td>Yes</td>
+<td>No</td>
+<td>Read-only</td>
+<td>No</td>
+<td>No</td>
+<td>Sonnet/Haiku</td>
+<td>15</td>
+<td>Fast investigation</td>
+</tr>
+<tr>
+<td>plan</td>
+<td>Yes</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>Opus</td>
+<td>20</td>
+<td>Architecture planning</td>
+</tr>
+<tr>
+<td>security-reviewer</td>
+<td>Yes</td>
+<td>No</td>
+<td>Analysis</td>
+<td>No</td>
+<td>No</td>
+<td>Opus</td>
+<td>25</td>
+<td>Security audit</td>
+</tr>
+<tr>
+<td>code-reviewer</td>
+<td>Yes</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>Sonnet</td>
+<td>15</td>
+<td>Code quality review</td>
+</tr>
+<tr>
+<td>debugger</td>
+<td>Yes</td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+<td>No</td>
+<td>Opus</td>
+<td>30</td>
+<td>Root cause analysis</td>
+</tr>
+<tr>
+<td>researcher</td>
+<td>Yes</td>
+<td>No</td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+<td>Sonnet</td>
+<td>20</td>
+<td>Information synthesis</td>
+</tr>
+<tr>
+<td>doc-writer</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>Sonnet</td>
+<td>20</td>
+<td>Documentation</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="244-model-selection-per-agent-type">24.4 Model Selection Per Agent Type</h2>
+<p>Model selection is not a one-size-fits-all decision. Different agent types have different reasoning requirements, latency tolerances, and cost profiles. The selection strategy follows a simple principle: <strong>use the strongest model for tasks where errors have the highest consequences, and the fastest model for tasks where speed matters more than depth.</strong></p>
+<h3 id="the-model-tiers">The Model Tiers</h3>
+<div class="codehilite"><pre><span></span><code><span class="nx">graph</span><span class="w"> </span><span class="nx">LR</span>
+<span class="w">    </span><span class="nx">subgraph</span><span class="w"> </span><span class="nx">Tier1</span><span class="p">[</span><span class="s">&quot;Tier 1: Opus — Deep Reasoning&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T1A</span><span class="p">[</span><span class="s">&quot;Security review&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T1B</span><span class="p">[</span><span class="s">&quot;Architecture planning&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T1C</span><span class="p">[</span><span class="s">&quot;Root cause debugging&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">end</span>
+
+<span class="w">    </span><span class="nx">subgraph</span><span class="w"> </span><span class="nx">Tier2</span><span class="p">[</span><span class="s">&quot;Tier 2: Sonnet — Balanced&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T2A</span><span class="p">[</span><span class="s">&quot;Code review&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T2B</span><span class="p">[</span><span class="s">&quot;Research synthesis&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T2C</span><span class="p">[</span><span class="s">&quot;Documentation&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T2D</span><span class="p">[</span><span class="s">&quot;General-purpose tasks&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">end</span>
+
+<span class="w">    </span><span class="nx">subgraph</span><span class="w"> </span><span class="nx">Tier3</span><span class="p">[</span><span class="s">&quot;Tier 3: Haiku — Speed&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T3A</span><span class="p">[</span><span class="s">&quot;Simple exploration&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T3B</span><span class="p">[</span><span class="s">&quot;File search&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">T3C</span><span class="p">[</span><span class="s">&quot;Command execution&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">end</span>
+
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">Tier1</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">fff3e0</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="nx">FF9800</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">Tier2</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">e8f4f8</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="mi">2196</span><span class="nx">F3</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">Tier3</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">e8f5e9</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="mi">4</span><span class="nx">CAF50</span>
+</code></pre></div>
+
+<p><strong>Opus</strong> is reserved for tasks where missing something is costly. A security reviewer that fails to find an SQL injection vulnerability has a real-world impact. A debugger that identifies a red herring instead of the root cause wastes the engineer's time. A plan agent that proposes a flawed architecture creates expensive rework. These tasks justify the higher cost and latency of the strongest model.</p>
+<p><strong>Sonnet</strong> is the default for balanced tasks. Code review, research, documentation, and general-purpose work all benefit from a capable model but do not require the deepest reasoning. Sonnet provides a good quality-to-cost ratio for these tasks, typically running 3-5x faster than Opus at roughly one-fifth the cost.</p>
+<p><strong>Haiku</strong> is the speed tier. When the task is simple -- find a file, count lines, check if a function exists -- the quality difference between Haiku and Sonnet is negligible, but the latency difference is significant. Explore agents that answer factual codebase questions are ideal Haiku candidates.</p>
+<h3 id="cost-implications">Cost Implications</h3>
+<p>Model selection directly affects the cost of delegation. Consider a security review that requires 25 turns with an average of 1,500 input tokens and 800 output tokens per turn:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Input Cost/1M</th>
+<th>Output Cost/1M</th>
+<th>25-Turn Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus</td>
+<td>$15.00</td>
+<td>$75.00</td>
+<td>$2.06</td>
+</tr>
+<tr>
+<td>Sonnet</td>
+<td>$3.00</td>
+<td>$15.00</td>
+<td>$0.41</td>
+</tr>
+<tr>
+<td>Haiku</td>
+<td>$0.25</td>
+<td>$1.25</td>
+<td>$0.03</td>
+</tr>
+</tbody>
+</table>
+<p>The difference is 50x between Opus and Haiku. This is why model selection matters -- using Opus for every subagent in a session with 10 delegations could cost $20+, while a mixed strategy that reserves Opus for the two critical tasks and uses Sonnet/Haiku for the rest might cost $3.</p>
+<h3 id="dynamic-model-override">Dynamic Model Override</h3>
+<p>The agent type defines a default model, but the delegation interface should support runtime overrides. When the parent agent determines that a particular code review is unusually complex -- say, reviewing a cryptographic implementation -- it can override the code-reviewer's default Sonnet with Opus for that specific invocation.</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">Delegation</span><span class="w"> </span><span class="nx">config</span><span class="p">:</span>
+<span class="w">  </span><span class="nx">agent_type</span><span class="p">:</span><span class="w"> </span><span class="nx">code</span><span class="o">-</span><span class="nx">reviewer</span>
+<span class="w">  </span><span class="nx">model_override</span><span class="p">:</span><span class="w"> </span><span class="nx">opus</span><span class="w">        </span><span class="err">#</span><span class="w"> </span><span class="nx">Override</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="nx">Sonnet</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nx">this</span><span class="w"> </span><span class="nx">task</span>
+<span class="w">  </span><span class="nx">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Review the AES-GCM implementation in crypto/encrypt.ts.</span>
+<span class="s">           Pay special attention to IV reuse and padding oracle</span>
+<span class="s">           vulnerabilities.&quot;</span>
+</code></pre></div>
+
+<p>The override mechanism respects a hierarchy: explicit override &gt; agent type default &gt; system default. This gives the parent agent (or the user) fine-grained control without requiring a new agent type for every model variant.</p>
+<hr />
+<h2 id="245-context-isolation-why-subagents-get-fresh-windows">24.5 Context Isolation: Why Subagents Get Fresh Windows</h2>
+<p>The most important architectural decision in subagent design is context isolation. Every subagent operates in a <strong>fresh context window</strong> -- it does not share the parent's conversation history, accumulated tool results, or evolving understanding of the task.</p>
+<p>This is counterintuitive. Would it not be more efficient to share context so the subagent does not have to re-discover information the parent already knows? In theory, yes. In practice, shared context creates three serious problems.</p>
+<h3 id="problem-1-context-pollution">Problem 1: Context Pollution</h3>
+<p>The parent agent's context window is a carefully curated conversation. It contains the user's original request, the evolving plan, tool results from investigation, and the agent's own reasoning chain. Injecting a subagent's 25-turn security review directly into this conversation would add thousands of tokens of findings, evidence, and intermediate reasoning that the parent does not need.</p>
+<p>Fresh context means the subagent's work stays in the subagent's window. Only the final result -- a structured summary of findings -- flows back to the parent. This keeps the parent's context clean and focused.</p>
+<h3 id="problem-2-conflicting-system-prompts">Problem 2: Conflicting System Prompts</h3>
+<p>Different agent types need different system prompts. A code-reviewer needs instructions about output format, severity ratings, and what to ignore. A debugger needs instructions about hypothesis formation and evidence gathering. A researcher needs instructions about source citation and synthesis.</p>
+<p>If subagents shared the parent's context, they would inherit the parent's system prompt -- which is optimized for general-purpose work, not for the subagent's specialized role. Fresh context allows each subagent to receive a tailored system prompt without conflicting instructions.</p>
+<h3 id="problem-3-prompt-injection-blast-radius">Problem 3: Prompt Injection Blast Radius</h3>
+<p>Consider a scenario where an explore agent reads a file that contains adversarial content -- a comment designed to manipulate the agent's behavior. In a shared-context model, this injected content would now exist in the parent's conversation and could influence all subsequent actions. In an isolated-context model, the injected content is confined to the subagent's window. When the subagent returns its result, the parent receives a summary, not the raw file content containing the injection.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">SharedContext</span><span class="p">[</span><span class="s">&quot;Shared Context (Dangerous)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">P1</span><span class="p">[</span><span class="s">&quot;Parent context&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S1</span><span class="p">[</span><span class="s">&quot;Subagent reads&lt;br/&gt;malicious file&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">S1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">P1</span>
+<span class="w">        </span><span class="n">P1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">A1</span><span class="p">[</span><span class="s">&quot;Injected content now&lt;br/&gt;in parent&#39;</span><span class="n">s</span><span class="w"> </span><span class="n">context</span><span class="s">&quot;]</span>
+<span class="s">        A1 --&gt; A2[&quot;</span><span class="kr">All</span><span class="w"> </span><span class="n">future</span><span class="w"> </span><span class="n">actions</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">potentially</span><span class="w"> </span><span class="n">influenced</span><span class="s">&quot;]</span>
+<span class="s">    end</span>
+
+<span class="s">    subgraph IsolatedContext[&quot;</span><span class="n">Isolated</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="p">(</span><span class="n">Safe</span><span class="p">)</span><span class="s">&quot;]</span>
+<span class="s">        P2[&quot;</span><span class="n">Parent</span><span class="w"> </span><span class="n">context</span><span class="s">&quot;] --&gt;|&quot;</span><span class="n">Task</span><span class="w"> </span><span class="n">prompt</span><span class="s">&quot;| S2[&quot;</span><span class="n">Subagent</span><span class="w"> </span><span class="n">reads</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">malicious</span><span class="w"> </span><span class="n">file</span><span class="s">&quot;]</span>
+<span class="s">        S2 --&gt;|&quot;</span><span class="n">Summary</span><span class="w"> </span><span class="n">result</span><span class="s">&quot;| P2</span>
+<span class="s">        P2 --&gt; A3[&quot;</span><span class="n">Parent</span><span class="w"> </span><span class="n">context</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">uncontaminated</span><span class="s">&quot;]</span>
+<span class="s">    end</span>
+
+<span class="s">    style SharedContext fill:#ffebee,stroke:#E91E63</span>
+<span class="s">    style IsolatedContext fill:#e8f5e9,stroke:#4CAF50</span>
+</code></pre></div>
+
+<p>Context isolation is the primary defense against lateral prompt injection in multi-agent systems. The subagent might be compromised by malicious content, but its influence is limited to the single result message it returns to the parent. The parent can evaluate that result with its own judgment, potentially catching manipulated outputs.</p>
+<h3 id="the-cost-of-isolation">The Cost of Isolation</h3>
+<p>The trade-off is real. Context isolation means:</p>
+<ul>
+<li><strong>Duplicated discovery.</strong> The subagent must re-read files the parent already read. If the parent read 5 files during investigation and then delegates to a debugger, the debugger will re-read some of those same files.</li>
+<li><strong>Lost nuance.</strong> The parent may have context from the user's conversation ("the bug started after we upgraded React") that it must explicitly pass to the subagent in the delegation prompt. Implicit context is lost.</li>
+<li><strong>Higher token cost.</strong> Each subagent starts from zero, paying for its own context window.</li>
+</ul>
+<p>The architecture accepts these costs because the benefits -- clean context, tailored prompts, injection containment -- are worth more in production than the efficiency gains of sharing.</p>
+<hr />
+<h2 id="246-the-delegation-decision-framework">24.6 The Delegation Decision Framework</h2>
+<p>When the parent agent encounters a task that crosses the complexity threshold, it needs a systematic way to choose the right agent type. The delegation decision framework combines the task characteristics with the agent taxonomy to select the optimal configuration.</p>
+<h3 id="decision-dimensions">Decision Dimensions</h3>
+<ol>
+<li><strong>Task nature</strong>: Investigation, analysis, creation, or execution?</li>
+<li><strong>Tool requirements</strong>: Which tools does the task need?</li>
+<li><strong>Quality requirements</strong>: How costly is an error?</li>
+<li><strong>Latency requirements</strong>: How fast does the user need results?</li>
+<li><strong>Parallelism</strong>: Can this run alongside other tasks?</li>
+</ol>
+<h3 id="the-routing-table">The Routing Table</h3>
+<table>
+<thead>
+<tr>
+<th>Task Nature</th>
+<th>Needs Write?</th>
+<th>Needs Bash?</th>
+<th>Needs Web?</th>
+<th>Error Cost</th>
+<th>Agent Type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Find code/patterns</td>
+<td>No</td>
+<td>Maybe</td>
+<td>No</td>
+<td>Low</td>
+<td>explore</td>
+</tr>
+<tr>
+<td>Architecture analysis</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>High</td>
+<td>plan</td>
+</tr>
+<tr>
+<td>Security review</td>
+<td>No</td>
+<td>Yes (analysis)</td>
+<td>No</td>
+<td>Very High</td>
+<td>security-reviewer</td>
+</tr>
+<tr>
+<td>Code quality review</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>Medium</td>
+<td>code-reviewer</td>
+</tr>
+<tr>
+<td>Bug investigation</td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+<td>High</td>
+<td>debugger</td>
+</tr>
+<tr>
+<td>Topic research</td>
+<td>No</td>
+<td>No</td>
+<td>Yes</td>
+<td>Medium</td>
+<td>researcher</td>
+</tr>
+<tr>
+<td>Write documentation</td>
+<td>Yes (docs only)</td>
+<td>No</td>
+<td>No</td>
+<td>Low</td>
+<td>doc-writer</td>
+</tr>
+<tr>
+<td>Implement feature</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Maybe</td>
+<td>Medium</td>
+<td>general-purpose</td>
+</tr>
+<tr>
+<td>Fix bug end-to-end</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>Medium</td>
+<td>general-purpose</td>
+</tr>
+</tbody>
+</table>
+<h3 id="parallel-delegation-opportunities">Parallel Delegation Opportunities</h3>
+<p>Certain task combinations are natural candidates for parallel execution. The parent identifies these opportunities and dispatches multiple subagents simultaneously:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Parallel Agents</th>
+<th>Sync Point</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PR review</td>
+<td>code-reviewer + security-reviewer</td>
+<td>Both results before presenting</td>
+</tr>
+<tr>
+<td>Feature implementation</td>
+<td>explore (investigate) + plan (design)</td>
+<td>Both results before coding</td>
+</tr>
+<tr>
+<td>Bug triage</td>
+<td>debugger (reproduce) + explore (find related)</td>
+<td>Merge findings</td>
+</tr>
+<tr>
+<td>Documentation update</td>
+<td>explore (map changes) + doc-writer (draft)</td>
+<td>Sequential -- explore first</td>
+</tr>
+</tbody>
+</table>
+<p>The last row illustrates an important distinction: some "parallel" tasks actually have dependencies. The doc-writer needs the explore agent's findings before it can write accurate documentation. The framework must distinguish between truly independent tasks (fan-out) and dependent tasks (pipeline). We will explore these orchestration patterns in detail in Chapter 25.</p>
+<hr />
+<h2 id="247-custom-agent-definitions">24.7 Custom Agent Definitions</h2>
+<p>The predefined agent types cover common patterns, but production systems need extensibility. Custom agent definitions allow teams to create new agent types tailored to their specific workflows -- a database-migration agent, a test-generator agent, a compliance-checker agent.</p>
+<h3 id="the-agent-definition-format">The Agent Definition Format</h3>
+<p>Custom agents are defined in markdown files with YAML frontmatter. This format is human-readable, version-controllable, and requires no build step. The agent definition file specifies the four dimensions of an agent type:</p>
+<div class="codehilite"><pre><span></span><code><span class="nn">---</span>
+<span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">database-reviewer</span>
+<span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">&gt;</span>
+<span class="w">  </span><span class="no">Reviews database migrations and schema changes for correctness,</span>
+<span class="w">  </span><span class="no">performance impact, and backward compatibility. Use when user asks</span>
+<span class="w">  </span><span class="no">about migrations, schema reviews, or database changes.</span>
+<span class="nt">tools</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Read</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Grep</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Glob</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Bash</span>
+<span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opus</span>
+<span class="nt">effort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span>
+<span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">project</span>
+<span class="nt">maxTurns</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25</span>
+<span class="nn">---</span>
+
+<span class="nt">You are a database review specialist. When analyzing migrations</span><span class="p">:</span>
+
+<span class="l l-Scalar l-Scalar-Plain">1. Check for irreversible operations (DROP COLUMN, DROP TABLE)</span>
+<span class="l l-Scalar l-Scalar-Plain">2. Verify indexes support expected query patterns</span>
+<span class="l l-Scalar l-Scalar-Plain">3. Check for lock contention on large tables</span>
+<span class="l l-Scalar l-Scalar-Plain">4. Validate data type changes are backward-compatible</span>
+<span class="l l-Scalar l-Scalar-Plain">5. Ensure rollback migrations exist and are correct</span>
+
+<span class="nt">Report findings as</span><span class="p">:</span>
+<span class="err">**</span><span class="p p-Indicator">[</span><span class="nv">SEVERITY</span><span class="p p-Indicator">]</span><span class="err">**</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">migration_file:line — Description</span>
+
+<span class="nt">Severity levels</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">CRITICAL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Data loss, extended downtime, irreversible without backup</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">HIGH</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Performance degradation, lock contention on production tables</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">MEDIUM</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Missing indexes, suboptimal data types</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">LOW</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Naming conventions, documentation</span>
+</code></pre></div>
+
+<h3 id="how-custom-agents-load">How Custom Agents Load</h3>
+<p>The discovery mechanism scans a well-known directory for agent definition files:</p>
+<div class="codehilite"><pre><span></span><code><span class="na">.claude</span><span class="err">/</span><span class="no">agents</span><span class="err">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="nf">security-reviewer.md</span><span class="w">      </span><span class="c1"># Built-in, can be overridden</span>
+<span class="err">├──</span><span class="w"> </span><span class="nf">code-reviewer.md</span><span class="w">          </span><span class="c1"># Built-in, can be overridden</span>
+<span class="err">├──</span><span class="w"> </span><span class="nf">debugger.md</span><span class="w">               </span><span class="c1"># Built-in, can be overridden</span>
+<span class="err">├──</span><span class="w"> </span><span class="nf">researcher.md</span><span class="w">             </span><span class="c1"># Built-in, can be overridden</span>
+<span class="err">├──</span><span class="w"> </span><span class="nf">doc-writer.md</span><span class="w">             </span><span class="c1"># Built-in, can be overridden</span>
+<span class="err">├──</span><span class="w"> </span><span class="nf">database-reviewer.md</span><span class="w">      </span><span class="c1"># Custom agent</span>
+<span class="err">├──</span><span class="w"> </span><span class="nf">test-generator.md</span><span class="w">         </span><span class="c1"># Custom agent</span>
+<span class="err">└──</span><span class="w"> </span><span class="nf">compliance-checker.md</span><span class="w">     </span><span class="c1"># Custom agent</span>
+</code></pre></div>
+
+<p>At startup, the agent loader reads all <code>.md</code> files in this directory, parses the YAML frontmatter, validates the configuration (are the tools valid? is the model valid? is maxTurns within bounds?), and registers each agent type with the system prompt registry. Custom agents override built-in agents if they share the same name -- this allows teams to customize the default security-reviewer's behavior without modifying the system.</p>
+<h3 id="agent-description-and-auto-selection">Agent Description and Auto-Selection</h3>
+<p>The <code>description</code> field in the frontmatter serves a dual purpose. It documents what the agent does for humans, and it tells the parent agent when to select this agent type. When the parent encounters a task, it evaluates the task description against each agent's description to find the best match.</p>
+<p>This is why the description field matters. A vague description like "Reviews database stuff" will match unreliably. A specific description with trigger phrases -- "Reviews database migrations and schema changes for correctness, performance impact, and backward compatibility. Use when user asks about migrations, schema reviews, or database changes" -- gives the parent agent clear signal about when to delegate to this type.</p>
+<h3 id="validation-rules">Validation Rules</h3>
+<p>Custom agent definitions must pass validation before registration:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Constraint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>Unique, alphanumeric + hyphens, max 50 chars</td>
+</tr>
+<tr>
+<td><code>tools</code></td>
+<td>Must be subset of available tools</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td>Must be a recognized model identifier</td>
+</tr>
+<tr>
+<td><code>maxTurns</code></td>
+<td>1-100, defaults to 20</td>
+</tr>
+<tr>
+<td><code>effort</code></td>
+<td>low, medium, high, or max</td>
+</tr>
+<tr>
+<td><code>memory</code></td>
+<td>user, project, or local</td>
+</tr>
+</tbody>
+</table>
+<p>Invalid definitions produce warnings at startup rather than errors -- a malformed custom agent should not prevent the system from starting.</p>
+<hr />
+<h2 id="248-subagent-context-stripping">24.8 Subagent Context Stripping</h2>
+<p>A critical optimization in the subagent architecture is what the subagent does NOT receive. The parent agent's context is rich -- it includes project instructions from CLAUDE.md, memory entries, git state, active files, and accumulated skill prompts. Subagents skip most of this.</p>
+<h3 id="what-subagents-skip">What Subagents Skip</h3>
+<table>
+<thead>
+<tr>
+<th>Context Component</th>
+<th>Included?</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CLAUDE.md instructions</td>
+<td>No</td>
+<td>Parent already applied these when formulating the task</td>
+</tr>
+<tr>
+<td>Memory entries</td>
+<td>No</td>
+<td>Subagent operates on specific task, not project-wide knowledge</td>
+</tr>
+<tr>
+<td>Git context</td>
+<td>Minimal</td>
+<td>Branch name only, not full status</td>
+</tr>
+<tr>
+<td>Active files</td>
+<td>No</td>
+<td>Subagent reads what it needs</td>
+</tr>
+<tr>
+<td>Skill prompts</td>
+<td>No</td>
+<td>Skills are invoked by the user, not by subagents</td>
+</tr>
+<tr>
+<td>Environment info</td>
+<td>Yes</td>
+<td>Needed for bash commands, path resolution</td>
+</tr>
+<tr>
+<td>Working directory</td>
+<td>Yes</td>
+<td>Needed for file operations</td>
+</tr>
+<tr>
+<td>Agent system prompt</td>
+<td>Yes</td>
+<td>The agent type's specialized instructions</td>
+</tr>
+</tbody>
+</table>
+<p>This stripping saves 500-2,000 tokens per subagent invocation. Over a session with 10 delegations, that is 5,000-20,000 tokens saved -- a meaningful reduction in both cost and latency.</p>
+<p>The design rationale is that the parent agent acts as a <strong>filter</strong>. It reads CLAUDE.md, applies project rules, understands the user's preferences, and then translates all of that into a specific, well-scoped task description for the subagent. The subagent does not need to re-derive the project context from raw instructions -- it receives the already-digested version in the delegation prompt.</p>
+<hr />
+<h2 id="249-the-subagent-lifecycle">24.9 The Subagent Lifecycle</h2>
+<p>Every subagent follows a predictable lifecycle from creation to result delivery.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">P</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Parent</span><span class="w"> </span><span class="n">Agent</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Dispatch</span><span class="w"> </span><span class="n">Layer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">S</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Subagent</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">API</span>
+
+<span class="w">    </span><span class="n">P</span><span class="o">-&gt;&gt;</span><span class="n">D</span><span class="p">:</span><span class="w"> </span><span class="n">Delegate</span><span class="p">(</span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">prompt</span><span class="p">,</span><span class="w"> </span><span class="n">config</span><span class="p">)</span>
+<span class="w">    </span><span class="n">D</span><span class="o">-&gt;&gt;</span><span class="n">D</span><span class="p">:</span><span class="w"> </span><span class="n">Resolve</span><span class="w"> </span><span class="n">agent</span><span class="w"> </span><span class="n">type</span>
+<span class="w">    </span><span class="n">D</span><span class="o">-&gt;&gt;</span><span class="n">D</span><span class="p">:</span><span class="w"> </span><span class="n">Build</span><span class="w"> </span><span class="n">system</span><span class="w"> </span><span class="n">prompt</span>
+<span class="w">    </span><span class="n">D</span><span class="o">-&gt;&gt;</span><span class="n">D</span><span class="p">:</span><span class="w"> </span><span class="n">Filter</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">schema</span>
+<span class="w">    </span><span class="n">D</span><span class="o">-&gt;&gt;</span><span class="n">S</span><span class="p">:</span><span class="w"> </span><span class="n">Create</span><span class="w"> </span><span class="n">subagent</span><span class="w"> </span><span class="n">context</span>
+
+<span class="w">    </span><span class="n">loop</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">Loop</span><span class="w"> </span><span class="p">(</span><span class="n">up</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">maxTurns</span><span class="p">)</span>
+<span class="w">        </span><span class="n">S</span><span class="o">-&gt;&gt;</span><span class="n">API</span><span class="p">:</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">call</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">subagent</span><span class="w"> </span><span class="n">prompt</span>
+<span class="w">        </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">S</span><span class="p">:</span><span class="w"> </span><span class="n">Response</span><span class="w"> </span><span class="p">(</span><span class="n">text</span><span class="o">/</span><span class="k">tool</span><span class="o">-</span><span class="n">use</span><span class="p">)</span>
+<span class="w">        </span><span class="n">alt</span><span class="w"> </span><span class="n">Tool</span><span class="w"> </span><span class="n">use</span><span class="w"> </span><span class="n">requested</span>
+<span class="w">            </span><span class="n">S</span><span class="o">-&gt;&gt;</span><span class="n">S</span><span class="p">:</span><span class="w"> </span><span class="n">Execute</span><span class="w"> </span><span class="k">tool</span>
+<span class="w">            </span><span class="n">S</span><span class="o">-&gt;&gt;</span><span class="n">S</span><span class="p">:</span><span class="w"> </span><span class="n">Append</span><span class="w"> </span><span class="n">result</span>
+<span class="w">        </span><span class="k">else</span><span class="w"> </span><span class="n">End</span><span class="w"> </span><span class="n">turn</span>
+<span class="w">            </span><span class="n">S</span><span class="o">-&gt;&gt;</span><span class="n">S</span><span class="p">:</span><span class="w"> </span><span class="n">Check</span><span class="w"> </span><span class="n">completion</span>
+<span class="w">        </span><span class="n">end</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">S</span><span class="o">--&gt;&gt;</span><span class="n">D</span><span class="p">:</span><span class="w"> </span><span class="n">Final</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="n">message</span>
+<span class="w">    </span><span class="n">D</span><span class="o">--&gt;&gt;</span><span class="n">P</span><span class="p">:</span><span class="w"> </span><span class="n">Inject</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="n">into</span><span class="w"> </span><span class="n">parent</span><span class="w"> </span><span class="n">context</span>
+</code></pre></div>
+
+<h3 id="phase-1-dispatch">Phase 1: Dispatch</h3>
+<p>The parent agent calls the delegation interface with three parameters: agent type, task prompt, and optional configuration overrides. The dispatch layer resolves the agent type to its configuration, builds the appropriate system prompt, and filters the tool schema to include only authorized tools.</p>
+<h3 id="phase-2-execution">Phase 2: Execution</h3>
+<p>The subagent runs its own agentic loop -- the same prompt-think-act-observe cycle we covered in Chapter 7, but with its own context window. Each turn, the subagent decides whether to use a tool or produce a final response. The loop continues until the subagent produces a non-tool response, hits the turn limit, or encounters a fatal error.</p>
+<h3 id="phase-3-result-delivery">Phase 3: Result Delivery</h3>
+<p>The subagent's final response is extracted and passed back to the parent agent. The parent receives this as a single message in its own conversation -- it does not see the subagent's intermediate reasoning, tool calls, or errors. This is by design: the parent cares about the answer, not the process.</p>
+<hr />
+<h2 id="2410-design-patterns-and-anti-patterns">24.10 Design Patterns and Anti-Patterns</h2>
+<h3 id="pattern-the-specialist-team">Pattern: The Specialist Team</h3>
+<p>When reviewing a PR, spawn a code-reviewer and a security-reviewer in parallel. Each operates in its own context with its own system prompt. The parent collects both results and synthesizes a unified review.</p>
+<p><strong>Why it works:</strong> Each specialist focuses on its domain without being distracted by the other's concerns. The parallel execution cuts wall-clock time roughly in half.</p>
+<h3 id="pattern-the-investigation-cascade">Pattern: The Investigation Cascade</h3>
+<p>For complex bugs, spawn an explore agent first to gather information, then pass the findings to a debugger agent for root cause analysis.</p>
+<p><strong>Why it works:</strong> The explore agent is cheap (Haiku/Sonnet, read-only) and fast. It gathers the raw data. The debugger agent is expensive (Opus, full bash access) but starts with already-collected evidence instead of spending its early turns reading files.</p>
+<h3 id="anti-pattern-the-overpowered-agent">Anti-Pattern: The Overpowered Agent</h3>
+<p>Spawning a general-purpose agent for every delegation because "it can do everything."</p>
+<p><strong>Why it fails:</strong> The general-purpose agent has no constraints. It will follow whatever path seems most interesting, which may not be the most useful. It might start fixing bugs during a review, or refactoring code during an investigation. Constrained agents produce more focused results.</p>
+<h3 id="anti-pattern-the-chatty-delegation">Anti-Pattern: The Chatty Delegation</h3>
+<p>Including the entire conversation history in the delegation prompt because "the subagent needs context."</p>
+<p><strong>Why it fails:</strong> Most of the conversation history is irrelevant to the specific subtask. Including it wastes tokens, dilutes the task description, and may cause the subagent to pursue tangents mentioned earlier in the conversation. The delegation prompt should contain exactly the context the subagent needs -- no more.</p>
+<h3 id="anti-pattern-recursive-delegation-without-limits">Anti-Pattern: Recursive Delegation Without Limits</h3>
+<p>A general-purpose subagent spawning its own subagents, which spawn their own subagents.</p>
+<p><strong>Why it fails:</strong> Each level of recursion multiplies cost and latency. A three-level delegation tree with 3 agents per level creates 13 agents (1 + 3 + 9). Without depth limits, the system can spiral into an exponential cost explosion. The architecture should enforce a maximum delegation depth, typically 2-3 levels.</p>
+<hr />
+<h2 id="2411-key-takeaways">24.11 Key Takeaways</h2>
+<ol>
+<li>
+<p><strong>Delegate for context management, not just capability.</strong> The primary value of subagents is keeping the parent's context clean, not accessing tools the parent lacks.</p>
+</li>
+<li>
+<p><strong>Apply least authority aggressively.</strong> Three layers -- system prompt, tool schema, permission rules -- provide defense-in-depth. A code-reviewer with no write tools is more trustworthy than one told "please don't write."</p>
+</li>
+<li>
+<p><strong>Match the model to the stakes.</strong> Opus for security, debugging, and planning where errors are costly. Sonnet for balanced work. Haiku for simple exploration where speed matters.</p>
+</li>
+<li>
+<p><strong>Isolate contexts to contain damage.</strong> Fresh context windows prevent context pollution, enable specialized system prompts, and limit prompt injection blast radius. The token cost of isolation is worth the safety and clarity it provides.</p>
+</li>
+<li>
+<p><strong>Define agent types as data, not code.</strong> Markdown files with YAML frontmatter make agent types versionable, shareable, and customizable without code changes.</p>
+</li>
+<li>
+<p><strong>Strip subagent context aggressively.</strong> Subagents do not need CLAUDE.md, memory, or skill prompts. The parent digests project context and passes only what the subagent needs in the task prompt.</p>
+</li>
+<li>
+<p><strong>Enforce delegation depth limits.</strong> Recursive delegation without bounds leads to exponential cost. Cap the depth and log when limits are hit.</p>
+</li>
+<li>
+<p><strong>Use the delegation decision tree before spawning.</strong> Not every multi-step task needs a subagent. Single tool calls, tasks that need deep conversation context, and simple operations are cheaper to do directly.</p>
+</li>
+</ol>
+<p>In the next chapter, we will explore how these subagents communicate with their parents and with each other -- the message passing, result aggregation, and orchestration patterns that turn a collection of independent agents into a coordinated system.</p>
+<div class="chapter-nav">
+  <a href="chapter-23.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-25.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

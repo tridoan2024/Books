@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 26: Worktree Isolation — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-27.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-26-worktree-isolation">Chapter 26: Worktree Isolation</h1>
+<p>An AI agent that edits files in your working directory is performing surgery on a live patient. Every half-finished edit, every speculative refactor, every failed experiment leaves debris in the codebase. If the agent makes three changes and the third one fails, you are left with two applied changes and one broken state -- and undoing them means manually reverting files you may not even know were touched.</p>
+<p>Git worktrees solve this by giving the agent its own operating room. A worktree is a separate checkout of the same repository, with its own working directory and its own branch, but sharing the same git history. The agent can modify files, run tests, commit changes, and evaluate results -- all without touching the main workspace. If the experiment succeeds, the changes merge back cleanly. If it fails, the worktree is deleted and the main workspace is untouched.</p>
+<p>This chapter covers the architecture of worktree isolation for AI agents: why it matters, how the lifecycle works, branch management strategies, the batch operation pattern for parallel multi-file work, rollback mechanics, and a decision framework for when to use worktrees versus direct editing. As we discussed in Chapter 25 (Agent Communication &amp; Orchestration), worktrees are the filesystem isolation primitive that enables safe parallel write operations across multiple subagents.</p>
+<hr />
+<h2 id="261-git-worktrees-as-an-isolation-primitive">26.1 Git Worktrees as an Isolation Primitive</h2>
+<p>A git worktree is a feature of git itself (since git 2.5, released in 2015) that allows multiple working directories to be attached to a single repository. Each worktree has its own index, its own HEAD, and its own checked-out branch -- but all worktrees share the same <code>.git</code> directory and object store.</p>
+<p>For AI agent architectures, worktrees provide three properties that no other isolation mechanism offers:</p>
+<h3 id="property-1-filesystem-isolation-without-repository-duplication">Property 1: Filesystem Isolation Without Repository Duplication</h3>
+<p>Cloning a repository creates a full copy of the git history. For a large repository, this can be gigabytes of data and take minutes. A worktree, by contrast, creates only a new working directory with checked-out files -- the git history is shared. Creating a worktree in a 10GB repository takes seconds, not minutes.</p>
+<h3 id="property-2-branch-level-isolation">Property 2: Branch-Level Isolation</h3>
+<p>Each worktree operates on its own branch. Changes committed in worktree A are on branch A, changes in worktree B are on branch B, and changes in the main workspace are on the main branch. There is no possibility of write conflicts between worktrees because git enforces that no two worktrees can have the same branch checked out simultaneously.</p>
+<h3 id="property-3-atomic-discard">Property 3: Atomic Discard</h3>
+<p>Deleting a worktree removes its working directory and branch reference in a single operation. There is no cleanup of scattered files, no need to revert individual changes, no risk of missing a modified file. The entire experiment disappears atomically.</p>
+<p>These three properties -- cheap creation, branch isolation, atomic discard -- make worktrees the ideal isolation primitive for AI agent work.</p>
+<hr />
+<h2 id="262-why-file-level-isolation-matters-for-ai-agents">26.2 Why File-Level Isolation Matters for AI Agents</h2>
+<p>AI agents interact with the filesystem differently than human developers. A human developer typically works on one conceptual change at a time, understands the impact of their edits, and can manually recover from mistakes. An AI agent might modify 15 files in rapid succession as part of a refactoring, with each edit dependent on the previous one succeeding.</p>
+<h3 id="the-half-finished-edit-problem">The Half-Finished Edit Problem</h3>
+<p>Consider an agent performing a rename refactoring: rename <code>UserService</code> to <code>AccountService</code> across the codebase. The agent finds 12 files that reference <code>UserService</code> and begins editing them in sequence. On file 8, the edit fails -- perhaps the file has an unexpected structure, or the agent's context window fills up and it produces a malformed edit.</p>
+<p>Without worktree isolation, the main workspace now has 7 files with the new name and 5 files with the old name. The codebase is in an inconsistent state. The agent cannot roll back its changes because it did not track which files it modified (and even if it did, the original content is not preserved in a recoverable form outside of git).</p>
+<p>With worktree isolation, all 7 edits happened in a separate directory. The main workspace is untouched. The user can inspect the worktree to see what the agent accomplished, decide whether to continue manually, or simply delete the worktree and start over.</p>
+<h3 id="the-speculative-work-pattern">The Speculative Work Pattern</h3>
+<p>AI agents excel at exploring possibilities. "What if we refactored this module to use async/await throughout?" "What if we replaced the custom logger with a standard library?" These speculative explorations are valuable but risky -- the agent might invest 20 tool calls into a refactoring that the user ultimately rejects.</p>
+<p>Worktrees make speculation cheap. The agent works in an isolated directory, the user reviews the result, and a single decision -- merge or discard -- resolves the experiment. The user never needs to disentangle speculative changes from their actual work.</p>
+<h3 id="the-parallel-work-pattern">The Parallel Work Pattern</h3>
+<p>When multiple subagents need to write files simultaneously (as described in the orchestration patterns of Chapter 25), they cannot all write to the same working directory. Two agents editing the same file will produce conflicts. Even agents editing different files in the same directory can create unexpected interactions -- for example, both might update an <code>index.ts</code> barrel file.</p>
+<p>Worktrees give each agent its own directory and branch, eliminating write conflicts entirely. After all agents complete, the parent orchestrator merges their branches, resolving any conflicts in a controlled manner.</p>
+<hr />
+<h2 id="263-the-worktree-lifecycle">26.3 The Worktree Lifecycle</h2>
+<p>Every worktree follows a five-phase lifecycle: create, work, evaluate, merge-or-discard, and cleanup.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">stateDiagram</span><span class="o">-</span><span class="n">v2</span>
+<span class="w">    </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Create</span><span class="o">:</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">needs</span><span class="w"> </span><span class="n">isolation</span>
+<span class="w">    </span><span class="n">Create</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Work</span><span class="o">:</span><span class="w"> </span><span class="n">Worktree</span><span class="w"> </span><span class="n">ready</span>
+<span class="w">    </span><span class="n">Work</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="kr">Evaluate</span><span class="o">:</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">finished</span>
+<span class="w">    </span><span class="kr">Evaluate</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">Merge</span><span class="o">:</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">approves</span>
+<span class="w">    </span><span class="kr">Evaluate</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Discard</span><span class="o">:</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">rejects</span>
+<span class="w">    </span><span class="nf">Merge</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Cleanup</span><span class="o">:</span><span class="w"> </span><span class="n">Branch</span><span class="w"> </span><span class="n">merged</span>
+<span class="w">    </span><span class="n">Discard</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Cleanup</span><span class="o">:</span><span class="w"> </span><span class="n">Branch</span><span class="w"> </span><span class="n">deleted</span>
+<span class="w">    </span><span class="n">Cleanup</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="o">:</span><span class="w"> </span><span class="n">Directory</span><span class="w"> </span><span class="n">removed</span>
+
+<span class="w">    </span><span class="n">Work</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="kr">Evaluate</span><span class="o">:</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">timed</span><span class="w"> </span><span class="n">out</span>
+<span class="w">    </span><span class="n">Work</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Discard</span><span class="o">:</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">failed</span>
+</code></pre></div>
+
+<h3 id="phase-1-create">Phase 1: Create</h3>
+<p>The system creates a new worktree from the current HEAD with a purpose-specific branch name.</p>
+<p><strong>What happens:</strong>
+1. A new branch is created from the current HEAD (or a specified base).
+2. A new directory is created under <code>.claude/worktrees/&lt;name&gt;/</code>.
+3. Files are checked out into the new directory.
+4. The agent's working directory is set to the worktree.</p>
+<p><strong>Design decisions:</strong>
+- <strong>Location:</strong> Worktrees are created under <code>.claude/worktrees/</code> rather than a system-level temporary directory. This keeps them visible to the user, version-controlled (the directory is gitignored, but its existence is predictable), and easy to find for debugging.
+- <strong>Branch base:</strong> The worktree branches from HEAD by default, giving the agent the same starting state as the main workspace. This is important for consistency -- if the agent reads a file in the worktree, it sees the same content as the main workspace.
+- <strong>Naming:</strong> The worktree and branch names include the agent type and a short identifier (e.g., <code>fix-auth-a3b2c1</code>) for traceability.</p>
+<h3 id="phase-2-work">Phase 2: Work</h3>
+<p>The agent operates in the worktree exactly as it would in the main workspace. All file operations (read, write, edit) target the worktree directory. Bash commands run with the worktree as the working directory. Git operations apply to the worktree's branch.</p>
+<p>The agent can make multiple commits, run tests, and iterate on changes -- all within the worktree. This is identical to how a human developer works on a feature branch.</p>
+<h3 id="phase-3-evaluate">Phase 3: Evaluate</h3>
+<p>When the agent finishes (or times out), the system enters the evaluation phase. The user reviews the changes:</p>
+<ul>
+<li><strong>Git diff</strong> shows what the agent changed relative to the base branch.</li>
+<li><strong>Test results</strong> (if the agent ran them) indicate whether the changes are correct.</li>
+<li><strong>Agent's summary</strong> explains what was done and why.</li>
+</ul>
+<p>The evaluation phase is where human judgment enters the loop. The agent proposes changes, the human decides whether to accept them. This is a critical safety property -- the worktree pattern ensures that no agent-generated changes affect the user's workspace without explicit approval.</p>
+<h3 id="phase-4-merge-or-discard">Phase 4: Merge or Discard</h3>
+<p>Based on the evaluation, the user makes a binary decision:</p>
+<p><strong>Merge:</strong> The worktree's branch is merged (or rebased) into the original branch. The changes become part of the main codebase. The merge strategy depends on the workflow:
+- <strong>Merge commit</strong> preserves the agent's branch history, showing that the changes were made by an agent.
+- <strong>Rebase</strong> produces a linear history as if the changes were made directly on the main branch.
+- <strong>Squash</strong> combines the agent's potentially many commits into a single commit.</p>
+<p><strong>Discard:</strong> The worktree's branch and directory are deleted. No changes reach the main codebase. This is the "undo everything" option and is always safe.</p>
+<h3 id="phase-5-cleanup">Phase 5: Cleanup</h3>
+<p>After the merge or discard decision, the worktree directory and its branch reference are removed. Git's worktree pruning ensures no stale references remain.</p>
+<div class="codehilite"><pre><span></span><code>Cleanup checklist:
+1. Delete worktree directory: .claude/worktrees/&lt;name&gt;/
+2. Delete worktree branch: git branch -D &lt;branch-name&gt;
+3. Prune worktree references: git worktree prune
+4. Remove from agent tracker: mark delegation as complete
+</code></pre></div>
+
+<hr />
+<h2 id="264-branch-management">26.4 Branch Management</h2>
+<p>Branch naming and management are seemingly minor details that become critical in production systems with multiple agents creating worktrees concurrently.</p>
+<h3 id="naming-conventions">Naming Conventions</h3>
+<p>Worktree branches follow a predictable naming scheme:</p>
+<div class="codehilite"><pre><span></span><code>claude/&lt;purpose&gt;/&lt;short-id&gt;
+
+Examples:
+  claude/fix-auth/a3b2c1
+  claude/refactor-api/d4e5f6
+  claude/explore-perf/g7h8i9
+  claude/batch-rename/j0k1l2
+</code></pre></div>
+
+<p>The three-part structure serves specific purposes:
+- <strong>Prefix (<code>claude/</code>)</strong> identifies agent-created branches, making them easy to filter in branch listings.
+- <strong>Purpose</strong> describes what the worktree is for, aiding human review.
+- <strong>Short ID</strong> ensures uniqueness when multiple agents create worktrees for the same purpose.</p>
+<h3 id="preventing-branch-conflicts">Preventing Branch Conflicts</h3>
+<p>Git worktrees enforce a fundamental constraint: no two worktrees can check out the same branch. This means the branch name must be unique at creation time. The short ID suffix handles this, but the system also validates:</p>
+<ol>
+<li>The branch name does not already exist (local or remote).</li>
+<li>No other worktree is using this branch.</li>
+<li>The branch name conforms to git's naming rules (no spaces, no <code>..</code>, no trailing <code>.lock</code>).</li>
+</ol>
+<h3 id="automatic-cleanup-of-stale-branches">Automatic Cleanup of Stale Branches</h3>
+<p>Agent-created branches can accumulate if worktrees are not properly cleaned up -- for example, if the process crashes after creating a worktree but before cleanup. A cleanup sweep runs on session start:</p>
+<div class="codehilite"><pre><span></span><code>Stale branch detection:
+1. List all branches matching claude/*
+2. For each, check if a corresponding worktree exists
+3. If no worktree exists and the branch has no unique commits
+   (i.e., it was never used or its changes were merged), delete it
+4. If the branch has unmerged commits, log a warning but do not delete
+</code></pre></div>
+
+<p>The conservative approach -- only deleting branches with no unique commits -- prevents data loss. If an agent made changes that were never merged, the branch is preserved until the user explicitly deletes it.</p>
+<hr />
+<h2 id="265-the-batch-operation-pattern">26.5 The Batch Operation Pattern</h2>
+<p>The most powerful application of worktree isolation is the batch operation: a multi-file change where each file (or module) is handled by a separate agent in its own worktree.</p>
+<h3 id="the-problem-batch-operations-solve">The Problem Batch Operations Solve</h3>
+<p>Consider a large-scale refactoring: updating all API endpoints to use a new error handling pattern. The codebase has 30 endpoint files across 6 modules. A single agent attempting this sequentially would:</p>
+<ol>
+<li>Fill its context window after 10-15 files.</li>
+<li>Start making inconsistent changes as context degrades.</li>
+<li>Leave the codebase in a partially-updated state if it times out.</li>
+</ol>
+<h3 id="the-batch-architecture">The Batch Architecture</h3>
+<div class="codehilite"><pre><span></span><code><span class="nx">graph</span><span class="w"> </span><span class="nx">TB</span>
+<span class="w">    </span><span class="nx">PARENT</span><span class="p">[</span><span class="s">&quot;Parent Agent:&lt;br/&gt;Coordinates batch operation&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">PLAN</span><span class="p">[</span><span class="s">&quot;Planning Phase:&lt;br/&gt;Identify files, define transformation&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">PLAN</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">W1</span><span class="p">[</span><span class="s">&quot;Worktree 1&lt;br/&gt;Agent A: endpoints/users.ts&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">PLAN</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">W2</span><span class="p">[</span><span class="s">&quot;Worktree 2&lt;br/&gt;Agent B: endpoints/orders.ts&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">PLAN</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">W3</span><span class="p">[</span><span class="s">&quot;Worktree 3&lt;br/&gt;Agent C: endpoints/products.ts&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">PLAN</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">W4</span><span class="p">[</span><span class="s">&quot;Worktree 4&lt;br/&gt;Agent D: endpoints/auth.ts&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">W1</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">MERGE</span><span class="p">[</span><span class="s">&quot;Merge Phase:&lt;br/&gt;Combine all branches&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">W2</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">MERGE</span>
+<span class="w">    </span><span class="nx">W3</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">MERGE</span>
+<span class="w">    </span><span class="nx">W4</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">MERGE</span>
+
+<span class="w">    </span><span class="nx">MERGE</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">VERIFY</span><span class="p">[</span><span class="s">&quot;Verification:&lt;br/&gt;Run tests, check types,&lt;br/&gt;validate consistency&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">VERIFY</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">RESULT</span><span class="p">[</span><span class="s">&quot;Result:&lt;br/&gt;Single commit with all changes&lt;br/&gt;or detailed failure report&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">PARENT</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">e8f4f8</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="mi">2196</span><span class="nx">F3</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">PLAN</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">e8f5e9</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="mi">4</span><span class="nx">CAF50</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">MERGE</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">fff3e0</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="nx">FF9800</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">VERIFY</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">fce4ec</span><span class="p">,</span><span class="nx">stroke</span><span class="p">:</span><span class="err">#</span><span class="nx">E91E63</span>
+</code></pre></div>
+
+<p>The batch operation proceeds in four phases:</p>
+<p><strong>Phase 1: Planning.</strong> The parent agent identifies all files that need modification and defines the transformation to apply. This plan is expressed in a format that each individual agent can follow independently. The plan must be self-contained -- each agent only sees the plan and its assigned file(s), not the other agents' work.</p>
+<p><strong>Phase 2: Parallel Execution.</strong> Each agent receives its worktree and its file assignment. Agents work in parallel, each applying the transformation to its assigned files. Because each worktree is on a separate branch, there are no write conflicts.</p>
+<p><strong>Phase 3: Merge.</strong> After all agents complete, the parent merges all worktree branches into a single branch. This is where conflicts can arise -- if two agents both modified a shared file (like a barrel export or a type definition), the merge will conflict. The parent resolves these conflicts, either automatically (for simple cases like barrel exports) or by flagging them for human review.</p>
+<p><strong>Phase 4: Verification.</strong> The merged branch is checked for consistency: tests pass, types check, the transformation was applied uniformly. If verification fails, the parent can identify which agent's changes are problematic and either retry that agent or flag the issue.</p>
+<h3 id="conflict-prevention-strategies">Conflict Prevention Strategies</h3>
+<p>The most common source of conflicts in batch operations is shared files -- files that multiple agents need to modify because they contain cross-cutting concerns (barrel exports, type definitions, configuration files).</p>
+<table>
+<thead>
+<tr>
+<th>Strategy</th>
+<th>Approach</th>
+<th>Trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Exclusion</strong></td>
+<td>Shared files are excluded from individual agents and updated by the parent after merge</td>
+<td>Requires the parent to understand the shared file format</td>
+</tr>
+<tr>
+<td><strong>Last-writer-wins</strong></td>
+<td>One designated agent updates shared files; others skip them</td>
+<td>Simple but may miss necessary changes</td>
+</tr>
+<tr>
+<td><strong>Sequential shared phase</strong></td>
+<td>After parallel phase, a single agent updates all shared files</td>
+<td>Adds sequential time but avoids conflicts</td>
+</tr>
+<tr>
+<td><strong>Conflict resolution agent</strong></td>
+<td>A dedicated agent resolves merge conflicts after the parallel phase</td>
+<td>Most flexible but adds complexity</td>
+</tr>
+</tbody>
+</table>
+<p>The recommended default is the <strong>sequential shared phase</strong>: let the parallel agents handle their assigned files without touching shared files, then run a single agent to update all shared files based on the combined results. This avoids conflicts entirely at the cost of a short sequential step after the parallel phase.</p>
+<hr />
+<h2 id="266-rollback-patterns">26.6 Rollback Patterns</h2>
+<p>One of the strongest guarantees worktree isolation provides is clean rollback. If an experiment fails, the rollback is complete and atomic -- no leftover files, no partial changes, no corrupted state.</p>
+<h3 id="rollback-granularity">Rollback Granularity</h3>
+<p>Worktree rollback operates at three levels:</p>
+<p><strong>Level 1: Full Discard.</strong> Delete the worktree and its branch. All changes are gone. This is the most common rollback -- the experiment failed, the user rejects the changes, or the agent timed out.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Before</span><span class="o">:</span><span class="w"> </span><span class="n">main</span><span class="w"> </span><span class="n">workspace</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">worktree</span><span class="w"> </span><span class="k">with</span><span class="w"> </span><span class="mi">15</span><span class="w"> </span><span class="n">modified</span><span class="w"> </span><span class="n">files</span>
+<span class="n">After</span><span class="o">:</span><span class="w">  </span><span class="n">main</span><span class="w"> </span><span class="n">workspace</span><span class="w"> </span><span class="n">only</span><span class="o">,</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="nf">trace</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">experiment</span>
+</code></pre></div>
+
+<p><strong>Level 2: Partial Revert.</strong> The worktree contains some good changes and some bad ones. The user or agent cherry-picks the good commits and discards the rest.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Before</span><span class="o">:</span><span class="w"> </span><span class="n">worktree</span><span class="w"> </span><span class="k">with</span><span class="w"> </span><span class="n">commits</span><span class="w"> </span><span class="n">A</span><span class="o">,</span><span class="w"> </span><span class="n">B</span><span class="o">,</span><span class="w"> </span><span class="n">C</span><span class="o">,</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="o">(</span><span class="n">C</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">bad</span><span class="o">)</span>
+<span class="n">Action</span><span class="o">:</span><span class="w"> </span><span class="n">cherry</span><span class="o">-</span><span class="n">pick</span><span class="w"> </span><span class="n">A</span><span class="o">,</span><span class="w"> </span><span class="n">B</span><span class="o">,</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="n">onto</span><span class="w"> </span><span class="n">main</span><span class="w"> </span><span class="n">branch</span>
+<span class="n">After</span><span class="o">:</span><span class="w">  </span><span class="n">main</span><span class="w"> </span><span class="n">workspace</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">A</span><span class="o">,</span><span class="w"> </span><span class="n">B</span><span class="o">,</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="n">applied</span><span class="o">;</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="n">discarded</span>
+</code></pre></div>
+
+<p><strong>Level 3: Commit-Level Undo.</strong> Within the worktree, the agent made a commit that broke tests. The agent reverts that specific commit and continues working.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Before</span><span class="o">:</span><span class="w"> </span><span class="n">worktree</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="n">commit</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="o">(</span><span class="n">tests</span><span class="w"> </span><span class="n">failing</span><span class="o">)</span>
+<span class="n">Action</span><span class="o">:</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="n">revert</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="n">within</span><span class="w"> </span><span class="n">worktree</span>
+<span class="n">After</span><span class="o">:</span><span class="w">  </span><span class="n">worktree</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="n">commit</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="o">(</span><span class="n">revert</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">D</span><span class="o">),</span><span class="w"> </span><span class="n">tests</span><span class="w"> </span><span class="n">passing</span>
+</code></pre></div>
+
+<h3 id="safe-discard-protocol">Safe Discard Protocol</h3>
+<p>The discard operation must handle edge cases:</p>
+<ol>
+<li>
+<p><strong>Uncommitted changes.</strong> If the worktree has uncommitted modifications, a naive <code>git worktree remove</code> will fail. The system must either force-remove (discarding changes) or warn the user.</p>
+</li>
+<li>
+<p><strong>Running processes.</strong> If the agent launched background processes (tests, servers) in the worktree directory, they must be terminated before the directory can be deleted.</p>
+</li>
+<li>
+<p><strong>File locks.</strong> On some systems, open file handles prevent directory deletion. The cleanup process retries with exponential backoff if the initial deletion fails.</p>
+</li>
+</ol>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Discard</span><span class="w"> </span><span class="n">requested</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">Uncommitted</span><span class="w"> </span><span class="n">changes</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Delete</span><span class="w"> </span><span class="n">worktree</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">{</span><span class="n">User</span><span class="w"> </span><span class="n">confirmed</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">force</span><span class="w"> </span><span class="n">discard</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">D</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Warn</span><span class="w"> </span><span class="n">user</span><span class="p">,</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">preserve</span><span class="w"> </span><span class="n">worktree</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">{</span><span class="n">Running</span><span class="w"> </span><span class="n">processes</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="k">in</span><span class="w"> </span><span class="n">worktree</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Terminate</span><span class="w"> </span><span class="n">processes</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="n">git</span><span class="w"> </span><span class="n">worktree</span><span class="w"> </span><span class="n">remove</span><span class="p">]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">{</span><span class="n">Delete</span><span class="w"> </span><span class="n">succeeded</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">J</span><span class="p">[</span><span class="n">Delete</span><span class="w"> </span><span class="n">branch</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">git</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="o">-</span><span class="n">D</span><span class="p">]</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">K</span><span class="p">[</span><span class="n">Retry</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">backoff</span><span class="p">]</span>
+<span class="w">    </span><span class="n">K</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L</span><span class="p">[</span><span class="n">git</span><span class="w"> </span><span class="n">worktree</span><span class="w"> </span><span class="n">prune</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M</span><span class="p">[</span><span class="n">Done</span><span class="p">]</span>
+</code></pre></div>
+
+<hr />
+<h2 id="267-when-to-use-worktree-isolation-vs-direct-editing">26.7 When to Use Worktree Isolation vs. Direct Editing</h2>
+<p>Not every task needs worktree isolation. The overhead of creating and managing worktrees -- branch creation, directory checkout, merge back -- is small but non-zero. For many tasks, direct editing in the main workspace is simpler and faster.</p>
+<h3 id="the-decision-framework">The Decision Framework</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Agent</span><span class="w"> </span><span class="n">task</span><span class="w"> </span><span class="n">requires</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">file</span><span class="w"> </span><span class="n">modifications</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="n">Speculative</span><span class="o">?&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">User</span><span class="w"> </span><span class="n">might</span><span class="w"> </span><span class="n">reject</span><span class="w"> </span><span class="n">changes</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">USE</span><span class="p">[</span><span class="s">&quot;Use worktree&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">{</span><span class="n">Multiple</span><span class="w"> </span><span class="n">agents</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">writing</span><span class="w"> </span><span class="n">simultaneously</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">USE</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">{</span><span class="n">More</span><span class="w"> </span><span class="n">than</span><span class="w"> </span><span class="mi">5</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">files</span><span class="w"> </span><span class="n">modified</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">{</span><span class="n">Changes</span><span class="w"> </span><span class="n">are</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">easily</span><span class="w"> </span><span class="n">reversible</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">DIRECT</span><span class="p">[</span><span class="s">&quot;Edit directly&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">USE</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">{</span><span class="n">Agent</span><span class="w"> </span><span class="n">might</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">time</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">mid</span><span class="o">-</span><span class="n">task</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">USE</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">DIRECT</span>
+</code></pre></div>
+
+<h3 id="decision-table">Decision Table</h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Worktree?</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fix a single bug in one file</td>
+<td>No</td>
+<td>Simple, easily reversible with <code>git checkout</code></td>
+</tr>
+<tr>
+<td>Rename a variable across 3 files</td>
+<td>No</td>
+<td>Small scope, git can revert</td>
+</tr>
+<tr>
+<td>Refactor a module (10+ files)</td>
+<td>Yes</td>
+<td>Large blast radius, might fail mid-way</td>
+</tr>
+<tr>
+<td>Speculative "what if" exploration</td>
+<td>Yes</td>
+<td>High probability of discard</td>
+</tr>
+<tr>
+<td>Parallel agents writing different features</td>
+<td>Yes</td>
+<td>Prevents write conflicts</td>
+</tr>
+<tr>
+<td>Batch rename across 30 files</td>
+<td>Yes</td>
+<td>Too many files for safe direct editing</td>
+</tr>
+<tr>
+<td>Add a new file (test, docs)</td>
+<td>No</td>
+<td>No existing files at risk</td>
+</tr>
+<tr>
+<td>Upgrade a dependency and fix breaks</td>
+<td>Maybe</td>
+<td>Depends on how many files break</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-cost-of-worktree-overhead">The Cost of Worktree Overhead</h3>
+<p>Worktree creation involves:
+- Branch creation: ~10ms
+- Checkout (file copy): 100ms - 5s depending on repo size
+- Merge back: 100ms - 1s for clean merges
+- Cleanup: ~50ms</p>
+<p>For a large repository (100K+ files), the checkout phase can take several seconds. For small repositories, the overhead is negligible. The heuristic: if the task takes more than 30 seconds of agent time, the worktree overhead is insignificant. If the task is a quick 5-second edit, worktree overhead doubles the wall-clock time.</p>
+<hr />
+<h2 id="268-worktree-isolation-in-multi-agent-orchestration">26.8 Worktree Isolation in Multi-Agent Orchestration</h2>
+<p>Worktree isolation connects directly to the orchestration patterns from Chapter 25. When the fan-out/fan-in pattern involves write operations, each agent in the fan-out phase operates in its own worktree.</p>
+<h3 id="integration-with-orchestration-patterns">Integration with Orchestration Patterns</h3>
+<p><strong>Fan-Out/Fan-In with Worktrees:</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="nv">Parent</span><span class="w"> </span><span class="nv">creates</span><span class="w"> </span><span class="nv">worktree</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nv">each</span><span class="w"> </span><span class="nv">agent</span>:
+<span class="w">  </span>.<span class="nv">claude</span><span class="o">/</span><span class="nv">worktrees</span><span class="o">/</span><span class="nv">agent</span><span class="o">-</span><span class="mi">1</span><span class="o">/</span><span class="w">  </span><span class="ss">(</span><span class="nv">branch</span>:<span class="w"> </span><span class="nv">claude</span><span class="o">/</span><span class="nv">fix</span><span class="o">-</span><span class="nv">module</span><span class="o">-</span><span class="nv">a</span><span class="o">/</span><span class="nv">abc123</span><span class="ss">)</span>
+<span class="w">  </span>.<span class="nv">claude</span><span class="o">/</span><span class="nv">worktrees</span><span class="o">/</span><span class="nv">agent</span><span class="o">-</span><span class="mi">2</span><span class="o">/</span><span class="w">  </span><span class="ss">(</span><span class="nv">branch</span>:<span class="w"> </span><span class="nv">claude</span><span class="o">/</span><span class="nv">fix</span><span class="o">-</span><span class="nv">module</span><span class="o">-</span><span class="nv">b</span><span class="o">/</span><span class="nv">def456</span><span class="ss">)</span>
+<span class="w">  </span>.<span class="nv">claude</span><span class="o">/</span><span class="nv">worktrees</span><span class="o">/</span><span class="nv">agent</span><span class="o">-</span><span class="mi">3</span><span class="o">/</span><span class="w">  </span><span class="ss">(</span><span class="nv">branch</span>:<span class="w"> </span><span class="nv">claude</span><span class="o">/</span><span class="nv">fix</span><span class="o">-</span><span class="nv">module</span><span class="o">-</span><span class="nv">c</span><span class="o">/</span><span class="nv">ghi789</span><span class="ss">)</span>
+
+<span class="nv">Agents</span><span class="w"> </span><span class="nv">work</span><span class="w"> </span><span class="nv">in</span><span class="w"> </span><span class="nv">parallel</span><span class="w"> </span><span class="ss">(</span><span class="nv">isolated</span><span class="w"> </span><span class="nv">filesystems</span><span class="ss">)</span>
+
+<span class="nv">Parent</span><span class="w"> </span><span class="nv">merges</span><span class="w"> </span><span class="nv">all</span><span class="w"> </span><span class="nv">branches</span>:
+<span class="w">  </span><span class="nv">git</span><span class="w"> </span><span class="nv">merge</span><span class="w"> </span><span class="nv">claude</span><span class="o">/</span><span class="nv">fix</span><span class="o">-</span><span class="nv">module</span><span class="o">-</span><span class="nv">a</span><span class="o">/</span><span class="nv">abc123</span>
+<span class="w">  </span><span class="nv">git</span><span class="w"> </span><span class="nv">merge</span><span class="w"> </span><span class="nv">claude</span><span class="o">/</span><span class="nv">fix</span><span class="o">-</span><span class="nv">module</span><span class="o">-</span><span class="nv">b</span><span class="o">/</span><span class="nv">def456</span>
+<span class="w">  </span><span class="nv">git</span><span class="w"> </span><span class="nv">merge</span><span class="w"> </span><span class="nv">claude</span><span class="o">/</span><span class="nv">fix</span><span class="o">-</span><span class="nv">module</span><span class="o">-</span><span class="nv">c</span><span class="o">/</span><span class="nv">ghi789</span>
+
+<span class="nv">Verification</span><span class="w"> </span><span class="nv">on</span><span class="w"> </span><span class="nv">merged</span><span class="w"> </span><span class="nb">result</span>
+</code></pre></div>
+
+<p><strong>Pipeline with Worktrees:</strong></p>
+<div class="codehilite"><pre><span></span><code>Stage 1 agent works in worktree-1 (branch: claude/investigate/abc123)
+  Commits findings as code comments or a report file
+
+Parent reviews Stage 1 results
+
+Stage 2 agent works in worktree-2, branched FROM worktree-1&#39;s branch
+  (branch: claude/fix/def456, base: claude/investigate/abc123)
+  Inherits Stage 1&#39;s changes and adds fixes
+
+Stage 3 agent works in worktree-3, branched FROM worktree-2&#39;s branch
+  Inherits all prior changes and adds tests
+</code></pre></div>
+
+<p>The pipeline variant is particularly elegant: each stage branches from the previous stage's branch, creating a chain of incremental changes. If any stage fails, the chain can be rewound to the last good stage.</p>
+<h3 id="resource-management">Resource Management</h3>
+<p>Multiple concurrent worktrees consume disk space (one copy of the working tree per worktree) and git lock resources (each worktree operation takes brief locks on the shared <code>.git</code> directory). The architecture enforces limits:</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Limit</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Concurrent worktrees</td>
+<td>5</td>
+<td>Prevents disk exhaustion on large repos</td>
+</tr>
+<tr>
+<td>Worktree lifetime</td>
+<td>30 minutes</td>
+<td>Prevents orphaned worktrees from accumulating</td>
+</tr>
+<tr>
+<td>Total worktree disk</td>
+<td>2x repo size</td>
+<td>Hard limit prevents runaway disk usage</td>
+</tr>
+</tbody>
+</table>
+<p>These limits are configurable but default to conservative values. A 10GB repository with 5 concurrent worktrees uses 50GB of additional disk. On resource-constrained systems, reducing the concurrency limit to 2-3 is advisable.</p>
+<hr />
+<h2 id="269-merge-strategies-for-agent-created-branches">26.9 Merge Strategies for Agent-Created Branches</h2>
+<p>When a worktree's changes are accepted, the merge strategy determines how they integrate into the main branch. The choice affects git history readability, conflict handling, and auditability.</p>
+<h3 id="strategy-comparison">Strategy Comparison</h3>
+<table>
+<thead>
+<tr>
+<th>Strategy</th>
+<th>History Shape</th>
+<th>Audit Trail</th>
+<th>Conflict Handling</th>
+<th>Best For</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Merge commit</strong></td>
+<td>Non-linear, branch visible</td>
+<td>Full: agent's branch preserved</td>
+<td>Manual at merge time</td>
+<td>Complex multi-commit changes</td>
+</tr>
+<tr>
+<td><strong>Rebase</strong></td>
+<td>Linear, clean</td>
+<td>Agent commits appear on main</td>
+<td>Conflict per commit</td>
+<td>Simple sequential changes</td>
+</tr>
+<tr>
+<td><strong>Squash</strong></td>
+<td>Linear, single commit</td>
+<td>Compressed: one commit for all</td>
+<td>Single conflict point</td>
+<td>Many small agent commits</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Merge commit</strong> is the most informative option. The branch history is preserved, showing exactly what the agent did in what order. A <code>git log --graph</code> clearly shows the agent's work as a branch. The downside is a non-linear history that some teams find harder to read.</p>
+<p><strong>Rebase</strong> produces the cleanest linear history but rewrites the agent's commits onto the tip of the main branch. If conflicts arise, they must be resolved for each commit individually. This is suitable for simple changes where the agent made 1-3 clean commits.</p>
+<p><strong>Squash</strong> is the pragmatic default for AI agent work. The agent might make 10+ small commits (read file, edit, test, adjust, test again), and preserving all of them adds noise to the history. Squashing produces a single commit that represents the final state, with a commit message that summarizes the entire change.</p>
+<h3 id="recommended-default">Recommended Default</h3>
+<p>For AI agent worktrees, <strong>squash merge</strong> with a descriptive commit message is the recommended default:</p>
+<div class="codehilite"><pre><span></span><code><span class="nx">git</span><span class="w"> </span><span class="nx">merge</span><span class="w"> </span><span class="o">--</span><span class="nx">squash</span><span class="w"> </span><span class="nx">claude</span><span class="o">/</span><span class="nx">fix</span><span class="o">-</span><span class="nx">auth</span><span class="o">/</span><span class="nx">abc123</span>
+<span class="nx">git</span><span class="w"> </span><span class="nx">commit</span><span class="w"> </span><span class="o">-</span><span class="nx">m</span><span class="w"> </span><span class="s">&quot;fix: prevent JWT token reuse after expiry</span>
+
+<span class="s">Applied by AI agent (security-reviewer type, 18 turns).</span>
+<span class="s">Changes: src/auth/jwt.ts, src/auth/session.ts, tests/auth.test.ts</span>
+
+<span class="s">Co-Authored-By: Claude &lt;noreply@anthropic.com&gt;&quot;</span>
+</code></pre></div>
+
+<p>The commit message attributes the change to the AI agent and lists the affected files, providing both auditability and a clean history.</p>
+<hr />
+<h2 id="2610-key-takeaways">26.10 Key Takeaways</h2>
+<ol>
+<li>
+<p><strong>Worktrees provide filesystem isolation without repository duplication.</strong> Creating a worktree is fast (seconds, not minutes) because it shares the git object store with the main repository. This makes worktrees practical for routine agent operations, not just major features.</p>
+</li>
+<li>
+<p><strong>Three properties make worktrees ideal for AI agents:</strong> cheap creation, branch-level isolation, and atomic discard. These properties directly address the half-finished edit problem, speculative work, and parallel write conflicts.</p>
+</li>
+<li>
+<p><strong>The lifecycle is create-work-evaluate-merge/discard-cleanup.</strong> The evaluation phase is where human judgment enters the loop. No agent-generated changes affect the user's workspace without explicit approval.</p>
+</li>
+<li>
+<p><strong>Branch naming conventions enable management at scale.</strong> The <code>claude/&lt;purpose&gt;/&lt;id&gt;</code> convention makes agent-created branches identifiable, filterable, and traceable.</p>
+</li>
+<li>
+<p><strong>Batch operations are the killer use case.</strong> Large-scale refactoring across many files benefits enormously from parallel worktrees: each agent handles its assigned files independently, and the results are merged after verification.</p>
+</li>
+<li>
+<p><strong>Not every task needs a worktree.</strong> Single-file edits, new file creation, and small changes are faster without worktree overhead. Use the decision framework: speculative? parallel writes? large blast radius? If none, edit directly.</p>
+</li>
+<li>
+<p><strong>Squash merge is the pragmatic default.</strong> AI agents make many small commits during their work. Squashing produces a clean single commit that represents the final state, with attribution in the commit message.</p>
+</li>
+<li>
+<p><strong>Resource limits prevent runaway worktree creation.</strong> Cap concurrent worktrees (default: 5), enforce lifetime limits (default: 30 minutes), and monitor disk usage. Stale worktree cleanup runs on session start.</p>
+</li>
+<li>
+<p><strong>Worktrees integrate naturally with orchestration patterns.</strong> Fan-out/fan-in with worktrees enables parallel writes. Pipeline worktrees branch from previous stages, creating incremental change chains. Both patterns benefit from worktree isolation.</p>
+</li>
+<li>
+<p><strong>Rollback is always an option.</strong> The strongest guarantee worktree isolation provides is that any experiment can be completely undone. This freedom to experiment without risk is what makes AI agent work productive rather than anxiety-inducing.</p>
+</li>
+</ol>
+<p>The worktree isolation pattern completes the multi-agent architecture. With the subagent design philosophy from Chapter 24, the orchestration patterns from Chapter 25, and the worktree isolation from this chapter, you have the full toolkit for building multi-agent systems that are safe, scalable, and maintainable. In Part IX, we turn to the user-facing layer: how the agent renders its output in the terminal.</p>
+<div class="chapter-nav">
+  <a href="chapter-25.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-27.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

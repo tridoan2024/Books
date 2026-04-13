@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 11: Streaming Pipeline — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-12.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-11-streaming-pipeline">Chapter 11: Streaming Pipeline</h1>
+<p>In Chapter 10, we designed the API client -- the provider abstraction, retry engine, and circuit breakers that get a request to the model and a response back. But "a response" understates what actually arrives: not a single JSON blob, but a continuous stream of Server-Sent Events that must be parsed, classified, accumulated, rendered, and error-handled in real time. The streaming pipeline is the bridge between the raw HTTP byte stream and the structured messages that the agent loop consumes.</p>
+<p>Getting streaming right is harder than it looks. The model does not produce clean, well-bounded output. It emits text tokens interleaved with tool-use requests, thinking blocks that may or may not be visible, and usage metadata that arrives in multiple events with merge semantics. The stream can stall, disconnect mid-sentence, or deliver events faster than the terminal can render them. Each of these failure modes requires a different recovery strategy.</p>
+<p>This chapter examines the streaming pipeline as a state machine: the event model it processes, the states it transitions through, the tool-use detection that turns passive text streaming into active agent behavior, and the backpressure and recovery mechanisms that keep it running through real-world network conditions.</p>
+<hr />
+<h2 id="why-streaming-changes-everything">Why Streaming Changes Everything</h2>
+<p>The non-streaming API call is conceptually simple: send a request, wait for a response, process the result. The streaming API call inverts the control flow. Instead of the client pulling a complete response, the server pushes a continuous stream of partial results. The client must process these incrementally while the server is still generating.</p>
+<p>This inversion creates four architectural concerns that do not exist in non-streaming systems:</p>
+<ol>
+<li>
+<p><strong>Incremental state accumulation.</strong> The response arrives in pieces. The client must maintain partial state -- the current content block, the accumulated text, the pending tool-use input -- and assemble the final message from these fragments.</p>
+</li>
+<li>
+<p><strong>Concurrent rendering.</strong> The UI must render partial results while the stream is still active. This creates a producer-consumer relationship between the stream processor and the renderer.</p>
+</li>
+<li>
+<p><strong>Mid-stream decision points.</strong> When the model emits a tool-use block, the agent must decide whether to begin executing the tool immediately (before the rest of the response arrives) or wait for the complete response. This is an architectural choice with latency implications.</p>
+</li>
+<li>
+<p><strong>Partial failure recovery.</strong> The stream can disconnect after delivering 80% of a response. The client must decide: retry from scratch (losing the partial response), or recover what was received and continue from there.</p>
+</li>
+</ol>
+<hr />
+<h2 id="the-sse-event-model">The SSE Event Model</h2>
+<p>The Anthropic Messages API uses a structured event model with five primary event types and multiple content block subtypes. Understanding this model is prerequisite to designing the processing pipeline.</p>
+<h3 id="event-hierarchy">Event Hierarchy</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">MS</span><span class="p">[</span><span class="s2">&quot;message_start&lt;br/&gt;Message metadata + model info&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CBS</span><span class="p">[</span><span class="s2">&quot;content_block_start&lt;br/&gt;New block: text | tool_use | thinking&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CBD</span><span class="p">[</span><span class="s2">&quot;content_block_delta&lt;br/&gt;Incremental content for current block&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CBE</span><span class="p">[</span><span class="s2">&quot;content_block_stop&lt;br/&gt;Block finalized&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">MD</span><span class="p">[</span><span class="s2">&quot;message_delta&lt;br/&gt;Stop reason + final usage&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">MST</span><span class="p">[</span><span class="s2">&quot;message_stop&lt;br/&gt;Stream complete&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">MS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CBS</span>
+<span class="w">    </span><span class="n">CBS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CBD</span>
+<span class="w">    </span><span class="n">CBD</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CBD</span>
+<span class="w">    </span><span class="n">CBD</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CBE</span>
+<span class="w">    </span><span class="n">CBE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CBS</span>
+<span class="w">    </span><span class="n">CBE</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MD</span>
+<span class="w">    </span><span class="n">MD</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MST</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MS</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e1f5fe</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">CBS</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">CBD</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">CBE</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MD</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e1f5fe</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MST</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec</span>
+</code></pre></div>
+
+<h3 id="event-descriptions">Event Descriptions</h3>
+<p><strong><code>message_start</code></strong> -- Emitted once at the beginning of the stream. Contains the message ID, model identifier, and initial usage statistics (input token count). This event marks the time-to-first-token (TTFT) -- the primary latency metric for streaming responses.</p>
+<p><strong><code>content_block_start</code></strong> -- Emitted when the model begins a new content block. The block type determines how subsequent deltas should be accumulated:
+- <code>text</code> -- Natural language output to render
+- <code>tool_use</code> -- A tool call with <code>id</code> and <code>name</code>; input JSON arrives via deltas
+- <code>thinking</code> -- Extended thinking content (reasoning scratchpad)
+- <code>server_tool_use</code> -- Server-side tool use (web search, code execution)</p>
+<p><strong><code>content_block_delta</code></strong> -- The most frequent event, emitted for every token or small group of tokens. Delta subtypes match block types:
+- <code>text_delta</code> -- A string fragment of text output
+- <code>input_json_delta</code> -- A string fragment of JSON for tool-use input
+- <code>thinking_delta</code> -- A string fragment of thinking content</p>
+<p><strong><code>content_block_stop</code></strong> -- The signal that a content block is complete. For tool-use blocks, this is when the accumulated JSON string should be parsed into structured input. For text blocks, this signals that the text is final.</p>
+<p><strong><code>message_delta</code></strong> -- Contains the <code>stop_reason</code> (why the model stopped generating) and final usage statistics. Stop reasons include:
+- <code>end_turn</code> -- Model finished naturally
+- <code>tool_use</code> -- Model wants to use a tool and is yielding control
+- <code>max_tokens</code> -- Output token limit reached
+- <code>stop_sequence</code> -- A configured stop sequence was hit</p>
+<p><strong><code>message_stop</code></strong> -- Stream is complete. No more events will arrive.</p>
+<h3 id="the-interleaving-pattern">The Interleaving Pattern</h3>
+<p>A single model response can contain multiple content blocks of different types, interleaved:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">message_start</span>
+<span class="w">  </span><span class="n">content_block_start</span><span class="w"> </span><span class="p">(</span><span class="n">thinking</span><span class="p">)</span>
+<span class="w">    </span><span class="n">thinking_delta</span><span class="w"> </span><span class="o">...</span>
+<span class="w">  </span><span class="n">content_block_stop</span>
+<span class="w">  </span><span class="n">content_block_start</span><span class="w"> </span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+<span class="w">    </span><span class="n">text_delta</span><span class="w"> </span><span class="s2">&quot;Let me &quot;</span>
+<span class="w">    </span><span class="n">text_delta</span><span class="w"> </span><span class="s2">&quot;check &quot;</span>
+<span class="w">    </span><span class="n">text_delta</span><span class="w"> </span><span class="s2">&quot;that file.&quot;</span>
+<span class="w">  </span><span class="n">content_block_stop</span>
+<span class="w">  </span><span class="n">content_block_start</span><span class="w"> </span><span class="p">(</span><span class="n">tool_use</span><span class="p">:</span><span class="w"> </span><span class="n">Read</span><span class="p">)</span>
+<span class="w">    </span><span class="n">input_json_delta</span><span class="w"> </span><span class="s1">&#39;{&quot;file_&#39;</span>
+<span class="w">    </span><span class="n">input_json_delta</span><span class="w"> </span><span class="s1">&#39;path&quot;:&quot;&#39;</span>
+<span class="w">    </span><span class="n">input_json_delta</span><span class="w"> </span><span class="s1">&#39;src/main.ts&quot;}&#39;</span>
+<span class="w">  </span><span class="n">content_block_stop</span>
+<span class="n">message_delta</span><span class="w"> </span><span class="p">(</span><span class="n">stop_reason</span><span class="p">:</span><span class="w"> </span><span class="n">tool_use</span><span class="p">)</span>
+<span class="n">message_stop</span>
+</code></pre></div>
+
+<p>The pipeline must handle this interleaving correctly: track which block is currently active, accumulate deltas for that block type, finalize on block_stop, and be ready for the next block of a potentially different type.</p>
+<hr />
+<h2 id="the-streaming-state-machine">The Streaming State Machine</h2>
+<p>The core of the streaming pipeline is a state machine that tracks the current processing state and validates transitions. Illegal transitions indicate either a server bug or a stream corruption.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">stateDiagram</span><span class="o">-</span><span class="n">v2</span>
+<span class="w">    </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Idle</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">Stream</span><span class="w"> </span><span class="n">created</span>
+
+<span class="w">    </span><span class="n">Idle</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MessageActive</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">message_start</span>
+
+<span class="w">    </span><span class="n">MessageActive</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">InTextBlock</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">content_block_start</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">type</span><span class="p">:</span><span class="w"> </span><span class="n">text</span><span class="p">)</span>
+<span class="w">    </span><span class="n">MessageActive</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">InToolUseBlock</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">content_block_start</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">type</span><span class="p">:</span><span class="w"> </span><span class="n">tool_use</span><span class="p">)</span>
+<span class="w">    </span><span class="n">MessageActive</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">InThinkingBlock</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">content_block_start</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">type</span><span class="p">:</span><span class="w"> </span><span class="n">thinking</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">InTextBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">InTextBlock</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">text_delta</span>
+<span class="w">    </span><span class="n">InTextBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MessageActive</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">content_block_stop</span>
+
+<span class="w">    </span><span class="n">InToolUseBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">InToolUseBlock</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">input_json_delta</span>
+<span class="w">    </span><span class="n">InToolUseBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MessageActive</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">content_block_stop</span>
+
+<span class="w">    </span><span class="n">InThinkingBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">InThinkingBlock</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">thinking_delta</span>
+<span class="w">    </span><span class="n">InThinkingBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MessageActive</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">content_block_stop</span>
+
+<span class="w">    </span><span class="n">MessageActive</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MessageComplete</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">message_delta</span>
+
+<span class="w">    </span><span class="n">MessageComplete</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Done</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">message_stop</span>
+
+<span class="w">    </span><span class="n">Idle</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">timeout</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">network</span><span class="w"> </span><span class="n">error</span>
+<span class="w">    </span><span class="n">MessageActive</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">timeout</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">network</span><span class="w"> </span><span class="n">error</span>
+<span class="w">    </span><span class="n">InTextBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">disconnect</span>
+<span class="w">    </span><span class="n">InToolUseBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">disconnect</span>
+<span class="w">    </span><span class="n">InThinkingBlock</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">disconnect</span>
+<span class="w">    </span><span class="n">MessageComplete</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">disconnect</span>
+
+<span class="w">    </span><span class="n">Error</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Recovery</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">retry</span><span class="w"> </span><span class="n">policy</span><span class="w"> </span><span class="n">allows</span>
+<span class="w">    </span><span class="n">Recovery</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Idle</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">non</span><span class="o">-</span><span class="n">streaming</span><span class="w"> </span><span class="n">fallback</span>
+
+<span class="w">    </span><span class="n">Done</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="state-definitions">State Definitions</h3>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Active Block</th>
+<th>What's Happening</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Idle</code></td>
+<td>None</td>
+<td>Stream created, waiting for first event</td>
+</tr>
+<tr>
+<td><code>MessageActive</code></td>
+<td>None</td>
+<td>Between content blocks or before the first block</td>
+</tr>
+<tr>
+<td><code>InTextBlock</code></td>
+<td>text</td>
+<td>Accumulating text deltas, forwarding to renderer</td>
+</tr>
+<tr>
+<td><code>InToolUseBlock</code></td>
+<td>tool_use</td>
+<td>Accumulating JSON deltas into a string buffer</td>
+</tr>
+<tr>
+<td><code>InThinkingBlock</code></td>
+<td>thinking</td>
+<td>Accumulating thinking deltas</td>
+</tr>
+<tr>
+<td><code>MessageComplete</code></td>
+<td>None</td>
+<td>Received message_delta with stop_reason</td>
+</tr>
+<tr>
+<td><code>Done</code></td>
+<td>None</td>
+<td>message_stop received, stream is finished</td>
+</tr>
+<tr>
+<td><code>Error</code></td>
+<td>Varies</td>
+<td>Stream interrupted, entering recovery</td>
+</tr>
+<tr>
+<td><code>Recovery</code></td>
+<td>None</td>
+<td>Falling back to non-streaming or retrying</td>
+</tr>
+</tbody>
+</table>
+<h3 id="transition-validation">Transition Validation</h3>
+<p>The state machine should reject invalid transitions. For example, receiving a <code>text_delta</code> while in <code>InToolUseBlock</code> is a protocol violation. These violations are rare in practice but critical to detect:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">validateTransition</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">currentState</span><span class="o">:</span><span class="w"> </span><span class="kt">StreamState</span><span class="p">,</span><span class="w"> </span>
+<span class="w">  </span><span class="nx">event</span><span class="o">:</span><span class="w"> </span><span class="kt">StreamEvent</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">StreamState</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">allowed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">TRANSITION_TABLE</span><span class="p">[</span><span class="nx">currentState</span><span class="p">]</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">nextState</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">allowed</span><span class="p">[</span><span class="nx">event</span><span class="p">.</span><span class="kr">type</span><span class="p">]</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">nextState</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Log the violation for debugging</span>
+<span class="w">    </span><span class="nx">logProtocolViolation</span><span class="p">(</span><span class="nx">currentState</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// Graceful degradation: stay in current state</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">currentState</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">nextState</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The graceful degradation choice (stay in current state rather than crash) reflects a production reality: the server may introduce new event types in future API versions. A strict state machine that crashes on unknown events would break existing clients. A lenient one that ignores unknown events maintains backward compatibility.</p>
+<hr />
+<h2 id="tool-use-event-parsing">Tool-Use Event Parsing</h2>
+<p>The most architecturally significant aspect of the streaming pipeline is tool-use detection. When the model emits a <code>content_block_start</code> with <code>type: tool_use</code>, the streaming pipeline transitions from passive text rendering to active agent orchestration.</p>
+<h3 id="the-tool-use-accumulation-pattern">The Tool-Use Accumulation Pattern</h3>
+<p>Tool-use input arrives as a sequence of <code>input_json_delta</code> events, each containing a string fragment:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">content_block_start</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">type</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tu_01&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Read&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">input_json_delta</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;{&quot;file_&#39;</span>
+<span class="n">input_json_delta</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;path&quot;: &#39;</span>
+<span class="n">input_json_delta</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;&quot;/src/&#39;</span>
+<span class="n">input_json_delta</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;main.ts&#39;</span>
+<span class="n">input_json_delta</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;&quot;}&#39;</span>
+<span class="n">content_block_stop</span>
+</code></pre></div>
+
+<p>The pipeline accumulates these fragments into a string buffer. <strong>Do not attempt to parse the JSON until <code>content_block_stop</code>.</strong> As discussed in Chapter 10, incremental JSON parsing on every delta is O(n^2). Accumulate the string, parse once.</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">class</span><span class="w"> </span><span class="nx">ToolUseAccumulator</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">jsonBuffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">toolName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">toolUseId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+
+<span class="w">  </span><span class="nx">startBlock</span><span class="p">(</span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">jsonBuffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">toolName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">name</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">toolUseId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">id</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="nx">appendDelta</span><span class="p">(</span><span class="nx">jsonFragment</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">jsonBuffer</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">jsonFragment</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="nx">finalizeBlock</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="nx">ToolUseRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">parse</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">jsonBuffer</span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;tool_use&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">this.toolUseId</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="kt">this.toolName</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">input</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="multiple-tool-calls-in-one-response">Multiple Tool Calls in One Response</h3>
+<p>The model can request multiple tool calls in a single response. The stream delivers them sequentially:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">content_block_start</span><span class="w"> </span><span class="p">(</span><span class="n">tool_use</span><span class="p">:</span><span class="w"> </span><span class="n">Read</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="n">tu_01</span><span class="p">)</span>
+<span class="w">  </span><span class="n">input_json_delta</span><span class="w"> </span><span class="o">...</span>
+<span class="n">content_block_stop</span>
+
+<span class="n">content_block_start</span><span class="w"> </span><span class="p">(</span><span class="n">tool_use</span><span class="p">:</span><span class="w"> </span><span class="n">Read</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="n">tu_02</span><span class="p">)</span>
+<span class="w">  </span><span class="n">input_json_delta</span><span class="w"> </span><span class="o">...</span>
+<span class="n">content_block_stop</span>
+
+<span class="n">content_block_start</span><span class="w"> </span><span class="p">(</span><span class="n">tool_use</span><span class="p">:</span><span class="w"> </span><span class="n">Bash</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="n">tu_03</span><span class="p">)</span>
+<span class="w">  </span><span class="n">input_json_delta</span><span class="w"> </span><span class="o">...</span>
+<span class="n">content_block_stop</span>
+
+<span class="n">message_delta</span><span class="w"> </span><span class="p">(</span><span class="n">stop_reason</span><span class="p">:</span><span class="w"> </span><span class="n">tool_use</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The pipeline collects all tool-use blocks and delivers them to the agent loop as a batch. The agent loop then decides which to execute in parallel (read-only tools) and which to serialize (mutating tools), as discussed in Chapter 13's tool execution pipeline.</p>
+<h3 id="early-tool-execution-speculative-execution">Early Tool Execution (Speculative Execution)</h3>
+<p>An advanced optimization: begin executing a tool before the entire response finishes streaming. When the pipeline detects a <code>content_block_stop</code> for a tool-use block, it can immediately dispatch that tool to the executor without waiting for <code>message_stop</code>.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Timeline</span><span class="w"> </span><span class="n">without</span><span class="w"> </span><span class="n">early</span><span class="w"> </span><span class="n">execution</span><span class="o">:</span>
+<span class="w">  </span><span class="p">[</span><span class="n">Stream</span><span class="o">:</span><span class="w"> </span><span class="n">thinking</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">text</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">tool1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">tool2</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">message_stop</span><span class="p">]</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">Execute</span><span class="w"> </span><span class="n">tool1</span><span class="p">]</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">Execute</span><span class="w"> </span><span class="n">tool2</span><span class="p">]</span>
+<span class="w">  </span><span class="o">|&lt;-------</span><span class="w"> </span><span class="n">streaming</span><span class="w"> </span><span class="n">time</span><span class="w"> </span><span class="o">--------&gt;|&lt;----</span><span class="w"> </span><span class="n">execution</span><span class="w"> </span><span class="n">time</span><span class="w"> </span><span class="o">----&gt;|</span>
+
+<span class="n">Timeline</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">early</span><span class="w"> </span><span class="n">execution</span><span class="o">:</span>
+<span class="w">  </span><span class="p">[</span><span class="n">Stream</span><span class="o">:</span><span class="w"> </span><span class="n">thinking</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">text</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">tool1</span><span class="p">]</span><span class="w">  </span><span class="p">[</span><span class="n">tool2</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">message_stop</span><span class="p">]</span>
+<span class="w">                              </span><span class="o">|</span>
+<span class="w">                              </span><span class="o">+-&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">Execute</span><span class="w"> </span><span class="n">tool1</span><span class="w"> </span><span class="p">(</span><span class="n">parallel</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">stream</span><span class="p">)]</span>
+<span class="w">                                                          </span><span class="o">|</span>
+<span class="w">                                                          </span><span class="o">+-&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">Execute</span><span class="w"> </span><span class="n">tool2</span><span class="p">]</span>
+<span class="w">  </span><span class="o">|&lt;----</span><span class="w"> </span><span class="n">overlapped</span><span class="w"> </span><span class="n">time</span><span class="o">:</span><span class="w"> </span><span class="n">streaming</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">execution</span><span class="w"> </span><span class="o">------------&gt;|</span>
+</code></pre></div>
+
+<p>This optimization is beneficial for read-only tools (Read, Grep, Glob) where execution can safely overlap with continued streaming. It is dangerous for mutating tools (Write, Bash) where the model might reference the result of a previous tool in the same response.</p>
+<p>The architectural decision: make early execution opt-in per tool based on the tool's <code>isConcurrencySafe()</code> and <code>isReadOnly()</code> declarations from the tool registry (Chapter 13). Conservative tools wait for the full response; aggressive tools start immediately.</p>
+<hr />
+<h2 id="token-by-token-processing">Token-by-Token Processing</h2>
+<h3 id="the-rendering-pipeline">The Rendering Pipeline</h3>
+<p>Text deltas must flow from the stream processor to the terminal renderer with minimal latency. The user should see each word appear as the model generates it, creating the "typewriter" effect that makes streaming feel responsive.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">SSE</span><span class="p">[</span><span class="s">&quot;SSE Parser&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SM</span><span class="p">[</span><span class="s">&quot;State Machine&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">SM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TB</span><span class="p">[</span><span class="s">&quot;Text Buffer&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">TB</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MD</span><span class="p">[</span><span class="s">&quot;Markdown Renderer&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">MD</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TW</span><span class="p">[</span><span class="s">&quot;Terminal Writer&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">SM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TA</span><span class="p">[</span><span class="s">&quot;Tool Accumulator&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">TA</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TP</span><span class="p">[</span><span class="s">&quot;Tool Parser&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">TP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">AL</span><span class="p">[</span><span class="s">&quot;Agent Loop&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SSE</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e1f5fe</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SM</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">TB</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">MD</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">TW</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">TA</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">TP</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">AL</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fce4ec</span>
+</code></pre></div>
+
+<p>Two pipelines diverge from the state machine:</p>
+<ol>
+<li>
+<p><strong>Text pipeline</strong> (green): text deltas flow through a buffer, a markdown renderer (which handles code blocks, headers, lists, and inline formatting incrementally), and finally to the terminal writer.</p>
+</li>
+<li>
+<p><strong>Tool pipeline</strong> (red): tool-use deltas accumulate in a buffer until the block completes, then the parsed tool call flows to the agent loop.</p>
+</li>
+</ol>
+<p>The text pipeline must handle incremental markdown rendering. This is non-trivial because markdown formatting spans multiple tokens:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Delta</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;Here is &quot;</span>
+<span class="n">Delta</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;some `&quot;</span><span class="w">       </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">Code</span><span class="w"> </span><span class="n">span</span><span class="w"> </span><span class="n">opens</span>
+<span class="n">Delta</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;inline&quot;</span>
+<span class="n">Delta</span><span class="o">:</span><span class="w"> </span><span class="s">&quot; code`&quot;</span><span class="w">       </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">Code</span><span class="w"> </span><span class="n">span</span><span class="w"> </span><span class="n">closes</span>
+<span class="n">Delta</span><span class="o">:</span><span class="w"> </span><span class="s">&quot; and **&quot;</span><span class="w">      </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">Bold</span><span class="w"> </span><span class="n">opens</span>
+<span class="n">Delta</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;bold text&quot;</span>
+<span class="n">Delta</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;**.&quot;</span><span class="w">           </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">Bold</span><span class="w"> </span><span class="n">closes</span>
+</code></pre></div>
+
+<p>The markdown renderer maintains open formatting state (am I inside a code span? a bold section? a code block?) and renders each delta in context. When a delta opens a formatting span but does not close it, the renderer must buffer until the closing delimiter arrives.</p>
+<h3 id="partial-line-handling">Partial Line Handling</h3>
+<p>Terminals render line by line. A text delta that ends mid-line should be written immediately (for the typewriter effect), but the renderer must track that the line is not yet complete for formatting purposes:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">class</span><span class="w"> </span><span class="nx">IncrementalRenderer</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">currentLine</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">inCodeBlock</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">inBold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+
+<span class="w">  </span><span class="nx">renderDelta</span><span class="p">(</span><span class="nx">text</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="nx">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="kr">char</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">text</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="nx">currentLine</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="kr">char</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="kr">char</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;\n&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">formatLine</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">currentLine</span><span class="p">)</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="nx">currentLine</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// Flush partial line for immediate display</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">currentLine</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">formatPartialLine</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">currentLine</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">output</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="backpressure">Backpressure</h2>
+<h3 id="the-problem">The Problem</h3>
+<p>The model generates tokens faster than the terminal can render them. On a slow terminal (SSH over high-latency connection, terminal with complex themes, screen reader integration), the rendering pipeline falls behind the stream processor.</p>
+<p>Without backpressure handling, the pipeline buffers events in memory without bound. A 64K-token output response generates ~16,000 delta events. If the renderer can only process 1,000 events per second and the model produces 3,000 per second, the buffer grows by 2,000 events per second. Over a 30-second generation, that is 60,000 buffered events consuming significant memory.</p>
+<h3 id="pull-based-flow-control">Pull-Based Flow Control</h3>
+<p>The solution is to make the streaming pipeline pull-based rather than push-based. The async generator pattern naturally provides this:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="o">*</span><span class="w"> </span><span class="nx">processStream</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">rawStream</span><span class="o">:</span><span class="w"> </span><span class="kt">AsyncIterable</span><span class="o">&lt;</span><span class="nx">RawSSEEvent</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AsyncGenerator</span><span class="o">&lt;</span><span class="nx">ProcessedEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">raw</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">rawStream</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">processed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">processEvent</span><span class="p">(</span><span class="nx">raw</span><span class="p">)</span>
+<span class="w">    </span><span class="k">yield</span><span class="w"> </span><span class="nx">processed</span><span class="w">  </span><span class="c1">// Pauses here until consumer pulls</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// Consumer controls the pace</span>
+<span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">renderStream</span><span class="p">(</span><span class="nx">stream</span><span class="o">:</span><span class="w"> </span><span class="kt">AsyncGenerator</span><span class="o">&lt;</span><span class="nx">ProcessedEvent</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">stream</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">await</span><span class="w"> </span><span class="nx">renderToTerminal</span><span class="p">(</span><span class="nx">event</span><span class="p">)</span><span class="w">  </span><span class="c1">// May be slow</span>
+<span class="w">    </span><span class="c1">// Generator is paused until we pull the next event</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>When the consumer (<code>renderStream</code>) is slow, the generator (<code>processStream</code>) pauses at each <code>yield</code>. The HTTP stream's TCP flow control propagates the backpressure to the server, which slows down event delivery. This is end-to-end backpressure without explicit buffer management.</p>
+<h3 id="batching-under-pressure">Batching Under Pressure</h3>
+<p>In practice, pure backpressure may cause visible stuttering -- the user sees tokens arrive in bursts rather than smoothly. A better approach is to batch deltas when the renderer falls behind:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="o">*</span><span class="w"> </span><span class="nx">batchingProcessor</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">stream</span><span class="o">:</span><span class="w"> </span><span class="kt">AsyncIterable</span><span class="o">&lt;</span><span class="nx">StreamEvent</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AsyncGenerator</span><span class="o">&lt;</span><span class="nx">StreamEvent</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nx">BatchedTextDelta</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">pendingText</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">lastYieldTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">stream</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;text_delta&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">pendingText</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">text</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">elapsed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">lastYieldTime</span>
+
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">elapsed</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">16</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">  </span><span class="c1">// ~60fps frame budget</span>
+<span class="w">        </span><span class="k">yield</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;batched_text_delta&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">text</span><span class="o">:</span><span class="w"> </span><span class="kt">pendingText</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="nx">pendingText</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">        </span><span class="nx">lastYieldTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="c1">// Flush pending text before yielding non-text events</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">pendingText</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">yield</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;batched_text_delta&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">text</span><span class="o">:</span><span class="w"> </span><span class="kt">pendingText</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="nx">pendingText</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">        </span><span class="nx">lastYieldTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="k">yield</span><span class="w"> </span><span class="nx">event</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">pendingText</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">yield</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;batched_text_delta&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">text</span><span class="o">:</span><span class="w"> </span><span class="kt">pendingText</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The 16ms frame budget (roughly 60 fps) batches rapid text deltas into chunks that the renderer processes as a single unit. The user sees smooth text flow rather than individual character pops.</p>
+<hr />
+<h2 id="partial-response-recovery">Partial Response Recovery</h2>
+<h3 id="mid-stream-disconnection">Mid-Stream Disconnection</h3>
+<p>Networks fail. TCP connections drop. Load balancers time out idle streams. A production streaming pipeline must handle disconnections that occur after partial data has been received.</p>
+<p>The disconnection can happen at any point in the state machine:</p>
+<table>
+<thead>
+<tr>
+<th>State When Disconnected</th>
+<th>What Was Received</th>
+<th>Recovery Options</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Idle</code></td>
+<td>Nothing</td>
+<td>Full retry (same as non-streaming)</td>
+</tr>
+<tr>
+<td><code>InTextBlock</code></td>
+<td>Partial text</td>
+<td>Use partial text, retry for rest</td>
+</tr>
+<tr>
+<td><code>InToolUseBlock</code></td>
+<td>Partial JSON</td>
+<td>Cannot use (invalid JSON), must retry</td>
+</tr>
+<tr>
+<td><code>MessageActive</code> (between blocks)</td>
+<td>Complete blocks</td>
+<td>Use completed blocks, may need retry</td>
+</tr>
+<tr>
+<td><code>MessageComplete</code></td>
+<td>Everything except message_stop</td>
+<td>Treat as complete (stop is cosmetic)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-recovery-decision-tree">The Recovery Decision Tree</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">D</span><span class="p">[</span><span class="s2">&quot;Stream Disconnected&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Q1</span><span class="p">{</span><span class="s2">&quot;Any complete&lt;br/&gt;content blocks?&quot;</span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">Q1</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">RETRY</span><span class="p">[</span><span class="s2">&quot;Full retry&lt;br/&gt;(non-streaming fallback)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Q1</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">Q2</span><span class="p">{</span><span class="s2">&quot;Disconnect during&lt;br/&gt;tool_use block?&quot;</span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">Q2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">Q3</span><span class="p">{</span><span class="s2">&quot;Tool JSON&lt;br/&gt;parseable?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">Q3</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">RETRY</span>
+<span class="w">    </span><span class="n">Q3</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">USE</span><span class="p">[</span><span class="s2">&quot;Use completed blocks&lt;br/&gt;+ final tool block&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">Q2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">Q4</span><span class="p">{</span><span class="s2">&quot;Disconnect after&lt;br/&gt;message_delta?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">Q4</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">COMPLETE</span><span class="p">[</span><span class="s2">&quot;Treat as complete&lt;br/&gt;(message_stop is cosmetic)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Q4</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">USE2</span><span class="p">[</span><span class="s2">&quot;Use completed blocks&lt;br/&gt;Discard partial final block&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">RETRY</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">USE</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">COMPLETE</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">USE2</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3e0</span>
+</code></pre></div>
+
+<h3 id="non-streaming-fallback">Non-Streaming Fallback</h3>
+<p>When a streaming disconnection occurs and full retry is needed, the client should fall back to a non-streaming request rather than attempting another streaming connection. The rationale: if the streaming infrastructure (SSE parsing, chunked transfer, proxy keep-alive) failed, it may fail again. A non-streaming request uses a different code path and may succeed where streaming did not.</p>
+<p>The fallback must account for context overlap. If the streaming request partially succeeded and was counted against the rate limit, the non-streaming retry should not be double-counted. Share failure state between the streaming and non-streaming paths:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="o">*</span><span class="w"> </span><span class="nx">sendWithFallback</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">params</span><span class="o">:</span><span class="w"> </span><span class="kt">MessageParams</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AsyncGenerator</span><span class="o">&lt;</span><span class="nx">StreamEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">yield</span><span class="o">*</span><span class="w"> </span><span class="nx">processStreamingResponse</span><span class="p">(</span>
+<span class="w">      </span><span class="k">await</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">createMessageStream</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">isStreamDisconnection</span><span class="p">(</span><span class="nx">error</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="c1">// Fall back to non-streaming</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">createMessage</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span>
+<span class="w">      </span><span class="k">yield</span><span class="o">*</span><span class="w"> </span><span class="nx">convertToStreamEvents</span><span class="p">(</span><span class="nx">response</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">throw</span><span class="w"> </span><span class="nx">error</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="token-limits-for-non-streaming">Token Limits for Non-Streaming</h3>
+<p>Non-streaming requests have stricter server-side timeout constraints (typically 10 minutes). This limits the maximum output tokens that can be generated in a single non-streaming call. A production client should cap non-streaming output tokens conservatively:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">MAX_NON_STREAMING_TOKENS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">64</span><span class="nx">_000</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">adjustParamsForNonStreaming</span><span class="p">(</span><span class="nx">params</span><span class="o">:</span><span class="w"> </span><span class="kt">MessageParams</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">MessageParams</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">...</span><span class="nx">params</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">max_tokens</span><span class="o">:</span><span class="w"> </span><span class="kt">Math.min</span><span class="p">(</span><span class="nx">params</span><span class="p">.</span><span class="nx">max_tokens</span><span class="p">,</span><span class="w"> </span><span class="nx">MAX_NON_STREAMING_TOKENS</span><span class="p">),</span>
+<span class="w">    </span><span class="nx">stream</span><span class="o">:</span><span class="w"> </span><span class="kt">false</span><span class="p">,</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="usage-tracking-merge-semantics">Usage Tracking — Merge Semantics</h2>
+<h3 id="the-cumulative-model">The Cumulative Model</h3>
+<p>The streaming API does not provide per-event token deltas. Instead, usage fields arrive at two points in the stream with cumulative semantics:</p>
+<ul>
+<li><strong><code>message_start</code></strong> includes <code>input_tokens</code> (the input token count for the request)</li>
+<li><strong><code>message_delta</code></strong> includes <code>output_tokens</code> (the cumulative output token count at end of generation) and may repeat <code>input_tokens</code> as zero</li>
+</ul>
+<p>The zero-value problem is subtle. When <code>message_delta</code> reports <code>input_tokens: 0</code>, this does not mean "zero input tokens." It means "this field is not populated in this event." Naive code that always takes the latest value would overwrite the real input token count with zero:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// WRONG: overwrites real values with zero</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">updateUsage</span><span class="p">(</span><span class="nx">current</span><span class="o">:</span><span class="w"> </span><span class="kt">Usage</span><span class="p">,</span><span class="w"> </span><span class="nx">delta</span><span class="o">:</span><span class="w"> </span><span class="kt">Partial</span><span class="o">&lt;</span><span class="nx">Usage</span><span class="o">&gt;</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">Usage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="nx">current</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">delta</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// CORRECT: only overwrite with non-zero values</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">updateUsage</span><span class="p">(</span><span class="nx">current</span><span class="o">:</span><span class="w"> </span><span class="kt">Usage</span><span class="p">,</span><span class="w"> </span><span class="nx">delta</span><span class="o">:</span><span class="w"> </span><span class="kt">Partial</span><span class="o">&lt;</span><span class="nx">Usage</span><span class="o">&gt;</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">Usage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">inputTokens</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">delta</span><span class="p">.</span><span class="nx">inputTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span>
+<span class="w">      </span><span class="o">?</span><span class="w"> </span><span class="nx">delta</span><span class="p">.</span><span class="nx">inputTokens</span><span class="o">!</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">inputTokens</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">outputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">delta.outputTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">outputTokens</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">cacheReadTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">delta.cacheReadTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">cacheReadTokens</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">cacheWriteTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">delta.cacheWriteTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">cacheWriteTokens</span><span class="p">,</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This is a common trap in streaming API consumption. The fix is a "take the non-zero value" merge strategy, and it must be applied consistently across all usage fields.</p>
+<h3 id="extended-thinking-tokens">Extended Thinking Tokens</h3>
+<p>When extended thinking is enabled, the model generates thinking tokens that count against the output token budget but may not be visible in the stream (depending on whether thinking is redacted). The usage tracking must account for these:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Total</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="n">tokens</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">visible_text_tokens</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">thinking_tokens</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">tool_input_tokens</span>
+</code></pre></div>
+
+<p>The usage fields in <code>message_delta</code> include all three categories. The cost calculator needs the breakdown to apply different pricing (some providers price thinking tokens differently) and to display accurate metrics to the user.</p>
+<hr />
+<h2 id="thinking-block-handling">Thinking Block Handling</h2>
+<h3 id="visible-vs-redacted-thinking">Visible vs. Redacted Thinking</h3>
+<p>Extended thinking creates content blocks that may or may not be visible to the agent:</p>
+<p><strong>Visible thinking</strong> (<code>type: "thinking"</code>) arrives as a normal content block with thinking deltas. The agent can read the model's reasoning, which is useful for debugging and for the context management system (which may need to compress thinking blocks).</p>
+<p><strong>Redacted thinking</strong> (<code>type: "redacted_thinking"</code>) contains an opaque encrypted data blob. The agent cannot read the reasoning, but the blob must be preserved in the conversation history because the API requires it for continuity. The encrypted content counts against the context window, so the size must be tracked even though the content is not accessible.</p>
+<p>The streaming pipeline handles both cases:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">case</span><span class="w"> </span><span class="s1">&#39;content_block_start&#39;</span><span class="o">:</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;thinking&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;InThinkingBlock&#39;</span>
+<span class="w">    </span><span class="nx">thinkingBuffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;redacted_thinking&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// No deltas will follow -- the block is complete at start</span>
+<span class="w">    </span><span class="nx">accumulateRedactedBlock</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">data</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// State stays at MessageActive</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="k">break</span>
+</code></pre></div>
+
+<p>Redacted thinking blocks are special: they arrive as complete blocks in <code>content_block_start</code> with no subsequent deltas. The state machine does not transition to <code>InThinkingBlock</code> for redacted thinking because there are no deltas to accumulate.</p>
+<h3 id="thinking-block-ordering">Thinking Block Ordering</h3>
+<p>The model typically emits thinking blocks before text and tool-use blocks:</p>
+<div class="codehilite"><pre><span></span><code>message_start
+  content_block_start (thinking)
+    thinking_delta ...
+  content_block_stop
+  content_block_start (text)
+    text_delta ...
+  content_block_stop
+message_delta
+message_stop
+</code></pre></div>
+
+<p>However, the pipeline should not assume this ordering. The state machine accepts any valid transition regardless of block type sequence, making it resilient to future changes in the model's output patterns.</p>
+<hr />
+<h2 id="stall-detection">Stall Detection</h2>
+<p>Beyond hard disconnections, streams can stall -- events arrive, but with unusual gaps. A stall is different from a disconnection: the TCP connection is alive, data is eventually flowing, but something is causing intermittent delays.</p>
+<p>Common causes:
+- Network congestion on a specific path
+- Server-side GPU scheduling delays during extended thinking
+- Load balancer buffering
+- TLS renegotiation</p>
+<h3 id="stall-monitoring">Stall Monitoring</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">class</span><span class="w"> </span><span class="nx">StallDetector</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">lastEventTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">stallCount</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">totalStallTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span>
+
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">stallThresholdMs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">30</span><span class="nx">_000</span><span class="w">  </span><span class="c1">// 30 seconds</span>
+
+<span class="w">  </span><span class="nx">recordEvent</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">gap</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">lastEventTime</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">gap</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">stallThresholdMs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="nx">stallCount</span><span class="o">++</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="nx">totalStallTime</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">gap</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="nx">reportStall</span><span class="p">(</span><span class="nx">gap</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">lastEventTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">now</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">reportStall</span><span class="p">(</span><span class="nx">gapMs</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Telemetry, not termination</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">warn</span><span class="p">(</span><span class="s1">&#39;stream_stall&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">gapMs</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">stallCount</span><span class="o">:</span><span class="w"> </span><span class="kt">this.stallCount</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">totalStallTimeMs</span><span class="o">:</span><span class="w"> </span><span class="kt">this.totalStallTime</span><span class="p">,</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Stalls are logged but do not kill the stream. The data is eventually arriving, and killing a stalled stream discards all accumulated progress. The telemetry helps infrastructure teams identify network paths with high latency variance.</p>
+<p>The 30-second threshold accounts for extended thinking pauses. During complex reasoning, the model may go 10-20 seconds between visible output events. The threshold must be set above this expected gap to avoid false positives.</p>
+<hr />
+<h2 id="memory-management">Memory Management</h2>
+<p>Streaming responses hold native resources (TLS/socket buffers, response body streams) that live outside the garbage collector's reach. A production streaming pipeline must explicitly release these resources on every exit path.</p>
+<h3 id="the-resource-cleanup-pattern">The Resource Cleanup Pattern</h3>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="o">*</span><span class="w"> </span><span class="nx">processStream</span><span class="p">(</span><span class="nx">response</span><span class="o">:</span><span class="w"> </span><span class="kt">Response</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AsyncGenerator</span><span class="o">&lt;</span><span class="nx">StreamEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">body</span>
+
+<span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">parseSSE</span><span class="p">(</span><span class="nx">stream</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">yield</span><span class="w"> </span><span class="nx">processEvent</span><span class="p">(</span><span class="nx">event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">finally</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Always release native resources</span>
+<span class="w">    </span><span class="k">await</span><span class="w"> </span><span class="nx">stream</span><span class="o">?</span><span class="p">.</span><span class="nx">cancel</span><span class="p">().</span><span class="k">catch</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{})</span>
+<span class="w">    </span><span class="nx">response</span><span class="p">.</span><span class="nx">body</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="w">  </span><span class="c1">// Release reference</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The <code>finally</code> block runs on every exit: normal completion, thrown error, generator <code>.return()</code> (user cancellation), and idle timeout abort. Without explicit cleanup, the <code>Response.body</code> ReadableStream holds native TLS buffers that leak outside the JavaScript heap -- a real memory leak pattern discovered in production Node.js environments.</p>
+<h3 id="resource-lifecycle">Resource Lifecycle</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">Stream</span><span class="w"> </span><span class="n">created</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="o">+--</span><span class="w"> </span><span class="n">Normal</span><span class="w"> </span><span class="n">completion</span><span class="w"> </span><span class="p">(</span><span class="n">message_stop</span><span class="p">)</span>
+<span class="w">  </span><span class="o">|</span><span class="w">     </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">finally</span><span class="p">:</span><span class="w"> </span><span class="n">cancel</span><span class="w"> </span><span class="n">body</span><span class="p">,</span><span class="w"> </span><span class="n">release</span><span class="w"> </span><span class="n">response</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="o">+--</span><span class="w"> </span><span class="n">Error</span><span class="w"> </span><span class="n">thrown</span><span class="w"> </span><span class="p">(</span><span class="n">network</span><span class="p">,</span><span class="w"> </span><span class="n">parse</span><span class="p">)</span>
+<span class="w">  </span><span class="o">|</span><span class="w">     </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">finally</span><span class="p">:</span><span class="w"> </span><span class="n">cancel</span><span class="w"> </span><span class="n">body</span><span class="p">,</span><span class="w"> </span><span class="n">release</span><span class="w"> </span><span class="n">response</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="o">+--</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">cancellation</span><span class="w"> </span><span class="p">(</span><span class="o">.</span><span class="k">return</span><span class="p">())</span>
+<span class="w">  </span><span class="o">|</span><span class="w">     </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">finally</span><span class="p">:</span><span class="w"> </span><span class="n">cancel</span><span class="w"> </span><span class="n">body</span><span class="p">,</span><span class="w"> </span><span class="n">release</span><span class="w"> </span><span class="n">response</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="o">+--</span><span class="w"> </span><span class="n">Idle</span><span class="w"> </span><span class="n">timeout</span><span class="w"> </span><span class="p">(</span><span class="n">watchdog</span><span class="w"> </span><span class="n">fires</span><span class="p">)</span>
+<span class="w">        </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">abort</span><span class="w"> </span><span class="k">signal</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">finally</span><span class="p">:</span><span class="w"> </span><span class="n">cancel</span><span class="w"> </span><span class="n">body</span><span class="p">,</span><span class="w"> </span><span class="n">release</span><span class="w"> </span><span class="n">response</span>
+</code></pre></div>
+
+<p>All four exit paths converge in the same <code>finally</code> block. This is the advantage of the generator pattern for resource management -- <code>try/finally</code> is enforced by the language runtime, not by the developer remembering to call a cleanup function.</p>
+<hr />
+<h2 id="the-complete-stream-processing-pipeline">The Complete Stream Processing Pipeline</h2>
+<p>Assembling all the components:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span> <span class="n">TB</span>
+    <span class="n">subgraph</span> <span class="s">&quot;HTTP Layer&quot;</span>
+        <span class="n">HTTP</span><span class="p">[</span><span class="s">&quot;HTTP Response&lt;br/&gt;(chunked body)&quot;</span><span class="p">]</span>
+        <span class="n">SSE</span><span class="p">[</span><span class="s">&quot;SSE Parser&lt;br/&gt;(line protocol)&quot;</span><span class="p">]</span>
+    <span class="n">end</span>
+
+    <span class="n">subgraph</span> <span class="s">&quot;Processing Layer&quot;</span>
+        <span class="n">SM</span><span class="p">[</span><span class="s">&quot;State Machine&lt;br/&gt;(transition validation)&quot;</span><span class="p">]</span>
+        <span class="n">TTFT</span><span class="p">[</span><span class="s">&quot;TTFT Tracker&lt;br/&gt;(message_start)&quot;</span><span class="p">]</span>
+        <span class="n">STALL</span><span class="p">[</span><span class="s">&quot;Stall Detector&lt;br/&gt;(gap monitoring)&quot;</span><span class="p">]</span>
+        <span class="n">WD</span><span class="p">[</span><span class="s">&quot;Idle Watchdog&lt;br/&gt;(90s timeout)&quot;</span><span class="p">]</span>
+    <span class="n">end</span>
+
+    <span class="n">subgraph</span> <span class="s">&quot;Accumulation Layer&quot;</span>
+        <span class="n">TA</span><span class="p">[</span><span class="s">&quot;Text Accumulator&quot;</span><span class="p">]</span>
+        <span class="n">TUA</span><span class="p">[</span><span class="s">&quot;Tool-Use Accumulator&quot;</span><span class="p">]</span>
+        <span class="n">THA</span><span class="p">[</span><span class="s">&quot;Thinking Accumulator&quot;</span><span class="p">]</span>
+        <span class="n">UA</span><span class="p">[</span><span class="s">&quot;Usage Accumulator&lt;br/&gt;(merge semantics)&quot;</span><span class="p">]</span>
+    <span class="n">end</span>
+
+    <span class="n">subgraph</span> <span class="s">&quot;Output Layer&quot;</span>
+        <span class="n">BAT</span><span class="p">[</span><span class="s">&quot;Batcher&lt;br/&gt;(16ms frames)&quot;</span><span class="p">]</span>
+        <span class="n">REND</span><span class="p">[</span><span class="s">&quot;Markdown Renderer&quot;</span><span class="p">]</span>
+        <span class="n">TERM</span><span class="p">[</span><span class="s">&quot;Terminal Writer&quot;</span><span class="p">]</span>
+        <span class="n">TOOL</span><span class="p">[</span><span class="s">&quot;Tool Dispatcher&quot;</span><span class="p">]</span>
+        <span class="n">MSG</span><span class="p">[</span><span class="s">&quot;Message Builder&quot;</span><span class="p">]</span>
+    <span class="n">end</span>
+
+    <span class="n">HTTP</span> <span class="o">--&gt;</span> <span class="n">SSE</span>
+    <span class="n">SSE</span> <span class="o">--&gt;</span> <span class="n">SM</span>
+    <span class="n">SM</span> <span class="o">--&gt;</span> <span class="n">TTFT</span>
+    <span class="n">SM</span> <span class="o">--&gt;</span> <span class="n">STALL</span>
+    <span class="n">SM</span> <span class="o">--&gt;</span> <span class="n">WD</span>
+
+    <span class="n">SM</span> <span class="o">--&gt;</span><span class="p">|</span><span class="n">text_delta</span><span class="p">|</span> <span class="n">TA</span>
+    <span class="n">SM</span> <span class="o">--&gt;</span><span class="p">|</span><span class="n">json_delta</span><span class="p">|</span> <span class="n">TUA</span>
+    <span class="n">SM</span> <span class="o">--&gt;</span><span class="p">|</span><span class="n">thinking_delta</span><span class="p">|</span> <span class="n">THA</span>
+    <span class="n">SM</span> <span class="o">--&gt;</span><span class="p">|</span><span class="n">message_delta</span><span class="p">|</span> <span class="n">UA</span>
+
+    <span class="n">TA</span> <span class="o">--&gt;</span> <span class="n">BAT</span>
+    <span class="n">BAT</span> <span class="o">--&gt;</span> <span class="n">REND</span>
+    <span class="n">REND</span> <span class="o">--&gt;</span> <span class="n">TERM</span>
+
+    <span class="n">TUA</span> <span class="o">--&gt;</span><span class="p">|</span><span class="n">block_stop</span><span class="p">|</span> <span class="n">TOOL</span>
+
+    <span class="n">UA</span> <span class="o">--&gt;</span> <span class="n">MSG</span>
+    <span class="n">TUA</span> <span class="o">--&gt;</span> <span class="n">MSG</span>
+    <span class="n">TA</span> <span class="o">--&gt;</span> <span class="n">MSG</span>
+    <span class="n">THA</span> <span class="o">--&gt;</span> <span class="n">MSG</span>
+
+    <span class="n">style</span> <span class="n">SM</span> <span class="n">fill</span><span class="p">:</span><span class="o">#</span><span class="n">fff3e0</span><span class="p">,</span><span class="n">stroke</span><span class="p">:</span><span class="o">#</span><span class="mi">333</span><span class="p">,</span><span class="n">stroke</span><span class="o">-</span><span class="n">width</span><span class="p">:</span><span class="mi">2</span><span class="n">px</span>
+</code></pre></div>
+
+<p>Data flows top to bottom:</p>
+<ol>
+<li><strong>HTTP Layer</strong> -- Raw bytes become SSE events</li>
+<li><strong>Processing Layer</strong> -- Events are validated, timed, and monitored</li>
+<li><strong>Accumulation Layer</strong> -- Deltas are collected into complete units</li>
+<li><strong>Output Layer</strong> -- Complete units are rendered, dispatched, or assembled into messages</li>
+</ol>
+<p>Each layer has a single responsibility and a clear interface. The state machine does not know about markdown rendering. The text accumulator does not know about tool dispatch. The idle watchdog does not know about message assembly. This separation makes it possible to test each layer independently and to replace any layer without affecting the others.</p>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building a streaming pipeline for a production AI CLI agent, these architectural principles emerge:</p>
+<p><strong>1. Model the stream as a state machine.</strong> The event model has implicit sequencing rules (you cannot receive a <code>text_delta</code> before a <code>content_block_start</code>). Making these explicit as state transitions catches protocol violations early and documents the expected event flow for future maintainers.</p>
+<p><strong>2. Defer parsing until you have the complete unit.</strong> Incremental JSON parsing on every delta is O(n^2). Accumulate strings, parse once at block completion. This principle applies to any streaming system where partial data has no actionable use.</p>
+<p><strong>3. Use pull-based flow control for natural backpressure.</strong> Async generators pause when the consumer is not pulling. This propagates backpressure through the entire pipeline to the HTTP layer without explicit buffer management. The alternative -- push-based with explicit buffering -- requires manual buffer size limits and overflow strategies.</p>
+<p><strong>4. Separate text rendering from tool dispatch.</strong> Text deltas and tool-use deltas follow fundamentally different paths: text flows to the renderer in real time, tool-use accumulates silently until complete. A single "process delta" function that handles both will grow into an unmaintainable switch statement. Split them at the state machine.</p>
+<p><strong>5. Design every exit path through <code>finally</code>.</strong> Streaming responses hold native resources that the garbage collector cannot reach. The generator pattern's <code>try/finally</code> ensures cleanup runs on normal completion, errors, cancellation, and timeouts. Four exit paths, one cleanup block.</p>
+<p><strong>6. Distinguish stalls from disconnections.</strong> A stall (events arrive slowly) should be logged but tolerated. A disconnection (no events at all) should trigger recovery. The watchdog timeout handles disconnections; the stall detector handles quality monitoring. Different problems, different responses.</p>
+<p><strong>7. Batch under pressure, stream when possible.</strong> Pure backpressure causes visible stuttering. Batching text deltas into 16ms frame-budget chunks smooths the visual experience while maintaining backpressure semantics for the underlying stream.</p>
+<p>In Chapter 12, we examine the multi-provider architecture that sits behind the API client -- how the system resolves credentials, routes endpoints, detects model capabilities, and implements fallback chains across Anthropic's first-party API, AWS Bedrock, and Google Vertex AI.</p>
+<div class="chapter-nav">
+  <a href="chapter-10.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-12.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

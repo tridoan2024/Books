@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 10: API Client Design — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-11.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-10-api-client-design">Chapter 10: API Client Design</h1>
+<p>In Chapter 9, we examined context window management -- how the system decides what content reaches the model within its token budget. But the context assembly pipeline produces a payload that still needs to reach the model. That last mile -- serializing messages, routing to the correct provider, handling failures, tracking costs, and processing the streaming response -- is the job of the API client.</p>
+<p>The API client sits at the most consequential boundary in the entire system: the interface between your agent and the model that powers it. Every architectural decision here affects latency, cost, reliability, and correctness. Get the retry logic wrong and your users see cryptic errors during transient outages. Get the streaming wrong and your first-token latency balloons from 200ms to 30s. Get the provider abstraction wrong and you lock your enterprise customers out of their preferred cloud.</p>
+<p>This chapter examines the design principles behind a production API client for AI CLI agents: the provider abstraction layer, streaming architecture, retry strategies, circuit breakers, rate limiting, cost tracking, and the header management patterns that make prompt caching economically viable.</p>
+<hr />
+<h2 id="why-a-provider-abstraction-layer">Why a Provider Abstraction Layer</h2>
+<p>An AI CLI agent that talks to a single API endpoint is a prototype. A production agent needs to support multiple model providers -- not because abstraction is inherently virtuous, but because enterprise deployment realities demand it.</p>
+<p>The business case is straightforward:</p>
+<ul>
+<li><strong>AWS-heavy organizations</strong> mandate that all API calls route through their cloud. They use Amazon Bedrock, which fronts the same models through AWS's infrastructure with SigV4 authentication, VPC endpoints, and consolidated billing.</li>
+<li><strong>GCP-heavy organizations</strong> have the same requirement but with Google Vertex AI. Service accounts, project-scoped billing, regional endpoints.</li>
+<li><strong>Regulated industries</strong> need data residency guarantees. The first-party API endpoint may route through regions that violate compliance requirements. Cloud-specific endpoints give control over data geography.</li>
+<li><strong>Startups and individual developers</strong> want the simplest path: a direct API key to the model provider's endpoint.</li>
+</ul>
+<p>Without a provider abstraction, you build four separate API clients. With one, you build a single client and four thin adapters.</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">Agent</span><span class="p">[</span><span class="s">&quot;Agent Core&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PA</span><span class="p">[</span><span class="s">&quot;Provider Abstraction Layer&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">Agent</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PA</span>
+
+<span class="w">    </span><span class="n">PA</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">A1P</span><span class="p">[</span><span class="s">&quot;Anthropic 1P API&lt;br/&gt;API Key Auth&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PA</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ABR</span><span class="p">[</span><span class="s">&quot;AWS Bedrock&lt;br/&gt;SigV4 Auth&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PA</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">AVX</span><span class="p">[</span><span class="s">&quot;Google Vertex AI&lt;br/&gt;Service Account&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PA</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">AFN</span><span class="p">[</span><span class="s">&quot;Custom Endpoint&lt;br/&gt;OAuth / Custom Auth&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Provider-Specific Concerns&quot;</span>
+<span class="w">        </span><span class="n">A1P</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H1</span><span class="p">[</span><span class="s">&quot;Beta headers in HTTP headers&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">ABR</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H2</span><span class="p">[</span><span class="s">&quot;Beta headers in request body&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">AVX</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H3</span><span class="p">[</span><span class="s">&quot;Filtered betas for countTokens&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">AFN</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H4</span><span class="p">[</span><span class="s">&quot;Custom base URL routing&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">PA</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">f9f</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">333</span><span class="p">,</span><span class="n">stroke</span><span class="o">-</span><span class="n">width</span><span class="o">:</span><span class="mi">2</span><span class="n">px</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">bbf</span><span class="p">,</span><span class="n">stroke</span><span class="o">:</span><span class="err">#</span><span class="mi">333</span><span class="p">,</span><span class="n">stroke</span><span class="o">-</span><span class="n">width</span><span class="o">:</span><span class="mi">2</span><span class="n">px</span>
+</code></pre></div>
+
+<h3 id="the-adapter-pattern">The Adapter Pattern</h3>
+<p>The provider abstraction follows the classic adapter pattern: a common interface with provider-specific implementations. The interface surface is deliberately narrow:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">ModelProvider</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">createMessage</span><span class="p">(</span><span class="nx">params</span><span class="o">:</span><span class="w"> </span><span class="kt">MessageParams</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">MessageResponse</span><span class="o">&gt;</span>
+<span class="w">  </span><span class="nx">createMessageStream</span><span class="p">(</span><span class="nx">params</span><span class="o">:</span><span class="w"> </span><span class="kt">MessageParams</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AsyncIterable</span><span class="o">&lt;</span><span class="nx">StreamEvent</span><span class="o">&gt;</span>
+<span class="w">  </span><span class="nx">countTokens</span><span class="p">(</span><span class="nx">params</span><span class="o">:</span><span class="w"> </span><span class="kt">CountTokensParams</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">TokenCount</span><span class="o">&gt;</span>
+<span class="w">  </span><span class="nx">getModelCapabilities</span><span class="p">(</span><span class="nx">modelId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ModelCapabilities</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Four methods. That is the entire contract. Every provider-specific concern -- authentication, endpoint routing, header formatting, request body differences -- lives inside the adapter implementation. The rest of the system (the agent loop, the context manager, the tool executor) works against this interface and never knows which provider is active.</p>
+<p>This narrowness is deliberate. Every method you add to the interface is a method every adapter must implement. A wide interface turns provider additions from a one-day task into a one-week task. The four methods above cover the three operations the agent actually needs: send a message (streaming or not), count tokens, and check what a model can do.</p>
+<h3 id="the-factory-function">The Factory Function</h3>
+<p>Client instantiation happens through a factory function, not a constructor:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">createModelClient</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">ModelProvider</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolveProvider</span><span class="p">()</span><span class="w">  </span><span class="c1">// env vars, config, CLI flags</span>
+
+<span class="w">  </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="nx">provider</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;bedrock&#39;</span><span class="o">:</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">BedrockAdapter</span><span class="p">({</span>
+<span class="w">        </span><span class="nx">region</span><span class="o">:</span><span class="w"> </span><span class="kt">resolveAWSRegion</span><span class="p">(),</span>
+<span class="w">        </span><span class="nx">credentials</span><span class="o">:</span><span class="w"> </span><span class="kt">await</span><span class="w"> </span><span class="nx">resolveAWSCredentials</span><span class="p">(),</span>
+<span class="w">      </span><span class="p">})</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;vertex&#39;</span><span class="o">:</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">VertexAdapter</span><span class="p">({</span>
+<span class="w">        </span><span class="nx">project</span><span class="o">:</span><span class="w"> </span><span class="kt">resolveGCPProject</span><span class="p">(),</span>
+<span class="w">        </span><span class="nx">location</span><span class="o">:</span><span class="w"> </span><span class="kt">resolveGCPLocation</span><span class="p">(),</span>
+<span class="w">        </span><span class="nx">credentials</span><span class="o">:</span><span class="w"> </span><span class="kt">await</span><span class="w"> </span><span class="nx">resolveServiceAccount</span><span class="p">(),</span>
+<span class="w">      </span><span class="p">})</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;custom&#39;</span><span class="o">:</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">CustomEndpointAdapter</span><span class="p">({</span>
+<span class="w">        </span><span class="nx">baseURL</span><span class="o">:</span><span class="w"> </span><span class="kt">resolveCustomEndpoint</span><span class="p">(),</span>
+<span class="w">        </span><span class="nx">auth</span><span class="o">:</span><span class="w"> </span><span class="kt">resolveCustomAuth</span><span class="p">(),</span>
+<span class="w">      </span><span class="p">})</span>
+<span class="w">    </span><span class="nx">default</span><span class="o">:</span>
+<span class="w">      </span><span class="kt">return</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">AnthropicAdapter</span><span class="p">({</span>
+<span class="w">        </span><span class="nx">apiKey</span><span class="o">:</span><span class="w"> </span><span class="kt">resolveAPIKey</span><span class="p">(),</span>
+<span class="w">      </span><span class="p">})</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The factory is a function, not a class, because client creation may need to be repeated. When credentials expire mid-session (OAuth tokens, temporary AWS credentials), the retry engine discards the old client and calls the factory again. A class with a constructor implies one-time initialization. A factory function communicates "this can happen again."</p>
+<p>The factory is also the single point where credential resolution happens. Credentials flow from environment variables, config files, and cloud metadata services through a resolution chain. Centralizing this in the factory means credential bugs have exactly one place to look.</p>
+<hr />
+<h2 id="streaming-architecture">Streaming Architecture</h2>
+<h3 id="why-streaming-is-non-negotiable">Why Streaming Is Non-Negotiable</h3>
+<p>A non-streaming API call for a complex response takes 20-40 seconds. The user stares at a blank terminal for the entire duration. A streaming call returns the first token in 200-500ms and renders incrementally. Same total time, but the perceived experience is fundamentally different.</p>
+<p>The math is simple. If response generation takes 30 seconds:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Time to first visible output</th>
+<th>User perception</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Non-streaming</td>
+<td>30s</td>
+<td>"Is it frozen?"</td>
+</tr>
+<tr>
+<td>Streaming</td>
+<td>~300ms</td>
+<td>"It's working, I can read along"</td>
+</tr>
+</tbody>
+</table>
+<p>Streaming is not an optimization. It is a user experience requirement for any interactive AI tool. The technical cost is significant -- parsing Server-Sent Events, managing partial state, handling mid-stream disconnections -- but the alternative (a 30-second blank screen) is unacceptable.</p>
+<h3 id="server-sent-events-processing">Server-Sent Events Processing</h3>
+<p>The standard transport for streaming model responses is Server-Sent Events (SSE), a simple protocol layered over HTTP chunked transfer encoding. The server sends a continuous stream of text-based events:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">event</span><span class="o">:</span><span class="w"> </span><span class="n">message_start</span>
+<span class="n">data</span><span class="o">:</span><span class="w"> </span><span class="o">{</span><span class="s2">&quot;type&quot;</span><span class="o">:</span><span class="s2">&quot;message_start&quot;</span><span class="o">,</span><span class="s2">&quot;message&quot;</span><span class="o">:{</span><span class="s2">&quot;id&quot;</span><span class="o">:</span><span class="s2">&quot;msg_01...&quot;</span><span class="o">,</span><span class="s2">&quot;model&quot;</span><span class="o">:</span><span class="s2">&quot;claude-opus-4-6&quot;</span><span class="o">,...}}</span>
+
+<span class="n">event</span><span class="o">:</span><span class="w"> </span><span class="n">content_block_start</span>
+<span class="n">data</span><span class="o">:</span><span class="w"> </span><span class="o">{</span><span class="s2">&quot;type&quot;</span><span class="o">:</span><span class="s2">&quot;content_block_start&quot;</span><span class="o">,</span><span class="s2">&quot;index&quot;</span><span class="o">:</span><span class="mi">0</span><span class="o">,</span><span class="s2">&quot;content_block&quot;</span><span class="o">:{</span><span class="s2">&quot;type&quot;</span><span class="o">:</span><span class="s2">&quot;text&quot;</span><span class="o">,</span><span class="s2">&quot;text&quot;</span><span class="o">:</span><span class="s2">&quot;&quot;</span><span class="o">}}</span>
+
+<span class="n">event</span><span class="o">:</span><span class="w"> </span><span class="n">content_block_delta</span>
+<span class="n">data</span><span class="o">:</span><span class="w"> </span><span class="o">{</span><span class="s2">&quot;type&quot;</span><span class="o">:</span><span class="s2">&quot;content_block_delta&quot;</span><span class="o">,</span><span class="s2">&quot;index&quot;</span><span class="o">:</span><span class="mi">0</span><span class="o">,</span><span class="s2">&quot;delta&quot;</span><span class="o">:{</span><span class="s2">&quot;type&quot;</span><span class="o">:</span><span class="s2">&quot;text_delta&quot;</span><span class="o">,</span><span class="s2">&quot;text&quot;</span><span class="o">:</span><span class="s2">&quot;Here&quot;</span><span class="o">}}</span>
+
+<span class="n">event</span><span class="o">:</span><span class="w"> </span><span class="n">content_block_delta</span>
+<span class="n">data</span><span class="o">:</span><span class="w"> </span><span class="o">{</span><span class="s2">&quot;type&quot;</span><span class="o">:</span><span class="s2">&quot;content_block_delta&quot;</span><span class="o">,</span><span class="s2">&quot;index&quot;</span><span class="o">:</span><span class="mi">0</span><span class="o">,</span><span class="s2">&quot;delta&quot;</span><span class="o">:{</span><span class="s2">&quot;type&quot;</span><span class="o">:</span><span class="s2">&quot;text_delta&quot;</span><span class="o">,</span><span class="s2">&quot;text&quot;</span><span class="o">:</span><span class="s2">&quot; is&quot;</span><span class="o">}}</span>
+</code></pre></div>
+
+<p>Each event has a type and a JSON data payload. The client reads the stream line by line, parses events, and dispatches them to handlers. The key architectural decision is <strong>how to structure the event processing pipeline</strong>.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">Loop</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Client</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">Client</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="n">Layer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="n">API</span>
+
+<span class="w">    </span><span class="n">Agent</span><span class="o">-&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">createMessageStream</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">v1</span><span class="o">/</span><span class="n">messages</span><span class="w"> </span><span class="p">(</span><span class="n">stream</span><span class="p">:</span><span class="w"> </span><span class="bp">true</span><span class="p">)</span>
+<span class="w">    </span><span class="n">HTTP</span><span class="o">-&gt;&gt;</span><span class="n">API</span><span class="p">:</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="n">Request</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Headers</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">API</span><span class="p">:</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="n">begins</span><span class="w"> </span><span class="n">generating</span>
+
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">chunked</span><span class="w"> </span><span class="n">body</span>
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">event</span><span class="p">:</span><span class="w"> </span><span class="n">message_start</span>
+<span class="w">    </span><span class="n">HTTP</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">StreamEvent</span><span class="p">(</span><span class="n">message_start</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">MessageStart</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">Record</span><span class="w"> </span><span class="n">time</span><span class="o">-</span><span class="n">to</span><span class="o">-</span><span class="n">first</span><span class="o">-</span><span class="n">token</span>
+
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">event</span><span class="p">:</span><span class="w"> </span><span class="n">content_block_start</span>
+<span class="w">    </span><span class="n">HTTP</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">StreamEvent</span><span class="p">(</span><span class="n">content_block_start</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">BlockStart</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">loop</span><span class="w"> </span><span class="n">Token</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">token</span>
+<span class="w">        </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">event</span><span class="p">:</span><span class="w"> </span><span class="n">content_block_delta</span>
+<span class="w">        </span><span class="n">HTTP</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">StreamEvent</span><span class="p">(</span><span class="n">delta</span><span class="p">)</span>
+<span class="w">        </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">TextDelta</span><span class="p">(</span><span class="s2">&quot;token&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">Render</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">terminal</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">event</span><span class="p">:</span><span class="w"> </span><span class="n">content_block_stop</span>
+<span class="w">    </span><span class="n">HTTP</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">StreamEvent</span><span class="p">(</span><span class="n">block_stop</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">BlockStop</span>
+
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">event</span><span class="p">:</span><span class="w"> </span><span class="n">message_delta</span>
+<span class="w">    </span><span class="n">HTTP</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">StreamEvent</span><span class="p">(</span><span class="n">message_delta</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">MessageDelta</span><span class="p">(</span><span class="n">usage</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">HTTP</span><span class="p">:</span><span class="w"> </span><span class="n">event</span><span class="p">:</span><span class="w"> </span><span class="n">message_stop</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">MessageComplete</span>
+
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Agent</span><span class="p">:</span><span class="w"> </span><span class="n">Process</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">calls</span><span class="p">,</span><span class="w"> </span><span class="k">continue</span><span class="w"> </span><span class="n">loop</span>
+</code></pre></div>
+
+<h3 id="raw-stream-vs-sdk-wrapper">Raw Stream vs SDK Wrapper</h3>
+<p>Most model provider SDKs offer a convenience wrapper that accumulates stream events into a high-level message object. This wrapper is convenient for simple applications but can introduce performance problems in production agents.</p>
+<p>The specific issue is <strong>incremental JSON parsing</strong>. When the model generates a tool call, the tool's input arrives as a sequence of <code>input_json_delta</code> events, each containing a few characters of the JSON argument. A convenience wrapper may attempt to parse the partial JSON on every delta to provide incremental access to the tool input. This is O(n^2) -- each parse re-scans the accumulated string from the beginning. For a tool call with 10KB of JSON input (common for file edits), this means thousands of redundant parses.</p>
+<p>The production-grade alternative: accumulate raw strings during deltas, parse once at <code>content_block_stop</code>. Linear time, no wasted CPU.</p>
+<div class="codehilite"><pre><span></span><code>SDK Wrapper approach:
+  Delta 1: parse(&quot;{&quot;)           = 1 char scanned
+  Delta 2: parse(&quot;{\&quot;f&quot;)        = 3 chars scanned
+  Delta 3: parse(&quot;{\&quot;fi&quot;)       = 4 chars scanned
+  ...
+  Delta N: parse(&quot;{\&quot;file\&quot;:...&quot;) = N chars scanned
+  Total: O(N^2) parsing work
+
+Raw accumulation approach:
+  Delta 1-N: append to string buffer
+  Block stop: parse once         = N chars scanned
+  Total: O(N) parsing work
+</code></pre></div>
+
+<p>This is a general principle for streaming systems: <strong>defer parsing until you have the complete unit</strong>. Incremental parsing is useful when you need to act on partial data (rendering text tokens to the screen). It is wasteful when the partial data has no actionable use (partial JSON for a tool call).</p>
+<h3 id="the-stream-idle-watchdog">The Stream Idle Watchdog</h3>
+<p>HTTP keep-alive connections can enter a state where the TCP connection is alive but no data flows. The server may have crashed, a network middlebox may be buffering, or a load balancer may have silently dropped the connection. The HTTP library's request timeout only covers the initial connection handshake, not the streaming body.</p>
+<p>A production streaming client needs a watchdog timer:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Stream</span><span class="w"> </span><span class="n">starts</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="n">v</span>
+<span class="p">[</span><span class="n">Reset</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="n">on</span><span class="w"> </span><span class="n">every</span><span class="w"> </span><span class="nf">event</span><span class="p">]</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="o">+--</span><span class="w"> </span><span class="nf">Event</span><span class="w"> </span><span class="n">received</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Reset</span><span class="w"> </span><span class="mi">90</span><span class="n">s</span><span class="w"> </span><span class="n">timer</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="o">+--</span><span class="w"> </span><span class="mi">45</span><span class="n">s</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="nf">event</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Emit</span><span class="w"> </span><span class="n">warning</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="o">+--</span><span class="w"> </span><span class="mi">90</span><span class="n">s</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="nf">event</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Abort</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="n">trigger</span><span class="w"> </span><span class="n">retry</span>
+</code></pre></div>
+
+<p>The timer resets on every incoming event. If 90 seconds pass with no events, the stream is considered dead and the client triggers a retry. A 45-second warning (halfway) gives observability into streams that are slow but not dead.</p>
+<p>The specific timeout values reflect the characteristics of model inference. During extended thinking, the model may go 30-60 seconds between visible output events (thinking tokens may not be streamed). The 90-second timeout is set above this expected gap to avoid false positives.</p>
+<hr />
+<h2 id="retry-logic">Retry Logic</h2>
+<h3 id="exponential-backoff-with-jitter">Exponential Backoff with Jitter</h3>
+<p>Every networked system needs retry logic. The question is not whether to retry, but how.</p>
+<p>The standard pattern is exponential backoff with jitter:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Attempt</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="kr">fail</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kr">wait</span><span class="w">  </span><span class="mi">500</span><span class="n">ms</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nf">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">125</span><span class="n">ms</span><span class="p">)</span>
+<span class="n">Attempt</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="kr">fail</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kr">wait</span><span class="w"> </span><span class="mi">1000</span><span class="n">ms</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nf">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">250</span><span class="n">ms</span><span class="p">)</span>
+<span class="n">Attempt</span><span class="w"> </span><span class="mi">3</span><span class="o">:</span><span class="w"> </span><span class="kr">fail</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kr">wait</span><span class="w"> </span><span class="mi">2000</span><span class="n">ms</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nf">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">500</span><span class="n">ms</span><span class="p">)</span>
+<span class="n">Attempt</span><span class="w"> </span><span class="mi">4</span><span class="o">:</span><span class="w"> </span><span class="kr">fail</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kr">wait</span><span class="w"> </span><span class="mi">4000</span><span class="n">ms</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nf">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1000</span><span class="n">ms</span><span class="p">)</span>
+<span class="p">...</span>
+<span class="n">Attempt</span><span class="w"> </span><span class="n">N</span><span class="o">:</span><span class="w"> </span><span class="kr">fail</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kr">wait</span><span class="w"> </span><span class="nf">min</span><span class="p">(</span><span class="n">base</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="o">^</span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="mi">32000</span><span class="n">ms</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">jitter</span>
+</code></pre></div>
+
+<p>The exponential growth prevents hammering a recovering server. The jitter prevents thundering herd -- without it, all clients that failed at the same time would retry at the same time, creating synchronized spikes that overwhelm the server again.</p>
+<p>The jitter should be proportional to the delay (typically 25% of the base delay), not a fixed value. A fixed 100ms jitter on a 32-second delay provides negligible distribution. A proportional 25% jitter (8 seconds of spread on a 32-second delay) actually distributes the retry load.</p>
+<h3 id="retry-after-header-respect">Retry-After Header Respect</h3>
+<p>The server knows its own load better than the client. When the API returns a <code>429 Too Many Requests</code> or <code>529 Overloaded</code> with a <code>Retry-After</code> header, that header should take absolute precedence over the client's calculated backoff:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">calculateRetryDelay</span><span class="p">(</span><span class="nx">attempt</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">,</span><span class="w"> </span><span class="nx">retryAfterHeader?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// Server&#39;s instruction always wins</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">retryAfterHeader</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">seconds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">parseInt</span><span class="p">(</span><span class="nx">retryAfterHeader</span><span class="p">,</span><span class="w"> </span><span class="mf">10</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nb">isNaN</span><span class="p">(</span><span class="nx">seconds</span><span class="p">))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">seconds</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1000</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Client-side exponential backoff with 25% jitter</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">baseDelay</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="mf">500</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">pow</span><span class="p">(</span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="nx">attempt</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">1</span><span class="p">),</span><span class="w"> </span><span class="mf">32000</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">jitter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">random</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">0.25</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">baseDelay</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">baseDelay</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">jitter</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="the-error-classification-ladder">The Error Classification Ladder</h3>
+<p>Not all errors deserve the same retry strategy. A production retry engine classifies errors and applies targeted recovery:</p>
+<table>
+<thead>
+<tr>
+<th>Error Type</th>
+<th>Status Code</th>
+<th>Recovery Strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rate limited</td>
+<td>429</td>
+<td>Respect Retry-After, exponential backoff</td>
+</tr>
+<tr>
+<td>Overloaded</td>
+<td>529</td>
+<td>Exponential backoff, consider model fallback after 3 consecutive</td>
+</tr>
+<tr>
+<td>Auth expired</td>
+<td>401/403</td>
+<td>Refresh credentials, get new client from factory, retry once</td>
+</tr>
+<tr>
+<td>Context overflow</td>
+<td>400 (prompt too long)</td>
+<td>Reduce max_tokens, retry</td>
+</tr>
+<tr>
+<td>Stale connection</td>
+<td>ECONNRESET, EPIPE</td>
+<td>Discard client, reconnect, retry</td>
+</tr>
+<tr>
+<td>Stream interrupted</td>
+<td>Mid-stream disconnect</td>
+<td>Fall back to non-streaming request</td>
+</tr>
+<tr>
+<td>Server error</td>
+<td>500</td>
+<td>Exponential backoff, limited retries</td>
+</tr>
+<tr>
+<td>Client error</td>
+<td>400 (other)</td>
+<td>Do not retry -- fix the request</td>
+</tr>
+<tr>
+<td>User abort</td>
+<td>Signal.aborted</td>
+<td>Do not retry -- user canceled</td>
+</tr>
+</tbody>
+</table>
+<p>The classification must be a priority-ordered ladder, not a flat switch. Some errors match multiple categories (a 429 during fast mode is both a rate limit and a fast-mode concern). The first matching handler wins.</p>
+<h3 id="the-retry-engine-as-asyncgenerator">The Retry Engine as AsyncGenerator</h3>
+<p>A key architectural insight: the retry engine should be an async generator, not a function that returns a Promise. During backoff, the engine yields status messages ("Retrying in 8 seconds...") that the UI renders in real-time:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="o">*</span><span class="w"> </span><span class="nx">withRetry</span><span class="o">&lt;</span><span class="nx">T</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">operation</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">client</span><span class="o">:</span><span class="w"> </span><span class="kt">ModelProvider</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">options</span><span class="o">:</span><span class="w"> </span><span class="kt">RetryOptions</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AsyncGenerator</span><span class="o">&lt;</span><span class="nx">RetryStatus</span><span class="p">,</span><span class="w"> </span><span class="nx">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">let</span><span class="w"> </span><span class="nx">attempt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1</span><span class="p">;</span><span class="w"> </span><span class="nx">attempt</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="nx">options</span><span class="p">.</span><span class="nx">maxRetries</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1</span><span class="p">;</span><span class="w"> </span><span class="nx">attempt</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">operation</span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">getClient</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">delay</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">classifyAndDelay</span><span class="p">(</span><span class="nx">error</span><span class="p">,</span><span class="w"> </span><span class="nx">attempt</span><span class="p">)</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">delay</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="nx">error</span><span class="w">  </span><span class="c1">// Non-retryable</span>
+
+<span class="w">      </span><span class="k">yield</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;retrying&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">attempt</span><span class="p">,</span><span class="w"> </span><span class="nx">delay</span><span class="p">,</span><span class="w"> </span><span class="nx">error</span><span class="w"> </span><span class="p">}</span>
+<span class="w">      </span><span class="k">await</span><span class="w"> </span><span class="nx">sleep</span><span class="p">(</span><span class="nx">delay</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">MaxRetriesExceededError</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Compare this with a traditional <code>async function withRetry(): Promise&lt;T&gt;</code>. The traditional version blocks the caller for the entire backoff duration. The generator version lets the caller render progress, check for user cancellation, or perform other work between attempts. This is the same generator-as-protocol pattern discussed in Chapter 7's agent loop -- the caller drives the pace, the producer yields when ready.</p>
+<h3 id="model-fallback-on-persistent-failure">Model Fallback on Persistent Failure</h3>
+<p>After N consecutive failures (typically 3) on the primary model, the retry engine should trigger a model fallback rather than continuing to hammer an overloaded endpoint:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Attempt</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">(</span><span class="n">Opus</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="mi">529</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">backoff</span>
+<span class="n">Attempt</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="p">(</span><span class="n">Opus</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="mi">529</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">backoff</span>
+<span class="n">Attempt</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="p">(</span><span class="n">Opus</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="mi">529</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">FALLBACK</span><span class="w"> </span><span class="n">TRIGGER</span>
+<span class="n">Attempt</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="p">(</span><span class="n">Sonnet</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kr">success</span>
+</code></pre></div>
+
+<p>The fallback is a separate concern from the retry. The retry engine signals the fallback via a typed error (<code>FallbackTriggeredError</code>), and the agent loop catches it and switches models. This separation means the retry engine does not need to know about model selection -- it just says "I give up on this model" and lets a higher layer decide what happens next.</p>
+<h3 id="persistent-retry-for-cicd">Persistent Retry for CI/CD</h3>
+<p>Interactive sessions have a 32-second maximum backoff because users do not tolerate longer waits. CI/CD and unattended sessions have different constraints: they can tolerate minutes of waiting but must not silently fail.</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">INTERACTIVE_CONFIG</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">maxBackoffMs</span><span class="o">:</span><span class="w"> </span><span class="kt">32_000</span><span class="p">,</span><span class="w">    </span><span class="c1">// 32 seconds</span>
+<span class="w">  </span><span class="nx">maxRetries</span><span class="o">:</span><span class="w"> </span><span class="kt">10</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">heartbeatMs</span><span class="o">:</span><span class="w"> </span><span class="kt">0</span><span class="p">,</span><span class="w">          </span><span class="c1">// No heartbeat needed</span>
+<span class="p">}</span>
+
+<span class="kd">const</span><span class="w"> </span><span class="nx">UNATTENDED_CONFIG</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">maxBackoffMs</span><span class="o">:</span><span class="w"> </span><span class="kt">300_000</span><span class="p">,</span><span class="w">   </span><span class="c1">// 5 minutes</span>
+<span class="w">  </span><span class="nx">maxRetries</span><span class="o">:</span><span class="w"> </span><span class="kt">Infinity</span><span class="p">,</span><span class="w">    </span><span class="c1">// Retry until hard cap</span>
+<span class="w">  </span><span class="nx">hardCapMs</span><span class="o">:</span><span class="w"> </span><span class="kt">21_600_000</span><span class="p">,</span><span class="w">   </span><span class="c1">// 6 hours</span>
+<span class="w">  </span><span class="nx">heartbeatMs</span><span class="o">:</span><span class="w"> </span><span class="kt">30_000</span><span class="p">,</span><span class="w">     </span><span class="c1">// 30s heartbeat to prevent idle-kill</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The 30-second heartbeat writes a status message to stdout, preventing CI runners from killing the process for inactivity. The 6-hour hard cap prevents infinite loops in truly broken scenarios.</p>
+<hr />
+<h2 id="circuit-breaker-pattern">Circuit Breaker Pattern</h2>
+<p>The retry engine handles individual request failures. The circuit breaker handles systemic failures -- when the entire provider is unavailable and retrying individual requests is wasteful.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">stateDiagram</span><span class="o">-</span><span class="n">v2</span>
+<span class="w">    </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Closed</span>
+
+<span class="w">    </span><span class="n">Closed</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Open</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kr">Failure</span><span class="w"> </span><span class="kr">threshold</span><span class="w"> </span><span class="n">exceeded</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">g</span><span class="p">.,</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="n">failures</span><span class="w"> </span><span class="kr">in</span><span class="w"> </span><span class="mi">60</span><span class="n">s</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Closed</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Closed</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">Request</span><span class="w"> </span><span class="n">succeeds</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Reset</span><span class="w"> </span><span class="kr">failure</span><span class="w"> </span><span class="kr">counter</span>
+
+<span class="w">    </span><span class="n">Open</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">HalfOpen</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">Cooldown</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="n">expires</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">g</span><span class="p">.,</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="n">seconds</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Open</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Open</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kr">All</span><span class="w"> </span><span class="n">requests</span><span class="w"> </span><span class="nf">rejected</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">immediately</span><span class="w"> </span><span class="p">(</span><span class="n">no</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">call</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">HalfOpen</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Closed</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">Probe</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="n">succeeds</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Reset</span><span class="w"> </span><span class="n">counters</span>
+<span class="w">    </span><span class="n">HalfOpen</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Open</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">Probe</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="n">fails</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Restart</span><span class="w"> </span><span class="n">cooldown</span>
+</code></pre></div>
+
+<p>The three states:</p>
+<ul>
+<li><strong>Closed (normal):</strong> Requests flow through. Failures are counted. When failures exceed a threshold (e.g., 5 in 60 seconds), transition to Open.</li>
+<li><strong>Open (circuit tripped):</strong> All requests fail immediately without contacting the API. A cooldown timer runs. When it expires, transition to Half-Open.</li>
+<li><strong>Half-Open (probe):</strong> A single request is allowed through as a probe. If it succeeds, transition to Closed. If it fails, transition back to Open.</li>
+</ul>
+<p>The circuit breaker prevents cascade failures. Without it, during a provider outage, every tool call triggers a retry sequence (potentially 10 attempts with exponential backoff), multiplied by every concurrent agent. A single user's session could generate hundreds of failed API calls per minute. The circuit breaker cuts this to one probe every 30 seconds.</p>
+<h3 id="implementing-the-circuit-breaker">Implementing the Circuit Breaker</h3>
+<p>A practical implementation stores failure timestamps in a sliding window:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">class</span><span class="w"> </span><span class="nx">CircuitBreaker</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">state</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;closed&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;open&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;half-open&#39;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;closed&#39;</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">failures</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span><span class="w">  </span><span class="c1">// timestamps</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">lastOpenedAt</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span>
+
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">failureThreshold</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">5</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">windowMs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">60</span><span class="nx">_000</span><span class="w">      </span><span class="c1">// 1 minute window</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">cooldownMs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">30</span><span class="nx">_000</span><span class="w">    </span><span class="c1">// 30 second cooldown</span>
+
+<span class="w">  </span><span class="nx">canExecute</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">state</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;closed&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">state</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;open&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">lastOpenedAt</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">cooldownMs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="nx">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;half-open&#39;</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="w">  </span><span class="c1">// Allow one probe</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="w">  </span><span class="c1">// half-open, probe already in flight</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="nx">recordSuccess</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;closed&#39;</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">failures</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="nx">recordFailure</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">failures</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="nx">now</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// Trim to window</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">failures</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">failures</span><span class="p">.</span><span class="nx">filter</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">windowMs</span><span class="p">)</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">failures</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">failureThreshold</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="nx">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;open&#39;</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="nx">lastOpenedAt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">now</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The sliding window (filter timestamps older than 60 seconds) prevents ancient failures from keeping the circuit open. Only recent, sustained failures trigger the breaker.</p>
+<h3 id="per-provider-circuit-breakers">Per-Provider Circuit Breakers</h3>
+<p>In a multi-provider architecture, each provider gets its own circuit breaker. When Bedrock trips, the system can fall back to Vertex or the first-party API. This requires the fallback chain (covered in Chapter 12) to be circuit-breaker-aware:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Request</span><span class="w"> </span><span class="n">arrives</span>
+<span class="w">  </span><span class="o">|</span>
+<span class="w">  </span><span class="n">v</span>
+<span class="n">Bedrock</span><span class="w"> </span><span class="n">circuit</span><span class="w"> </span><span class="n">breaker</span><span class="o">:</span><span class="w"> </span><span class="n">OPEN</span>
+<span class="w">  </span><span class="o">|-&gt;</span><span class="w"> </span><span class="kr">Skip</span><span class="w"> </span><span class="n">Bedrock</span><span class="p">,</span><span class="w"> </span><span class="n">try</span><span class="w"> </span><span class="n">next</span><span class="w"> </span><span class="n">provider</span>
+<span class="w">  </span><span class="n">v</span>
+<span class="n">Vertex</span><span class="w"> </span><span class="n">circuit</span><span class="w"> </span><span class="n">breaker</span><span class="o">:</span><span class="w"> </span><span class="n">CLOSED</span>
+<span class="w">  </span><span class="o">|-&gt;</span><span class="w"> </span><span class="n">Send</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">Vertex</span>
+<span class="w">  </span><span class="n">v</span>
+<span class="kr">Success</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="n">result</span>
+</code></pre></div>
+
+<hr />
+<h2 id="rate-limiting">Rate Limiting</h2>
+<h3 id="client-side-throttling">Client-Side Throttling</h3>
+<p>The API enforces rate limits server-side, but waiting for a 429 response to throttle is wasteful -- you have already consumed network round-trip time. Client-side throttling prevents requests from being sent when you know they will be rejected.</p>
+<p>The simplest effective approach is a token bucket:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">class</span><span class="w"> </span><span class="nx">TokenBucket</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">tokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">lastRefill</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+
+<span class="w">  </span><span class="kr">constructor</span><span class="p">(</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">capacity</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">,</span><span class="w">    </span><span class="c1">// Max burst</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">refillRate</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">,</span><span class="w">  </span><span class="c1">// Tokens per second</span>
+<span class="w">  </span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">tokens</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">capacity</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">lastRefill</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">async</span><span class="w"> </span><span class="nx">acquire</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="ow">void</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">refill</span><span class="p">()</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">tokens</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mf">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="nx">tokens</span><span class="w"> </span><span class="o">-=</span><span class="w"> </span><span class="mf">1</span>
+<span class="w">      </span><span class="k">return</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// Wait until a token is available</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">waitMs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">((</span><span class="mf">1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">tokens</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">refillRate</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1000</span>
+<span class="w">    </span><span class="k">await</span><span class="w"> </span><span class="nx">sleep</span><span class="p">(</span><span class="nx">waitMs</span><span class="p">)</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">refill</span><span class="p">()</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">tokens</span><span class="w"> </span><span class="o">-=</span><span class="w"> </span><span class="mf">1</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">refill</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">elapsed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">lastRefill</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">1000</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">tokens</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">capacity</span><span class="p">,</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">tokens</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">refillRate</span><span class="p">)</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">lastRefill</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">now</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="shared-rate-windows">Shared Rate Windows</h3>
+<p>When multiple agent instances share an API key (common in multi-agent architectures), they share a rate limit window. Staggering agent launches by a few seconds prevents all agents from hitting the rate limit simultaneously during startup, when each agent makes its first request.</p>
+<p>This is a coordination problem without a coordination mechanism -- the agents do not communicate about rate limits. The practical solution is launch staggering plus per-agent jitter:</p>
+<div class="codehilite"><pre><span></span><code><span class="nv">Agent</span><span class="w"> </span><span class="mi">1</span>:<span class="w"> </span><span class="nv">launch</span><span class="w"> </span><span class="nv">at</span><span class="w"> </span><span class="nv">T</span><span class="o">+</span><span class="mi">0</span><span class="nv">s</span>
+<span class="nv">Agent</span><span class="w"> </span><span class="mi">2</span>:<span class="w"> </span><span class="nv">launch</span><span class="w"> </span><span class="nv">at</span><span class="w"> </span><span class="nv">T</span><span class="o">+</span><span class="mi">3</span><span class="nv">s</span>
+<span class="nv">Agent</span><span class="w"> </span><span class="mi">3</span>:<span class="w"> </span><span class="nv">launch</span><span class="w"> </span><span class="nv">at</span><span class="w"> </span><span class="nv">T</span><span class="o">+</span><span class="mi">6</span><span class="nv">s</span>
+<span class="nv">Agent</span><span class="w"> </span><span class="mi">4</span>:<span class="w"> </span><span class="nv">launch</span><span class="w"> </span><span class="nv">at</span><span class="w"> </span><span class="nv">T</span><span class="o">+</span><span class="mi">9</span><span class="nv">s</span>
+
+<span class="nv">Each</span><span class="w"> </span><span class="nv">agent</span><span class="w"> </span><span class="nv">adds</span><span class="w"> </span><span class="k">random</span><span class="ss">(</span><span class="mi">0</span>,<span class="w"> </span><span class="mi">1</span><span class="nv">s</span><span class="ss">)</span><span class="w"> </span><span class="nv">jitter</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">its</span><span class="w"> </span><span class="nv">first</span><span class="w"> </span><span class="nv">request</span>.
+</code></pre></div>
+
+<p>Cap the number of concurrent agents to stay within the shared rate limit. If your API key allows 60 requests/minute and each agent makes ~1 request every 4 seconds, you can safely run ~4 agents.</p>
+<hr />
+<h2 id="cost-tracking">Cost Tracking</h2>
+<h3 id="per-request-token-counting">Per-Request Token Counting</h3>
+<p>Every API response includes usage data: input tokens, output tokens, cache read tokens, and cache write tokens. A production client must track these cumulatively across the session to enable budget enforcement and cost visibility.</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">TokenUsage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">inputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+<span class="w">  </span><span class="nx">outputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+<span class="w">  </span><span class="nx">cacheReadTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+<span class="w">  </span><span class="nx">cacheWriteTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+<span class="p">}</span>
+
+<span class="kd">interface</span><span class="w"> </span><span class="nx">SessionCostTracker</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">totalUsage</span><span class="o">:</span><span class="w"> </span><span class="kt">TokenUsage</span>
+<span class="w">  </span><span class="nx">totalCostUSD</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+<span class="w">  </span><span class="nx">requestCount</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+
+<span class="w">  </span><span class="nx">recordUsage</span><span class="p">(</span><span class="nx">usage</span><span class="o">:</span><span class="w"> </span><span class="kt">TokenUsage</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">isFastMode</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span>
+<span class="w">  </span><span class="nx">getRemainingBudget</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">null</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>A subtlety in streaming responses: the API provides <strong>cumulative</strong> usage totals in the <code>message_delta</code> event, not deltas. The <code>input_tokens</code> field in a delta event may be 0 (not "zero additional tokens" but "this field is not populated in this event"). The client must handle this by using a "take the non-zero value" merge strategy:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">mergeUsage</span><span class="p">(</span><span class="nx">current</span><span class="o">:</span><span class="w"> </span><span class="kt">TokenUsage</span><span class="p">,</span><span class="w"> </span><span class="nx">update</span><span class="o">:</span><span class="w"> </span><span class="kt">Partial</span><span class="o">&lt;</span><span class="nx">TokenUsage</span><span class="o">&gt;</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">TokenUsage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">inputTokens</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">update</span><span class="p">.</span><span class="nx">inputTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span>
+<span class="w">      </span><span class="o">?</span><span class="w"> </span><span class="nx">update</span><span class="p">.</span><span class="nx">inputTokens</span><span class="o">!</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">inputTokens</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">outputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">update.outputTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">outputTokens</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">cacheReadTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">update.cacheReadTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">cacheReadTokens</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">cacheWriteTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">update.cacheWriteTokens</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="nx">current</span><span class="p">.</span><span class="nx">cacheWriteTokens</span><span class="p">,</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="session-budget-enforcement">Session Budget Enforcement</h3>
+<p>The agent loop can set a token budget for a session or task. The cost tracker enforces it:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">checkBudget</span><span class="p">(</span><span class="nx">tracker</span><span class="o">:</span><span class="w"> </span><span class="kt">SessionCostTracker</span><span class="p">,</span><span class="w"> </span><span class="nx">budget</span><span class="o">:</span><span class="w"> </span><span class="kt">TokenBudget</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">BudgetStatus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">budget</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;tokens&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">used</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">tracker</span><span class="p">.</span><span class="nx">totalUsage</span><span class="p">.</span><span class="nx">inputTokens</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">tracker</span><span class="p">.</span><span class="nx">totalUsage</span><span class="p">.</span><span class="nx">outputTokens</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">remaining</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">budget</span><span class="p">.</span><span class="nx">total</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">used</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">remaining</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">ok</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="p">,</span><span class="w"> </span><span class="nx">remaining</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">ok</span><span class="o">:</span><span class="w"> </span><span class="kt">false</span><span class="p">,</span><span class="w"> </span><span class="nx">overage</span><span class="o">:</span><span class="w"> </span><span class="o">-</span><span class="nx">remaining</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">budget</span><span class="p">.</span><span class="kr">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;dollars&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">remaining</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">budget</span><span class="p">.</span><span class="nx">total</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">tracker</span><span class="p">.</span><span class="nx">totalCostUSD</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">remaining</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">ok</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="p">,</span><span class="w"> </span><span class="nx">remaining</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">ok</span><span class="o">:</span><span class="w"> </span><span class="kt">false</span><span class="p">,</span><span class="w"> </span><span class="nx">overage</span><span class="o">:</span><span class="w"> </span><span class="o">-</span><span class="nx">remaining</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Budget enforcement is informational for the model (via a task_budget parameter that tells the model how much budget remains, so it can self-pace its output) and hard for the client (the agent loop stops when the budget is exhausted).</p>
+<h3 id="cost-calculation-by-model-and-mode">Cost Calculation by Model and Mode</h3>
+<p>Different models have different pricing, and the same model at different speeds has different pricing. The cost calculator needs a pricing table:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Mode</th>
+<th>Input ($/Mtok)</th>
+<th>Output ($/Mtok)</th>
+<th>Cache Read</th>
+<th>Cache Write</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 4.6</td>
+<td>Standard</td>
+<td>$15</td>
+<td>$75</td>
+<td>$1.50</td>
+<td>$18.75</td>
+</tr>
+<tr>
+<td>Opus 4.6</td>
+<td>Fast</td>
+<td>$30</td>
+<td>$150</td>
+<td>$3.00</td>
+<td>$37.50</td>
+</tr>
+<tr>
+<td>Sonnet 4</td>
+<td>Standard</td>
+<td>$3</td>
+<td>$15</td>
+<td>$0.30</td>
+<td>$3.75</td>
+</tr>
+<tr>
+<td>Haiku 3.5</td>
+<td>Standard</td>
+<td>$0.25</td>
+<td>$1.25</td>
+<td>$0.025</td>
+<td>$0.3125</td>
+</tr>
+</tbody>
+</table>
+<p>Cache reads are 10x cheaper than cache misses. This single fact drives the entire prompt caching architecture discussed in the next section.</p>
+<hr />
+<h2 id="header-management-and-cache-key-engineering">Header Management and Cache Key Engineering</h2>
+<h3 id="beta-headers-as-cache-keys">Beta Headers as Cache Keys</h3>
+<p>Model APIs use beta headers to enable experimental features. These headers seem like simple string flags, but they have a profound architectural impact: <strong>beta headers are part of the server-side cache key</strong>. The prompt cache stores processed prompt content keyed by the combination of model, system prompt, tools, and beta headers. Changing any component invalidates the cache.</p>
+<p>The cost implication: a typical session has 50-70K tokens of cached system prompt. A cache miss re-processes all of those tokens at full price. A cache hit processes them at 1/10th the price. Toggling a single beta header mid-session can cost $0.75-$1.05 (at Opus pricing) for the cache miss alone.</p>
+<h3 id="the-latch-pattern">The Latch Pattern</h3>
+<p>The solution is the latch pattern: once a beta header is sent in a session, it keeps being sent for every subsequent request, even if the feature that triggered it is no longer active.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Turn</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="n">fast</span><span class="w"> </span><span class="n">mode</span><span class="w"> </span><span class="n">OFF</span><span class="w">  </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">headers</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="n">effort</span><span class="p">,</span><span class="w"> </span><span class="n">caching</span><span class="p">]</span>
+<span class="n">Turn</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="n">fast</span><span class="w"> </span><span class="n">mode</span><span class="w"> </span><span class="n">ON</span><span class="w">   </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">headers</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="n">effort</span><span class="p">,</span><span class="w"> </span><span class="n">caching</span><span class="p">,</span><span class="w"> </span><span class="n">fast</span><span class="o">-</span><span class="n">mode</span><span class="p">]</span><span class="w">  </span><span class="c1">// Added</span>
+<span class="n">Turn</span><span class="w"> </span><span class="mi">3</span><span class="o">:</span><span class="w"> </span><span class="n">fast</span><span class="w"> </span><span class="n">mode</span><span class="w"> </span><span class="n">OFF</span><span class="w">  </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">headers</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="n">effort</span><span class="p">,</span><span class="w"> </span><span class="n">caching</span><span class="p">,</span><span class="w"> </span><span class="n">fast</span><span class="o">-</span><span class="n">mode</span><span class="p">]</span><span class="w">  </span><span class="c1">// LATCHED</span>
+<span class="n">Turn</span><span class="w"> </span><span class="mi">4</span><span class="o">:</span><span class="w"> </span><span class="n">fast</span><span class="w"> </span><span class="n">mode</span><span class="w"> </span><span class="n">OFF</span><span class="w">  </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">headers</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="n">effort</span><span class="p">,</span><span class="w"> </span><span class="n">caching</span><span class="p">,</span><span class="w"> </span><span class="n">fast</span><span class="o">-</span><span class="n">mode</span><span class="p">]</span><span class="w">  </span><span class="c1">// Still latched</span>
+</code></pre></div>
+
+<p>The latch persists for the session lifetime and is cleared only when the conversation context resets (e.g., <code>/clear</code> or <code>/compact</code>), because those operations invalidate the cache regardless.</p>
+<h3 id="separating-cache-key-from-behavior">Separating Cache Key from Behavior</h3>
+<p>The latch pattern creates a subtle design requirement: you need to separate the <strong>cache key</strong> (which headers are present) from the <strong>behavior</strong> (which features are active). For fast mode:</p>
+<ul>
+<li>The <code>fast-mode</code> beta <strong>header</strong> is latched (once sent, always sent) -- this keeps the cache key stable.</li>
+<li>The <code>speed: 'fast'</code> <strong>parameter</strong> is dynamic (suppressed during cooldown) -- this controls actual behavior.</li>
+</ul>
+<p>By keeping the header stable and varying the parameter, the system can toggle fast mode on and off without invalidating the cache. This separation applies to any feature controlled by both a header and a parameter.</p>
+<h3 id="provider-specific-header-handling">Provider-Specific Header Handling</h3>
+<p>Not all providers handle headers the same way:</p>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Anthropic 1P</th>
+<th>AWS Bedrock</th>
+<th>Google Vertex</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Beta headers</td>
+<td>HTTP headers</td>
+<td>Request body</td>
+<td>HTTP headers</td>
+</tr>
+<tr>
+<td>countTokens betas</td>
+<td>All sent</td>
+<td>All sent</td>
+<td>Filtered subset</td>
+</tr>
+<tr>
+<td>Auth mechanism</td>
+<td>API key header</td>
+<td>SigV4 signature</td>
+<td>OAuth bearer token</td>
+</tr>
+<tr>
+<td>Model ID format</td>
+<td><code>claude-opus-4-6</code></td>
+<td><code>anthropic.claude-opus-4-6-v1</code></td>
+<td><code>claude-opus-4-6@latest</code></td>
+</tr>
+</tbody>
+</table>
+<p>The provider abstraction layer handles these differences so the rest of the API client remains provider-agnostic. Only two places need provider awareness: the client factory (authentication) and the header formatter (header vs. body placement).</p>
+<hr />
+<h2 id="the-full-request-lifecycle">The Full Request Lifecycle</h2>
+<p>Putting it all together, here is the complete lifecycle of a single API request through the client:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Loop</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">Loop</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Client</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">Client</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CB</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Circuit</span><span class="w"> </span><span class="n">Breaker</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">RL</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Rate</span><span class="w"> </span><span class="n">Limiter</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Retry</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Retry</span><span class="w"> </span><span class="n">Engine</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Factory</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Client</span><span class="w"> </span><span class="n">Factory</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Provider</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="n">Provider</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Cost</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Cost</span><span class="w"> </span><span class="n">Tracker</span>
+
+<span class="w">    </span><span class="n">Loop</span><span class="o">-&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">sendMessage</span><span class="p">(</span><span class="n">messages</span><span class="p">,</span><span class="w"> </span><span class="n">tools</span><span class="p">,</span><span class="w"> </span><span class="n">config</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">CB</span><span class="p">:</span><span class="w"> </span><span class="n">canExecute</span><span class="p">()</span><span class="err">?</span>
+<span class="w">    </span><span class="n">alt</span><span class="w"> </span><span class="n">Circuit</span><span class="w"> </span><span class="n">Open</span>
+<span class="w">        </span><span class="n">CB</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">REJECTED</span>
+<span class="w">        </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="n">CircuitOpenError</span>
+<span class="w">    </span><span class="n">end</span>
+<span class="w">    </span><span class="n">CB</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">OK</span>
+
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">RL</span><span class="p">:</span><span class="w"> </span><span class="n">acquire</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">RL</span><span class="p">:</span><span class="w"> </span><span class="n">Wait</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">throttled</span>
+<span class="w">    </span><span class="n">RL</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">Token</span><span class="w"> </span><span class="n">acquired</span>
+
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">Resolve</span><span class="w"> </span><span class="n">beta</span><span class="w"> </span><span class="n">headers</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">apply</span><span class="w"> </span><span class="n">latches</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">Build</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="n">params</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">provider</span><span class="o">-</span><span class="n">specific</span><span class="w"> </span><span class="n">formatting</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="n">withRetry</span><span class="p">(</span><span class="n">operation</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">loop</span><span class="w"> </span><span class="n">Retry</span><span class="w"> </span><span class="n">attempts</span>
+<span class="w">        </span><span class="n">Retry</span><span class="o">-&gt;&gt;</span><span class="n">Factory</span><span class="p">:</span><span class="w"> </span><span class="n">getClient</span><span class="p">()</span>
+<span class="w">        </span><span class="n">Factory</span><span class="o">--&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="n">provider</span><span class="w"> </span><span class="n">client</span>
+
+<span class="w">        </span><span class="n">Retry</span><span class="o">-&gt;&gt;</span><span class="n">Provider</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">messages</span><span class="w"> </span><span class="p">(</span><span class="n">stream</span><span class="p">)</span>
+
+<span class="w">        </span><span class="n">alt</span><span class="w"> </span><span class="n">Success</span>
+<span class="w">            </span><span class="n">Provider</span><span class="o">--&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">SSE</span><span class="w"> </span><span class="n">stream</span>
+<span class="w">            </span><span class="n">Retry</span><span class="o">--&gt;&gt;</span><span class="n">Client</span><span class="p">:</span><span class="w"> </span><span class="n">Stream</span><span class="w"> </span><span class="n">events</span>
+<span class="w">        </span><span class="k">else</span><span class="w"> </span><span class="n">Rate</span><span class="w"> </span><span class="n">Limited</span><span class="w"> </span><span class="p">(</span><span class="mi">429</span><span class="p">)</span>
+<span class="w">            </span><span class="n">Provider</span><span class="o">--&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="mi">429</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Retry</span><span class="o">-</span><span class="n">After</span>
+<span class="w">            </span><span class="n">Retry</span><span class="o">-&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="n">Backoff</span><span class="w"> </span><span class="p">(</span><span class="n">respect</span><span class="w"> </span><span class="n">header</span><span class="p">)</span>
+<span class="w">            </span><span class="n">Retry</span><span class="o">--&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">RetryStatus</span>
+<span class="w">        </span><span class="k">else</span><span class="w"> </span><span class="n">Overloaded</span><span class="w"> </span><span class="p">(</span><span class="mi">529</span><span class="p">)</span>
+<span class="w">            </span><span class="n">Provider</span><span class="o">--&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="mi">529</span>
+<span class="w">            </span><span class="n">Retry</span><span class="o">-&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="n">Backoff</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="n">consecutive</span>
+<span class="w">            </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="n">After</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="n">consecutive</span><span class="p">:</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">FallbackTriggeredError</span>
+<span class="w">        </span><span class="k">else</span><span class="w"> </span><span class="n">Auth</span><span class="w"> </span><span class="n">Error</span>
+<span class="w">            </span><span class="n">Provider</span><span class="o">--&gt;&gt;</span><span class="n">Retry</span><span class="p">:</span><span class="w"> </span><span class="mi">401</span>
+<span class="w">            </span><span class="n">Retry</span><span class="o">-&gt;&gt;</span><span class="n">Factory</span><span class="p">:</span><span class="w"> </span><span class="n">getClient</span><span class="p">()</span><span class="w"> </span><span class="p">[</span><span class="n">fresh</span><span class="p">]</span>
+<span class="w">        </span><span class="n">end</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">Cost</span><span class="p">:</span><span class="w"> </span><span class="n">recordUsage</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">usage</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">-&gt;&gt;</span><span class="n">CB</span><span class="p">:</span><span class="w"> </span><span class="n">recordSuccess</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Client</span><span class="o">--&gt;&gt;</span><span class="n">Loop</span><span class="p">:</span><span class="w"> </span><span class="nb">yield</span><span class="w"> </span><span class="n">StreamEvents</span>
+</code></pre></div>
+
+<h3 id="request-parameter-assembly">Request Parameter Assembly</h3>
+<p>Before the request is sent, the client assembles parameters from multiple sources:</p>
+<ol>
+<li><strong>Messages and tools</strong> from the context manager</li>
+<li><strong>System prompt</strong> with cache control markers</li>
+<li><strong>Model and effort</strong> from session configuration</li>
+<li><strong>Beta headers</strong> with latch application</li>
+<li><strong>Task budget</strong> with remaining token count</li>
+<li><strong>Provider-specific formatting</strong> (body vs. header placement)</li>
+</ol>
+<p>This assembly is wrapped in a closure that can be re-evaluated on each retry attempt. The retry engine may change the model (after fallback), the fast mode state (after cooldown), or the effort level. A static parameter object would carry stale values across retries. The closure ensures every attempt gets fresh parameters while the expensive context preparation runs once.</p>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building a production API client for an AI CLI agent, these architectural principles emerge:</p>
+<p><strong>1. Abstract providers at the narrowest possible layer.</strong> The provider interface should be 3-5 methods. Everything else -- retry logic, streaming, cost tracking, header management -- works against this interface. A wide abstraction makes adding providers expensive.</p>
+<p><strong>2. Make retries observable.</strong> An async generator retry engine yields progress while sleeping. The UI shows real-time retry status without blocking the rendering loop. A traditional <code>Promise&lt;T&gt;</code> retry hides 32 seconds of backoff behind a silent wait.</p>
+<p><strong>3. Separate the cache key from behavior.</strong> Beta headers (cache key) and feature parameters (behavior) should be independently controllable. The latch pattern keeps headers stable while parameters vary, preventing expensive cache invalidation.</p>
+<p><strong>4. Classify errors before retrying.</strong> Not all errors are equal. Rate limits need server-directed backoff. Auth errors need credential refresh. Context overflows need parameter adjustment. A flat retry loop with exponential backoff handles none of these correctly.</p>
+<p><strong>5. Use circuit breakers for systemic failures.</strong> Individual retry handles individual request failure. Circuit breakers handle provider outages. Without a breaker, N concurrent agents each retrying M times creates N*M requests against an already-overloaded endpoint.</p>
+<p><strong>6. Track costs as first-class data.</strong> Token usage and cost should flow through the system as structured data, not be computed as an afterthought. Budget enforcement, cost display, and provider cost comparison all depend on accurate, real-time cost tracking.</p>
+<p><strong>7. Design for credential rotation.</strong> Client factories should support being called multiple times per session. OAuth tokens expire, temporary credentials rotate, and long-running CLI sessions outlast all of them.</p>
+<p>In Chapter 11, we examine the streaming pipeline in detail -- the state machine that processes SSE events, detects tool-use requests mid-stream, handles backpressure from the UI renderer, and recovers gracefully from mid-stream disconnections.</p>
+<div class="chapter-nav">
+  <a href="chapter-09.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-11.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

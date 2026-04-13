@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 9: Context Window Management — Architecting AI CLI Agents</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+/* Typography */
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+/* Lists */
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+/* Code */
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--accent); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+/* Mermaid */
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+pre.mermaid-src { background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; }
+/* Horizontal rules */
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+/* Chapter nav */
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+/* Responsive */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+/* Syntax highlighting (Monokai-inspired) */
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Architecting AI CLI Agents</span>
+  <a href="chapter-10.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-9-context-window-management">Chapter 9: Context Window Management</h1>
+<p>In Chapter 8, we designed the message architecture — the typed, ordered conversation that flows through the agent loop. Every message in that conversation consumes tokens. Every token consumes context window space. And the context window is finite.</p>
+<p>This is the fundamental constraint of every AI agent: the conversation grows, but the model's memory does not. A 200K-token context window sounds generous until you realize a single large file read consumes 10K tokens, tool results from a dozen operations add another 50K, and the system prompt with tool definitions occupies 20K. Within 15-20 agentic turns, a typical session approaches the window limit.</p>
+<p>This chapter covers the architectural response to that constraint: how to allocate tokens across competing needs, how to decide what stays and what goes when space is tight, and how to compress context with minimal information loss. We will design a graduated compression pipeline, examine the compaction algorithm step by step, and establish the memory tiers that determine where information lives.</p>
+<hr />
+<h2 id="the-constraint-finite-window-growing-conversation">The Constraint: Finite Window, Growing Conversation</h2>
+<p>The context window is a hard limit. Exceed it, and the API rejects the request. There is no graceful degradation — you either fit, or you do not.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Window</span><span class="p">[</span><span class="s2">&quot;Context Window (200K tokens)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">        </span><span class="n">SYS</span><span class="p">[</span><span class="s2">&quot;System Prompt&lt;br/&gt;~20K tokens&lt;br/&gt;(identity + tools + rules)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">CONV</span><span class="p">[</span><span class="s2">&quot;Conversation History&lt;br/&gt;Variable: 0 — 170K tokens&lt;br/&gt;(messages + tool results)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">OUT</span><span class="p">[</span><span class="s2">&quot;Output Reserve&lt;br/&gt;~20K tokens&lt;br/&gt;(model&#39;s response space)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">GROW</span><span class="p">[</span><span class="s2">&quot;Conversation grows&lt;br/&gt;with every turn&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">-.-&gt;|</span><span class="n">pushes</span><span class="o">|</span><span class="w"> </span><span class="n">CONV</span>
+<span class="w">    </span><span class="n">CONV</span><span class="w"> </span><span class="o">-.-&gt;|</span><span class="n">squeezes</span><span class="o">|</span><span class="w"> </span><span class="n">OUT</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SYS</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">CONV</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">OUT</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e8f5e9</span>
+</code></pre></div>
+
+<p>Three regions compete for space within the window:</p>
+<p><strong>System prompt (~20K tokens).</strong> The model's identity, tool definitions, project rules, and session context. This is relatively fixed — it changes rarely within a session. But it is non-negotiable: without the system prompt, the model does not know what it is, what tools it has, or what rules to follow.</p>
+<p><strong>Conversation history (variable).</strong> The messages exchanged between user, model, and tools. This grows with every turn. In an agentic session with many tool calls, it grows fast — each tool result can be thousands of tokens.</p>
+<p><strong>Output reserve (~20K tokens).</strong> Space reserved for the model's next response. The model needs room to think and respond. If the conversation fills the window completely, the model cannot generate any output.</p>
+<p>The arithmetic is simple:</p>
+<div class="codehilite"><pre><span></span><code><span class="nv">Available</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nv">conversation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">Context</span><span class="w"> </span><span class="nv">window</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">System</span><span class="w"> </span><span class="nv">prompt</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">Output</span><span class="w"> </span><span class="nv">reserve</span>
+<span class="w">                           </span><span class="o">=</span><span class="w"> </span><span class="mi">200</span>,<span class="mi">000</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">20</span>,<span class="mi">000</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">20</span>,<span class="mi">000</span>
+<span class="w">                           </span><span class="o">=</span><span class="w"> </span><span class="mi">160</span>,<span class="mi">000</span><span class="w"> </span><span class="nv">tokens</span>
+</code></pre></div>
+
+<p>At 160K tokens of conversation space, with tool results averaging 2-5K tokens each, you get 30-80 tool calls before the window fills. In an agentic session that averages 5-10 tool calls per user turn, that is 3-16 user turns. The context window fills faster than most people expect.</p>
+<hr />
+<h2 id="token-budgeting-allocating-a-finite-resource">Token Budgeting: Allocating a Finite Resource</h2>
+<p>Token budgeting is the process of deciding how to divide the context window among competing needs. It is a resource allocation problem, and like all resource allocation problems, the design reflects your priorities.</p>
+<h3 id="the-budget-hierarchy">The Budget Hierarchy</h3>
+<p>Not all tokens are equal. Some are essential (the model cannot function without them), some are important (they significantly improve quality), and some are nice-to-have (they help but are not critical). The budget hierarchy reflects this priority:</p>
+<div class="codehilite"><pre><span></span><code>flowchart<span class="w"> </span>TD
+<span class="w">    </span>subgraph<span class="w"> </span>Priority[&quot;Token<span class="w"> </span>Budget<span class="w"> </span>Priority<span class="w"> </span>(highest<span class="w"> </span>to<span class="w"> </span>lowest)&quot;]
+<span class="w">        </span>direction<span class="w"> </span>TB
+<span class="w">        </span>P1[&quot;Priority<span class="w"> </span>1:<span class="w"> </span>System<span class="w"> </span>Prompt<span class="w"> </span>Core<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Identity,<span class="w"> </span>tool<span class="w"> </span>schemas,<span class="w"> </span>model<span class="w"> </span>instructions<span class="nt">&lt;/i&gt;&lt;br/&gt;</span>Budget:<span class="w"> </span>~15K<span class="w"> </span>tokens<span class="w"> </span>(fixed)&quot;]
+<span class="w">        </span>P2[&quot;Priority<span class="w"> </span>2:<span class="w"> </span>Recent<span class="w"> </span>Messages<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Last<span class="w"> </span>3-5<span class="w"> </span>user/assistant<span class="w"> </span>exchanges<span class="nt">&lt;/i&gt;&lt;br/&gt;</span>Budget:<span class="w"> </span>~30K<span class="w"> </span>tokens<span class="w"> </span>(protected)&quot;]
+<span class="w">        </span>P3[&quot;Priority<span class="w"> </span>3:<span class="w"> </span>Active<span class="w"> </span>Tool<span class="w"> </span>Results<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Results<span class="w"> </span>from<span class="w"> </span>current<span class="w"> </span>agentic<span class="w"> </span>turn<span class="nt">&lt;/i&gt;&lt;br/&gt;</span>Budget:<span class="w"> </span>~40K<span class="w"> </span>tokens<span class="w"> </span>(elastic)&quot;]
+<span class="w">        </span>P4[&quot;Priority<span class="w"> </span>4:<span class="w"> </span>Project<span class="w"> </span>Context<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Rules,<span class="w"> </span>memory,<span class="w"> </span>skills,<span class="w"> </span>plans<span class="nt">&lt;/i&gt;&lt;br/&gt;</span>Budget:<span class="w"> </span>~15K<span class="w"> </span>tokens<span class="w"> </span>(compressible)&quot;]
+<span class="w">        </span>P5[&quot;Priority<span class="w"> </span>5:<span class="w"> </span>Historical<span class="w"> </span>Context<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Older<span class="w"> </span>messages<span class="w"> </span>and<span class="w"> </span>tool<span class="w"> </span>results<span class="nt">&lt;/i&gt;&lt;br/&gt;</span>Budget:<span class="w"> </span>remaining<span class="w"> </span>(evictable)&quot;]
+<span class="w">        </span>P6[&quot;Priority<span class="w"> </span>6:<span class="w"> </span>Output<span class="w"> </span>Reserve<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Space<span class="w"> </span>for<span class="w"> </span>model&#39;s<span class="w"> </span>response<span class="nt">&lt;/i&gt;&lt;br/&gt;</span>Budget:<span class="w"> </span>~20K<span class="w"> </span>tokens<span class="w"> </span>(reserved)&quot;]
+
+<span class="w">        </span>P1<span class="w"> </span>--&gt;<span class="w"> </span>P2<span class="w"> </span>--&gt;<span class="w"> </span>P3<span class="w"> </span>--&gt;<span class="w"> </span>P4<span class="w"> </span>--&gt;<span class="w"> </span>P5<span class="w"> </span>--&gt;<span class="w"> </span>P6
+<span class="w">    </span>end
+
+<span class="w">    </span>style<span class="w"> </span>P1<span class="w"> </span>fill:#ffcdd2
+<span class="w">    </span>style<span class="w"> </span>P2<span class="w"> </span>fill:#ffcdd2
+<span class="w">    </span>style<span class="w"> </span>P3<span class="w"> </span>fill:#fff3e0
+<span class="w">    </span>style<span class="w"> </span>P4<span class="w"> </span>fill:#e8f5e9
+<span class="w">    </span>style<span class="w"> </span>P5<span class="w"> </span>fill:#e3f2fd
+<span class="w">    </span>style<span class="w"> </span>P6<span class="w"> </span>fill:#f3e5f5
+</code></pre></div>
+
+<p><strong>Priority 1: System prompt core</strong> is never compressed. If it does not fit, the session cannot function.</p>
+<p><strong>Priority 2: Recent messages</strong> are protected from compaction. The model needs the last few exchanges to understand what it is doing right now. Removing the most recent context causes the model to lose track of the current task.</p>
+<p><strong>Priority 3: Active tool results</strong> from the current agentic turn are important but elastic. If a tool result is 50K tokens (a large file), it can be truncated to 10K. The model sees the beginning and knows the file is large.</p>
+<p><strong>Priority 4: Project context</strong> (rules, memory, skills) is compressible. If space is tight, skills can be truncated. Memory can be summarized. Rules can be reduced to the most relevant subset.</p>
+<p><strong>Priority 5: Historical context</strong> — older messages and tool results — is the primary eviction target. When the window fills, old tool results are cleared first, then old messages are summarized. This is where the compression pipeline focuses its effort.</p>
+<p><strong>Priority 6: Output reserve</strong> is held back from the conversation budget entirely. It is the model's breathing room and must be protected.</p>
+<h3 id="priority-based-allocation-in-practice">Priority-Based Allocation in Practice</h3>
+<p>When the context approaches the limit, the system does not compress everything equally. It follows the priority hierarchy:</p>
+<ol>
+<li>
+<p><strong>First, clear old tool results</strong> (Priority 5). Replace the content of tool results from turns more than N turns ago with <code>[Old tool result cleared]</code>. This is the cheapest compression — no LLM call, no information loss in recent context.</p>
+</li>
+<li>
+<p><strong>Next, truncate large active tool results</strong> (Priority 3). If a single tool result is 50K tokens, truncate it to a configurable budget (e.g., 10K). The model sees the first part and knows more exists.</p>
+</li>
+<li>
+<p><strong>Then, summarize old messages</strong> (Priority 5). Use an LLM to create a summary of the oldest messages and replace them with the summary. This is expensive (an API call) but produces high-quality compression.</p>
+</li>
+<li>
+<p><strong>Finally, compress project context</strong> (Priority 4). Truncate skills, reduce memory, trim rules. This is a last resort — removing project context degrades the model's understanding of the codebase.</p>
+</li>
+</ol>
+<p>The system never compresses Priority 1 (system prompt core) or Priority 2 (recent messages). If these do not fit in the window, the session is in an unrecoverable state and should be cleared.</p>
+<hr />
+<h2 id="the-graduated-compression-pipeline">The Graduated Compression Pipeline</h2>
+<p>The compression pipeline is the central architectural concept of context management. It implements the priority hierarchy as a sequence of increasingly aggressive strategies, each triggered only when cheaper strategies cannot reduce context enough.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">START</span><span class="p">([</span><span class="n">Context</span><span class="w"> </span><span class="n">Preparation</span><span class="p">])</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">T0</span><span class="p">{</span><span class="n">Tier</span><span class="w"> </span><span class="mi">0</span><span class="o">:&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">API</span><span class="o">-</span><span class="n">native</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">management</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T0</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">T1</span><span class="p">{</span><span class="n">Tier</span><span class="w"> </span><span class="mi">1</span><span class="o">:&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Tool</span><span class="w"> </span><span class="n">result</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">budget</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">T2</span><span class="p">{</span><span class="n">Tier</span><span class="w"> </span><span class="mi">2</span><span class="o">:&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">History</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">snipping</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">T3</span><span class="p">{</span><span class="n">Tier</span><span class="w"> </span><span class="mi">3</span><span class="o">:&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Microcompact</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">old</span><span class="w"> </span><span class="n">results</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T3</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CHECK</span><span class="p">{</span><span class="n">Context</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">fits</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">SEND</span><span class="p">[</span><span class="n">Send</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">API</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CHECK</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">T4</span><span class="p">{</span><span class="n">Tier</span><span class="w"> </span><span class="mi">4</span><span class="o">:&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Auto</span><span class="o">-</span><span class="n">compact</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">LLM</span><span class="w"> </span><span class="n">summary</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T4</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CHECK2</span><span class="p">{</span><span class="n">Context</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">fits</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">CHECK2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">SEND</span>
+<span class="w">    </span><span class="n">CHECK2</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">T5</span><span class="p">{</span><span class="n">Tier</span><span class="w"> </span><span class="mi">5</span><span class="o">:&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Reactive</span><span class="w"> </span><span class="n">compact</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">after</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">error</span><span class="p">}</span>
+<span class="w">    </span><span class="n">T5</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CHECK3</span><span class="p">{</span><span class="n">Context</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">fits</span><span class="o">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">CHECK3</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">RETRY</span><span class="p">[</span><span class="n">Retry</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">call</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CHECK3</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">EXIT</span><span class="p">([</span><span class="n">Exit</span><span class="o">:</span><span class="w"> </span><span class="n">prompt_too_long</span><span class="p">])</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">T0</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">T1</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">T2</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">T3</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">T4</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">T5</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXIT</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SEND</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c8e6c9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">RETRY</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">c8e6c9</span>
+</code></pre></div>
+
+<h3 id="tier-0-api-native-context-management">Tier 0: API-Native Context Management</h3>
+<p>The cheapest possible tier: delegate compression to the API server itself. No local computation, no extra API call. The agent sends directives with the request telling the server to clear old tool results and thinking blocks from the cached context.</p>
+<p><strong>When it fires:</strong> Always — it is configuration, not a conditional action.</p>
+<p><strong>What it does:</strong> Tells the server to clear tool result content from messages older than a threshold (e.g., when input exceeds 180K tokens, keep only the 5 most recent tool results). Tells the server to clear thinking blocks from older turns.</p>
+<p><strong>Cost:</strong> Zero. The server handles it.</p>
+<p><strong>Trade-off:</strong> Only handles tool results and thinking blocks. Cannot compress conversation text, user messages, or system prompt content.</p>
+<h3 id="tier-1-tool-result-budget-enforcement">Tier 1: Tool Result Budget Enforcement</h3>
+<p>Individual tool results can be enormous. A <code>Read</code> of a large file might return 50K tokens. A <code>Bash</code> command might produce megabytes of output. Without a per-result budget, a single tool call can consume a third of the context window.</p>
+<p><strong>When it fires:</strong> Before every API call, during context preparation.</p>
+<p><strong>What it does:</strong> Scans each tool result. If it exceeds the per-tool budget (configurable per tool, default varies), truncates it to the budget. Appends a marker: <code>[Output truncated: showing first N characters of M total]</code>.</p>
+<p><strong>Cost:</strong> Near-zero — string truncation is O(n) with small constant.</p>
+<p><strong>Trade-off:</strong> The model loses the tail of large tool results. For file reads, this usually means losing the end of the file. For command output, it means losing later log lines. The truncation marker tells the model that more content exists, so it can request the rest if needed.</p>
+<h3 id="tier-2-history-snipping">Tier 2: History Snipping</h3>
+<p>The simplest form of history management: remove the oldest messages by count or by token budget.</p>
+<p><strong>When it fires:</strong> Before every API call, after tool result budgeting.</p>
+<p><strong>What it does:</strong> Counts messages from the oldest end. Removes complete message groups (as defined in Chapter 7 — one assistant response and its tool results) until the total is under a target. Preserves the compact boundary (never removes the summary from a previous compaction).</p>
+<p><strong>Cost:</strong> Near-zero — counting and slicing arrays.</p>
+<p><strong>Trade-off:</strong> Removes messages without summarizing them. The model loses all information from the removed turns. This is appropriate only when the removed messages are old enough that a summary would not help (e.g., the first few turns of a long session about a completely different topic).</p>
+<h3 id="tier-3-microcompact">Tier 3: Microcompact</h3>
+<p>A targeted compression that replaces old tool result content with lightweight markers while preserving the message structure and metadata.</p>
+<p><strong>When it fires:</strong> Before every API call, after history snipping.</p>
+<p><strong>What it does:</strong> For tool results older than a threshold (either by message count or by idle time), replaces the content with <code>[Old tool result content cleared]</code>. The tool call metadata (tool name, input parameters) is preserved — only the result content is cleared.</p>
+<p>Two variants exist:</p>
+<ul>
+<li>
+<p><strong>Time-based microcompact:</strong> Fires when the session has been idle for more than 60 minutes. Since the server-side cache has expired due to inactivity, there is no cache penalty for modifying messages. Clears all but the 5 most recent tool results.</p>
+</li>
+<li>
+<p><strong>Cache-aware microcompact:</strong> Uses the API's cache editing mechanism to remove tool results from the cached prefix on the server side, without changing the local message bytes. This preserves the prompt cache while reducing effective context size.</p>
+</li>
+</ul>
+<p><strong>Cost:</strong> Zero for time-based (string replacement). Near-zero for cache-aware (API parameters, no extra call).</p>
+<p><strong>Trade-off:</strong> The model can no longer see the exact output of old tool calls. It knows what tool was called and what inputs were used, but not what the tool returned. For recent analysis, this is a significant loss. For tool calls from 20 turns ago, it rarely matters.</p>
+<h3 id="tier-4-auto-compact-full-llm-summarization">Tier 4: Auto-Compact (Full LLM Summarization)</h3>
+<p>When cheaper tiers cannot reduce context enough, the system makes a full LLM call to summarize the conversation. This is the most expensive tier but produces the highest-quality compression.</p>
+<p><strong>When it fires:</strong> After Tiers 0-3, when the token count exceeds 83.5% of the effective context window.</p>
+<p><strong>What it does:</strong></p>
+<ol>
+<li>Determines which messages to summarize (everything except the most recent N messages, where N is calculated to keep at least 10K tokens of recent context).</li>
+<li>Sends the messages to the model with a structured summarization prompt requesting 9 specific sections (primary request, key concepts, files modified, errors fixed, problem-solving approaches, all user messages, pending tasks, current work, optional next step).</li>
+<li>Replaces the summarized messages with the summary.</li>
+<li>Re-injects critical context: recently read files, active plans, invoked skills, MCP server descriptions.</li>
+</ol>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Before</span><span class="p">[</span><span class="s">&quot;Before Compaction&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">        </span><span class="n">M1</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M2</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">2</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M3</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M4</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M5</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">5</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M6</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">6</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M7</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">7</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M8</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">Before</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Summarize</span><span class="w"> </span><span class="n">M1</span><span class="o">-</span><span class="n">M5</span><span class="o">|</span><span class="w"> </span><span class="n">After</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">After</span><span class="p">[</span><span class="s">&quot;After Compaction&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">        </span><span class="n">BOUND</span><span class="p">[</span><span class="n">Compact</span><span class="w"> </span><span class="n">Boundary</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SUM</span><span class="p">[</span><span class="n">Summary</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">M1</span><span class="o">-</span><span class="n">M5</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M6a</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">6</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M7a</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">7</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">M8a</span><span class="p">[</span><span class="n">Msg</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ATTACH</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">injected</span><span class="w"> </span><span class="n">Context</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Files</span><span class="p">,</span><span class="w"> </span><span class="n">Plans</span><span class="p">,</span><span class="w"> </span><span class="n">Skills</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">M1</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">M2</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">M3</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">M4</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">M5</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">BOUND</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">f3e5f5</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SUM</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">ATTACH</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+</code></pre></div>
+
+<p><strong>Cost:</strong> One API call for summarization. The summarization model shares the cached prefix with the main conversation, so the cost is primarily output tokens (the summary itself, typically 2-5K tokens).</p>
+<p><strong>Trade-off:</strong> Information loss is inevitable but structured. The 9-section prompt ensures the summary captures the most important information. Section 6 ("All User Messages") prevents the worst failure mode: forgetting what the user asked for.</p>
+<h3 id="tier-5-reactive-compact-error-recovery">Tier 5: Reactive Compact (Error Recovery)</h3>
+<p>The last resort. Fires only when the API returns a prompt-too-long error — meaning all pre-request tiers failed and the context actually exceeded the window.</p>
+<p><strong>When it fires:</strong> After an API error, during the agent loop's error recovery phase (Chapter 7's Phase 3).</p>
+<p><strong>What it does:</strong> Parses the error to extract the exact token overshoot. Removes the minimum number of message groups from the oldest end to close the gap. Summarizes the removed messages. Retries the API call.</p>
+<p><strong>Cost:</strong> One API call for summarization plus the wasted API call that produced the error.</p>
+<p><strong>Trade-off:</strong> This is a recovery path — it should rarely fire. If it fires frequently, the pre-request tiers' thresholds need tuning. Each reactive compact wastes one API call (the one that errored), so frequent reactive compaction is expensive.</p>
+<h3 id="why-the-ordering-matters">Why the Ordering Matters</h3>
+<p>Each tier is cheaper and less destructive than the next:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Cost</th>
+<th>Information Loss</th>
+<th>Fires</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0: API-native</td>
+<td>Zero</td>
+<td>Tool result content</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>1: Result budget</td>
+<td>Near-zero</td>
+<td>Tail of large results</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>2: History snip</td>
+<td>Near-zero</td>
+<td>Oldest messages entirely</td>
+<td>When count exceeds threshold</td>
+</tr>
+<tr>
+<td>3: Microcompact</td>
+<td>Near-zero</td>
+<td>Old tool result content</td>
+<td>When token count &gt; threshold</td>
+</tr>
+<tr>
+<td>4: Auto-compact</td>
+<td>1 API call</td>
+<td>Detailed conversation → summary</td>
+<td>When at 83.5% capacity</td>
+</tr>
+<tr>
+<td>5: Reactive</td>
+<td>2 API calls</td>
+<td>Oldest messages → summary</td>
+<td>When API returns error</td>
+</tr>
+</tbody>
+</table>
+<p>A user who stays within 30 turns never hits Tier 4. Tiers 0-3 handle their context silently. Only long, intensive sessions trigger the expensive LLM summarization. This graduated approach means the system spends the minimum cost necessary for each session's actual context pressure.</p>
+<hr />
+<h2 id="the-compaction-algorithm-step-by-step">The Compaction Algorithm: Step by Step</h2>
+<p>Tier 4 (auto-compact) is the most architecturally complex tier. Here is the full algorithm:</p>
+<h3 id="step-1-determine-what-to-keep">Step 1: Determine What to Keep</h3>
+<p>The algorithm must decide where to split the conversation into "summarize" and "keep" segments. Two constraints:</p>
+<ul>
+<li><strong>Minimum recent context:</strong> Keep at least 10K tokens of recent messages. The model needs enough recent context to understand what it is doing.</li>
+<li><strong>Minimum message count:</strong> Keep at least 5 messages with text content. A single massive tool result should not satisfy the token minimum with only one message — the model needs conversational context.</li>
+<li><strong>Maximum keep size:</strong> Do not keep more than 40K tokens. The summary needs room to exist alongside the kept messages.</li>
+</ul>
+<div class="codehilite"><pre><span></span><code>Full conversation: [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10]
+                    ←─── summarize ───→│←── keep ──→│
+                                       split point
+</code></pre></div>
+
+<p>The split point walks backward from the end of the conversation, accumulating tokens and message counts, until both minimums are met. It then adjusts forward to avoid splitting a tool call/result pair (never separate a <code>tool_use</code> from its <code>tool_result</code>).</p>
+<h3 id="step-2-build-the-summarization-request">Step 2: Build the Summarization Request</h3>
+<p>The messages to summarize are sent to the model with a structured prompt. The prompt is carefully designed to combat known failure modes:</p>
+<p><strong>Failure: Task drift.</strong> After compaction, the model resumes a task that was already completed. The prompt counters this with Section 9: "Ensure this next step is DIRECTLY in line with the user's most recent explicit requests."</p>
+<p><strong>Failure: Recap waste.</strong> The model wastes tokens summarizing "what we did" instead of capturing "what we need to know." The prompt emphasizes action items and pending tasks over narrative history.</p>
+<p><strong>Failure: Lost user instructions.</strong> The model forgets a user instruction from early in the conversation. Section 6 requires "every user instruction" to be preserved in the summary, preventing this loss.</p>
+<h3 id="step-3-execute-the-summarization">Step 3: Execute the Summarization</h3>
+<p>The summarization runs as a forked agent — a subagent that shares the main conversation's cached prefix. This is critical for cost: the summarization call does not re-process the system prompt and early conversation. It reads them from the cache at 1/10th the cost.</p>
+<p>The fork is configured with <code>maxTurns: 1</code> and tool use denied. The summarization agent produces a single response — the summary — and returns. It cannot enter an agentic loop of its own.</p>
+<h3 id="step-4-post-compact-rebuilding">Step 4: Post-Compact Rebuilding</h3>
+<p>Compaction deletes messages, but the model needs context to continue working. The post-compact rebuilding pipeline re-injects critical context:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">COMPACT</span><span class="p">[</span><span class="n">Compaction</span><span class="w"> </span><span class="n">Complete</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R1</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">read</span><span class="w"> </span><span class="n">recent</span><span class="w"> </span><span class="n">files</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Top</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">recency</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Budget</span><span class="o">:</span><span class="w"> </span><span class="mi">50</span><span class="n">K</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="n">K</span><span class="w"> </span><span class="n">each</span><span class="p">]</span>
+<span class="w">    </span><span class="n">COMPACT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R2</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">inject</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="n">plan</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">If</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">exists</span><span class="p">]</span>
+<span class="w">    </span><span class="n">COMPACT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R3</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">inject</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="n">skills</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Truncated</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="mi">5</span><span class="n">K</span><span class="w"> </span><span class="n">each</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Budget</span><span class="o">:</span><span class="w"> </span><span class="mi">25</span><span class="n">K</span><span class="w"> </span><span class="n">total</span><span class="p">]</span>
+<span class="w">    </span><span class="n">COMPACT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R4</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">announce</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">tools</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Dynamic</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="n">availability</span><span class="p">]</span>
+<span class="w">    </span><span class="n">COMPACT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R5</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">run</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="n">hooks</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">CLAUDE</span><span class="p">.</span><span class="n">md</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">memory</span><span class="p">]</span>
+<span class="w">    </span><span class="n">COMPACT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R6</span><span class="p">[</span><span class="n">Re</span><span class="o">-</span><span class="n">inject</span><span class="w"> </span><span class="n">agent</span><span class="w"> </span><span class="n">status</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Running</span><span class="w"> </span><span class="n">background</span><span class="w"> </span><span class="n">agents</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">R1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RESULT</span><span class="p">[</span><span class="n">Rebuilt</span><span class="w"> </span><span class="n">Conversation</span><span class="p">]</span>
+<span class="w">    </span><span class="n">R2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RESULT</span>
+<span class="w">    </span><span class="n">R3</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RESULT</span>
+<span class="w">    </span><span class="n">R4</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RESULT</span>
+<span class="w">    </span><span class="n">R5</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RESULT</span>
+<span class="w">    </span><span class="n">R6</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RESULT</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">COMPACT</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">R1</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">R2</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">R3</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">R4</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">R5</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">R6</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">RESULT</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e3f2fd</span>
+</code></pre></div>
+
+<p>Each re-injection has its own token budget. The budgets are chosen so that rebuilding itself does not trigger another compaction:</p>
+<ul>
+<li>File restoration: 50K total, 5K per file, top 5 files by recency</li>
+<li>Skill restoration: 25K total, 5K per skill, most recently invoked first</li>
+<li>Plan and agent status: typically small (&lt;2K each)</li>
+</ul>
+<p>The total rebuilding budget is ~80K tokens in the worst case — well within the 160K conversation space after a compaction that reduced the conversation to ~40K.</p>
+<h3 id="step-5-cache-reset">Step 5: Cache Reset</h3>
+<p>After compaction, caches that reference pre-compaction messages must be invalidated:</p>
+<ul>
+<li><strong>File content cache</strong> — files re-read during rebuilding have fresh content</li>
+<li><strong>Microcompact state</strong> — cleared tool result tracking is reset</li>
+<li><strong>System prompt cache</strong> — CLAUDE.md and memory may have changed</li>
+<li><strong>Cache break detection</strong> — the baseline is reset so the expected cache miss is not flagged as a break</li>
+</ul>
+<p>One cache is deliberately <strong>not</strong> reset: the skill names cache. Skills are ~4K tokens each. If they are already in the cache, re-injecting them would create unnecessary cache writes. Preserving the "already sent" flag saves tokens.</p>
+<hr />
+<h2 id="the-threshold-system">The Threshold System</h2>
+<p>Four thresholds define the zones of context pressure:</p>
+<div class="codehilite"><pre><span></span><code>Context Window: 200,000 tokens
+  - Output Reserve: 20,000
+  = Effective Window: 180,000
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │                                                              │
+  │   Normal Zone        Warning Zone    Compact    Blocking     │
+  │   (&lt; 73.5%)         (73.5-83.5%)    Zone       Limit        │
+  │                                     (83.5-     (&gt; 88.5%)    │
+  │                                      88.5%)                  │
+  │   ●──────────────────●──────────────●─────────●─────────●   │
+  │   0                  147K           167K      177K      180K │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+  Status bar:  🟢 Green        🟡 Yellow      🔴 Red     🔴 Blocked
+  Action:      None           None           Auto-      API calls
+                                             compact    blocked
+</code></pre></div>
+
+<p><strong>The 13K auto-compact buffer</strong> is tuned so compaction fires before the blocking limit but not so aggressively that every large tool result triggers it. The gap between auto-compact (83.5%) and blocking (88.5%) gives the compaction call room to complete — the summary itself needs tokens to generate.</p>
+<p><strong>The 20K warning buffer</strong> provides early user notification. The status bar turns yellow at 73.5%, giving the user time to manually compact (with <code>/compact</code>) before auto-compact fires.</p>
+<p><strong>The 3K manual compact buffer</strong> is more aggressive than auto-compact because the user explicitly asked for compaction. When you type <code>/compact</code>, the system compacts even if only 3K tokens of headroom remain.</p>
+<h3 id="threshold-design-rationale">Threshold Design Rationale</h3>
+<p>Why 83.5% for auto-compact instead of, say, 90% or 95%?</p>
+<p>The answer is the <strong>compaction cost</strong>: the summarization API call itself consumes tokens. The model needs space to read the messages being summarized (they are sent as part of the summarization request). If the threshold is too high (95%), there is not enough room for the summarization call, and the summarization itself fails with a prompt-too-long error.</p>
+<p>The 13K buffer was determined empirically: the p99.99 of summarization output is ~17K tokens. With a 20K output reserve and a 13K buffer, there is 33K tokens of headroom for the summarization call. This is enough for all but the most extreme cases.</p>
+<hr />
+<h2 id="memory-tiers-where-information-lives">Memory Tiers: Where Information Lives</h2>
+<p>Not all context lives in the conversation. The agent system has multiple storage tiers with different characteristics:</p>
+<div class="codehilite"><pre><span></span><code>flowchart<span class="w"> </span>TD
+<span class="w">    </span>subgraph<span class="w"> </span>Tiers[&quot;Memory<span class="w"> </span>Tiers&quot;]
+<span class="w">        </span>direction<span class="w"> </span>TB
+<span class="w">        </span>T1[&quot;Tier<span class="w"> </span>1:<span class="w"> </span>System<span class="w"> </span>Prompt<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Always<span class="w"> </span>visible<span class="w"> </span>to<span class="w"> </span>model<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Cached,<span class="w"> </span>stable,<span class="w"> </span>20K<span class="w"> </span>tokens<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Identity,<span class="w"> </span>tools,<span class="w"> </span>rules<span class="nt">&lt;/i&gt;</span>&quot;]
+<span class="w">        </span>T2[&quot;Tier<span class="w"> </span>2:<span class="w"> </span>Conversation<span class="w"> </span>History<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Visible<span class="w"> </span>until<span class="w"> </span>compacted<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Growing,<span class="w"> </span>compressible,<span class="w"> </span>160K<span class="w"> </span>tokens<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Messages,<span class="w"> </span>tool<span class="w"> </span>results<span class="nt">&lt;/i&gt;</span>&quot;]
+<span class="w">        </span>T3[&quot;Tier<span class="w"> </span>3:<span class="w"> </span>Persistent<span class="w"> </span>Memory<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Loaded<span class="w"> </span>into<span class="w"> </span>system<span class="w"> </span>prompt<span class="w"> </span>per<span class="w"> </span>session<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Stable<span class="w"> </span>across<span class="w"> </span>sessions,<span class="w"> </span>~5K<span class="w"> </span>tokens<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Auto-memory,<span class="w"> </span>CLAUDE.md<span class="w"> </span>imports<span class="nt">&lt;/i&gt;</span>&quot;]
+<span class="w">        </span>T4[&quot;Tier<span class="w"> </span>4:<span class="w"> </span>Transcript<span class="w"> </span>on<span class="w"> </span>Disk<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Not<span class="w"> </span>visible<span class="w"> </span>to<span class="w"> </span>model<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Complete<span class="w"> </span>record,<span class="w"> </span>unlimited<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>JSONL<span class="w"> </span>transcript<span class="w"> </span>file<span class="nt">&lt;/i&gt;</span>&quot;]
+<span class="w">        </span>T5[&quot;Tier<span class="w"> </span>5:<span class="w"> </span>External<span class="w"> </span>Knowledge<span class="nt">&lt;br/&gt;&lt;i&gt;</span>Accessible<span class="w"> </span>via<span class="w"> </span>tools<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Retrieved<span class="w"> </span>on<span class="w"> </span>demand,<span class="w"> </span>unlimited<span class="nt">&lt;/i&gt;&lt;br/&gt;&lt;i&gt;</span>Files,<span class="w"> </span>databases,<span class="w"> </span>web<span class="nt">&lt;/i&gt;</span>&quot;]
+<span class="w">    </span>end
+
+<span class="w">    </span>T1<span class="w"> </span>---|&quot;Compaction<span class="w"> </span>summary<span class="nt">&lt;br/&gt;</span>moves<span class="w"> </span>here&quot;|<span class="w"> </span>T3
+<span class="w">    </span>T2<span class="w"> </span>---|&quot;Compacted<span class="w"> </span>messages<span class="nt">&lt;br/&gt;</span>archived<span class="w"> </span>here&quot;|<span class="w"> </span>T4
+<span class="w">    </span>T5<span class="w"> </span>---|&quot;Tool<span class="w"> </span>results<span class="nt">&lt;br/&gt;</span>enter<span class="w"> </span>here&quot;|<span class="w"> </span>T2
+
+<span class="w">    </span>style<span class="w"> </span>T1<span class="w"> </span>fill:#ffcdd2
+<span class="w">    </span>style<span class="w"> </span>T2<span class="w"> </span>fill:#fff3e0
+<span class="w">    </span>style<span class="w"> </span>T3<span class="w"> </span>fill:#e8f5e9
+<span class="w">    </span>style<span class="w"> </span>T4<span class="w"> </span>fill:#e3f2fd
+<span class="w">    </span>style<span class="w"> </span>T5<span class="w"> </span>fill:#f3e5f5
+</code></pre></div>
+
+<p><strong>Tier 1 (System Prompt)</strong> is the model's permanent memory for this session. Information here is always visible. It is cached for efficiency. Adding to the system prompt increases per-turn cost but guarantees the model always has access.</p>
+<p><strong>Tier 2 (Conversation History)</strong> is the model's working memory. It grows with every turn and is compressed when full. Information here is visible until compacted.</p>
+<p><strong>Tier 3 (Persistent Memory)</strong> bridges sessions. Auto-memory files, project configuration, and CLAUDE.md imports are loaded into the system prompt at session start. Information here survives session restarts. The compaction summary is also written to persistent memory, so the next session can read what the previous session accomplished.</p>
+<p><strong>Tier 4 (Transcript)</strong> is the complete record. Every message, every tool result, every system injection — all persisted to a JSONL file on disk. The model cannot see this tier directly, but after compaction, the model can be told "the full transcript is at [path] — use <code>Read</code> to access it." This turns compaction from a lossy operation into a recoverable one.</p>
+<p><strong>Tier 5 (External Knowledge)</strong> is everything accessible through tools: the filesystem, the web, databases, APIs. The model retrieves information on demand. This tier is unlimited in size but requires a tool call (and therefore a loop iteration) to access.</p>
+<h3 id="tier-interactions">Tier Interactions</h3>
+<p>Information flows between tiers:</p>
+<ul>
+<li><strong>Tier 5 → Tier 2:</strong> A tool read brings external knowledge into the conversation.</li>
+<li><strong>Tier 2 → Tier 4:</strong> Compaction archives old messages to the transcript.</li>
+<li><strong>Tier 2 → Tier 1/3:</strong> Compaction summary enters persistent memory and may be loaded into the system prompt.</li>
+<li><strong>Tier 4 → Tier 2:</strong> After compaction, the model can <code>Read</code> the transcript file, bringing archived information back into the conversation.</li>
+</ul>
+<p>This last interaction — transcript recovery — is architecturally significant. It means compaction is not truly lossy. The full detail is always available on disk. The model just needs to know where to find it and be motivated to look. The compaction summary includes a reference: "For specific details from before compaction, read the full transcript at: [path]."</p>
+<hr />
+<h2 id="the-context-assembly-algorithm">The Context Assembly Algorithm</h2>
+<p>Here is the complete algorithm for assembling context before each API call, combining everything from this chapter:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">START</span><span class="p">([</span><span class="n">Start</span><span class="p">:</span><span class="w"> </span><span class="n">Prepare</span><span class="w"> </span><span class="n">Context</span><span class="p">])</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">A</span><span class="p">[</span><span class="n">Get</span><span class="w"> </span><span class="n">messages</span><span class="w"> </span><span class="n">after</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">last</span><span class="w"> </span><span class="n">compact</span><span class="w"> </span><span class="n">boundary</span><span class="p">]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">Apply</span><span class="w"> </span><span class="n">per</span><span class="o">-</span><span class="k">tool</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">result</span><span class="w"> </span><span class="n">budget</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">History</span><span class="w"> </span><span class="n">snipping</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">by</span><span class="w"> </span><span class="n">message</span><span class="w"> </span><span class="n">count</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Microcompact</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">old</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">results</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">Estimate</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="n">count</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">{</span><span class="n">Above</span><span class="w"> </span><span class="n">auto</span><span class="o">-</span><span class="n">compact</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">threshold</span><span class="err">?</span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="n">Prepend</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="n">context</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">H</span><span class="p">{</span><span class="n">Session</span><span class="w"> </span><span class="n">memory</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">available</span><span class="err">?</span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">I</span><span class="p">[</span><span class="n">Try</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="n">memory</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">compact</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">call</span><span class="p">]</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">J</span><span class="p">[</span><span class="n">Full</span><span class="w"> </span><span class="n">LLM</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">summarization</span><span class="p">]</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">K</span><span class="p">{</span><span class="n">Fit</span><span class="w"> </span><span class="ow">in</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">window</span><span class="err">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">K</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">G</span>
+<span class="w">    </span><span class="n">K</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">J</span>
+<span class="w">    </span><span class="n">J</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L</span><span class="p">{</span><span class="n">Fit</span><span class="w"> </span><span class="ow">in</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">window</span><span class="err">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">L</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">M</span><span class="p">[</span><span class="n">Post</span><span class="o">-</span><span class="n">compact</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">rebuilding</span><span class="p">]</span>
+<span class="w">    </span><span class="n">L</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">N</span><span class="p">{</span><span class="n">Circuit</span><span class="w"> </span><span class="n">breaker</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">tripped</span><span class="err">?</span><span class="p">}</span>
+<span class="w">    </span><span class="n">N</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="n">failures</span><span class="o">|</span><span class="w"> </span><span class="n">O</span><span class="p">([</span><span class="n">Block</span><span class="p">:</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="n">full</span><span class="p">])</span>
+<span class="w">    </span><span class="n">N</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">P</span><span class="p">[</span><span class="n">Retry</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">more</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">aggressive</span><span class="w"> </span><span class="n">truncation</span><span class="p">]</span>
+<span class="w">    </span><span class="n">P</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">J</span>
+
+<span class="w">    </span><span class="n">M</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">G</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Q</span><span class="p">[</span><span class="n">Assemble</span><span class="w"> </span><span class="n">system</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">prompt</span><span class="w"> </span><span class="n">blocks</span><span class="p">]</span>
+<span class="w">    </span><span class="n">Q</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">R</span><span class="p">[</span><span class="n">Place</span><span class="w"> </span><span class="n">cache</span><span class="w"> </span><span class="n">control</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">markers</span><span class="p">]</span>
+<span class="w">    </span><span class="n">R</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">S</span><span class="p">[</span><span class="n">Build</span><span class="w"> </span><span class="n">API</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">request</span><span class="w"> </span><span class="n">params</span><span class="p">]</span>
+<span class="w">    </span><span class="n">S</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DONE</span><span class="p">([</span><span class="n">Ready</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">call</span><span class="w"> </span><span class="n">API</span><span class="p">])</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">START</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#e3f2fd</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">O</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#ffcdd2</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">DONE</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#c8e6c9</span>
+</code></pre></div>
+
+<h3 id="key-design-decisions-in-the-algorithm">Key Design Decisions in the Algorithm</h3>
+<p><strong>Session memory as a zero-cost compaction path.</strong> Before invoking the expensive LLM summarization, the algorithm checks if a session memory summary is available. Session memory is extracted incrementally by a background process during the session — it is pre-computed. Using it for compaction avoids the LLM call entirely. If the pre-computed summary is fresh enough and the post-compact size fits, this path saves 100% of the compaction cost.</p>
+<p><strong>Circuit breaker on consecutive failures.</strong> If the LLM summarization fails three times consecutively (the summary itself exceeds the window, or the API is unavailable), the circuit breaker trips and blocks further API calls. This prevents the catastrophic scenario discovered in production: sessions that retried compaction thousands of times, wasting 250K API calls per day globally.</p>
+<p><strong>Post-compact rebuilding as a separate step.</strong> After compaction succeeds, the system re-injects critical context (files, plans, skills). This is a separate step because it must happen regardless of which compaction tier fired. Whether Tier 4 (auto-compact) or Tier 5 (reactive compact) reduced the context, the model needs the same post-compact rebuilding.</p>
+<hr />
+<h2 id="auto-compaction-triggering-at-80-context-usage">Auto-Compaction: Triggering at 80% Context Usage</h2>
+<p>Auto-compaction is the mechanism that triggers Tier 4 compaction when context usage exceeds a threshold. The design decisions around the trigger are as important as the compaction algorithm itself.</p>
+<h3 id="why-not-compact-at-100">Why Not Compact at 100%?</h3>
+<p>If you compact only when the window is completely full, you have no room for the compaction call itself. The summarization API call sends the messages being summarized as input — which are the messages that are filling the window. You need headroom.</p>
+<p>Additionally, compacting at 100% means the model is already in a degraded state. It is trying to generate a response with barely any output space. The response quality suffers. Compacting earlier (at 80-85%) preserves response quality.</p>
+<h3 id="why-not-compact-at-50">Why Not Compact at 50%?</h3>
+<p>If you compact too early, you waste an LLM call and lose conversational detail unnecessarily. The model still has room. Let it work.</p>
+<p>The sweet spot is around 80-85% — high enough that you have utilized most of the window, low enough that there is room for the compaction call and the model's next response.</p>
+<h3 id="the-tracking-state">The Tracking State</h3>
+<p>Auto-compaction tracks its own state across turns:</p>
+<div class="codehilite"><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">AutoCompactTracking</span><span class="p">:</span>
+    <span class="n">last_token_count</span><span class="p">:</span> <span class="nb">int</span>           <span class="c1"># Token count at last check</span>
+    <span class="n">consecutive_failures</span><span class="p">:</span> <span class="nb">int</span>       <span class="c1"># Circuit breaker counter</span>
+    <span class="n">last_compact_turn</span><span class="p">:</span> <span class="nb">int</span>          <span class="c1"># When compaction last fired</span>
+    <span class="n">compaction_in_progress</span><span class="p">:</span> <span class="nb">bool</span>    <span class="c1"># Prevent concurrent compaction</span>
+</code></pre></div>
+
+<p>The <code>consecutive_failures</code> counter is the circuit breaker. The <code>compaction_in_progress</code> flag prevents a subtle race condition: if two concurrent API calls both detect high context pressure, they might both trigger compaction simultaneously, producing two conflicting summaries. The flag serializes compaction.</p>
+<hr />
+<h2 id="cache-aware-design">Cache-Aware Design</h2>
+<p>Every compression strategy must answer the question: <strong>does this bust the prompt cache?</strong></p>
+<p>The prompt cache stores the byte sequence of the system prompt and early conversation messages. A cache hit costs 1/10th of a cache miss. Modifying any byte in the cached region invalidates the cache and costs 10x more.</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Cache Impact</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0: API-native</td>
+<td>Zero</td>
+<td>Server handles it</td>
+</tr>
+<tr>
+<td>1: Result budget</td>
+<td>Zero</td>
+<td>Truncation happens before caching</td>
+</tr>
+<tr>
+<td>2: History snip</td>
+<td>Potentially invalidates</td>
+<td>Removing messages shifts byte positions</td>
+</tr>
+<tr>
+<td>3: Microcompact (time-based)</td>
+<td>Acceptable</td>
+<td>Only fires when cache is cold (&gt;60 min idle)</td>
+</tr>
+<tr>
+<td>3: Microcompact (cache-aware)</td>
+<td>Zero</td>
+<td>Uses server-side cache editing API</td>
+</tr>
+<tr>
+<td>4: Auto-compact</td>
+<td>Invalidates, but shares prefix</td>
+<td>Fork agent shares parent's cached prefix</td>
+</tr>
+<tr>
+<td>5: Reactive</td>
+<td>Invalidates</td>
+<td>Accepted cost of error recovery</td>
+</tr>
+</tbody>
+</table>
+<p>The cache-aware microcompact (Tier 3, cache variant) is the most architecturally interesting case. It does not modify local messages at all. Instead, it sends directives to the server: "delete the content of tool result X from the cached prefix." The server modifies its cache without the client changing any bytes. The cache key stays stable.</p>
+<p>This is worth emphasizing: the entire cache-aware microcompact tier exists because modifying a byte in the local message stream would invalidate a cache that cost 50-70K tokens to create. The engineering effort of building a server-side cache editing mechanism is justified by the 10x cost savings on every subsequent API call.</p>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building the context window management system for a production AI agent teaches nine principles:</p>
+<p><strong>1. Graduate your compression strategies.</strong> Cheap operations first (string truncation, server-side directives), expensive operations last (LLM summarization), error-driven recovery as the absolute last resort. Users never pay for more compression than they need.</p>
+<p><strong>2. Budget tokens by priority.</strong> System prompt and recent messages are non-negotiable. Old tool results are the primary eviction target. Project context is compressible but valuable. The priority hierarchy determines what the model remembers when space is tight.</p>
+<p><strong>3. Design compaction around cache economics.</strong> A cache-busting compaction can cost more than the context it saves. The 10x difference between cache hits and misses means every compression strategy must answer "does this bust the cache?" before it modifies a byte.</p>
+<p><strong>4. Circuit-break runaway compaction.</strong> Compaction that fails can trigger more compaction. Without a failure budget, pathological sessions retry thousands of times. Three consecutive failures should disable auto-compaction for the session.</p>
+<p><strong>5. Pre-extract summaries in the background.</strong> Session memory — incrementally extracted during the session — enables zero-LLM-cost compaction. Background extraction during natural breaks amortizes the cost. When compaction triggers, the summary is already available.</p>
+<p><strong>6. Rebuild context after compaction.</strong> Compaction deletes messages, but the model needs context to continue — recently read files, active plans, invoked skills. Post-compact rebuilding with strict per-category token budgets (50K for files, 25K for skills) prevents rebuilding from triggering another compaction.</p>
+<p><strong>7. Make compaction recoverable, not lossy.</strong> Write pre-compaction messages to the transcript. Include a reference in the summary: "Full details at [path]." The model can <code>Read</code> the transcript to recover specific details. Compaction becomes a visibility reduction, not a permanent deletion.</p>
+<p><strong>8. Set thresholds with headroom for the compaction call itself.</strong> Auto-compact at 83.5%, not 100%. The gap between the trigger and the hard limit gives the summarization call room to execute. Without this headroom, the summarization call itself fails due to context overflow.</p>
+<p><strong>9. Separate main-thread from subagent compaction.</strong> Module-level caches are shared across forks. A subagent's compaction must not reset the main thread's microcompact state, cache break detection baseline, or system prompt cache. Guard every cleanup function with a thread-identity check.</p>
+<p>In Chapter 10, we move from managing what the model sees to managing how the model communicates: the API client architecture that handles provider abstraction, streaming, retry logic, and the cache key engineering that makes all the context management work described here economically viable.</p>
+<div class="chapter-nav">
+  <a href="chapter-08.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-10.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>
