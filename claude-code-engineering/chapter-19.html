@@ -1,0 +1,1675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 19: Hook Capabilities & Advanced Patterns — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-19-hook-capabilities--advanced-patterns">Chapter 19:
+Hook Capabilities &amp; Advanced Patterns</h1>
+<p>Chapter 18 built the hook execution engine — the lifecycle events,
+the five hook types, the registration system, and the exit-code protocol
+that turns shell scripts into security gates. That machinery answers the
+question "how do hooks run?" This chapter answers the harder question:
+"what can hooks actually do?"</p>
+<p>The answer is more than blocking and allowing. Claude Code's hook
+system supports nine advanced capabilities that transform hooks from
+simple gatekeepers into active participants in the agent loop. Hooks can
+rewrite tool arguments before execution. They can transform tool outputs
+before the LLM sees them. They can inject initial prompts at session
+start. They can register file watchers. They can inject environment
+variables through a dedicated file protocol. They can run asynchronously
+and wake the agent when they complete. They can fire exactly once per
+session. They can conditionally match specific tool patterns. And they
+can be loaded dynamically from plugins with hot-reload support.</p>
+<p>Each of these capabilities required careful engineering decisions
+about data flow, security boundaries, and failure modes. This chapter
+walks through all nine, with implementation code for each, and closes
+with the architectural patterns that make them composable.</p>
+<hr />
+<h2 id="191-updatedinput--hooks-that-rewrite-tool-arguments">19.1
+<code>updatedInput</code> — Hooks That Rewrite Tool Arguments</h2>
+<p>The most powerful hook capability is argument rewriting. A
+<code>PreToolUse</code> hook can return an <code>updatedInput</code>
+field in its output, and the hook engine will replace the tool's
+original arguments with the hook's version before execution
+proceeds.</p>
+<h3 id="the-problem">The Problem</h3>
+<p>Consider a corporate environment where every <code>git push</code>
+must target a specific remote, or where file paths need translation from
+developer-local mounts to CI-container paths. Without argument
+rewriting, the only options are to block the original command
+(frustrating) or document a convention and hope the LLM follows it
+(fragile). Argument rewriting lets hooks silently correct tool inputs,
+keeping the agent productive while enforcing policy.</p>
+<h3 id="data-flow">Data Flow</h3>
+<pre><code>Agent generates tool call: Bash(&quot;git push origin main&quot;)
+         |
+         v
+PreToolUse hook fires
+         |
+         v
+Hook script reads input JSON from stdin:
+  { &quot;tool_name&quot;: &quot;Bash&quot;,
+    &quot;tool_input&quot;: { &quot;command&quot;: &quot;git push origin main&quot; } }
+         |
+         v
+Hook script writes to stdout:
+  { &quot;hookSpecificOutput&quot;: {
+      &quot;hookEventName&quot;: &quot;PreToolUse&quot;,
+      &quot;updatedInput&quot;: { &quot;command&quot;: &quot;git push upstream main --no-verify&quot; }
+  }}
+         |
+         v
+Hook engine merges updatedInput into tool_input
+         |
+         v
+Bash tool executes: &quot;git push upstream main --no-verify&quot;</code></pre>
+<h3 id="implementation">Implementation</h3>
+<p>The hook engine processes <code>updatedInput</code> during the
+result-collection phase, after all hooks for a given event have
+completed:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hooks.ts — processPreToolUseResults()</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PreToolUseHookOutput {</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  hookEventName<span class="op">:</span> <span class="st">&quot;PreToolUse&quot;</span><span class="op">;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  permissionDecision<span class="op">?:</span> <span class="st">&quot;allow&quot;</span> <span class="op">|</span> <span class="st">&quot;deny&quot;</span> <span class="op">|</span> <span class="st">&quot;ask&quot;</span><span class="op">;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  permissionDecisionReason<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  updatedInput<span class="op">?:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">processPreToolUseResults</span>(</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>  originalInput<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;,</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>  hookResults<span class="op">:</span> HookResult[]<span class="op">,</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> { finalInput<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span> blocked<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> reason<span class="op">?:</span> <span class="dt">string</span> } {</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> currentInput <span class="op">=</span> { <span class="op">...</span>originalInput }<span class="op">;</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> blocked <span class="op">=</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> reason<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">undefined</span><span class="op">;</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> result <span class="kw">of</span> hookResults) {</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Exit code 2 = block (as covered in Chapter 18)</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (result<span class="op">.</span><span class="at">exitCode</span> <span class="op">===</span> <span class="dv">2</span>) {</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>      blocked <span class="op">=</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>      reason <span class="op">=</span> result<span class="op">.</span><span class="at">stderrOutput</span><span class="op">;</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Parse stdout for hook-specific output</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parsed <span class="op">=</span> <span class="fu">parseHookOutput</span>(result<span class="op">.</span><span class="at">stdoutOutput</span>)<span class="op">;</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (parsed<span class="op">?.</span><span class="at">updatedInput</span>) {</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Shallow merge — hook can override specific fields</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>      currentInput <span class="op">=</span> { <span class="op">...</span>currentInput<span class="op">,</span> <span class="op">...</span>parsed<span class="op">.</span><span class="at">updatedInput</span> }<span class="op">;</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { finalInput<span class="op">:</span> currentInput<span class="op">,</span> blocked<span class="op">,</span> reason }<span class="op">;</span></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="merge-semantics-shallow-not-deep">Merge Semantics: Shallow, Not
+Deep</h3>
+<p>The merge is deliberately shallow. If a hook returns
+<code>{ "command": "new-command" }</code>, only the <code>command</code>
+field is replaced; other fields like <code>timeout</code> or
+<code>description</code> remain intact. Deep merge was considered and
+rejected for two reasons:</p>
+<ol type="1">
+<li><p><strong>Predictability.</strong> A hook author writing
+<code>{"command": "new-cmd"}</code> expects to replace the command, not
+to have their value merged with nested properties of the original
+command object. Shallow merge matches this mental model.</p></li>
+<li><p><strong>Security.</strong> Deep merge introduces ambiguity. If
+the original input has
+<code>{ "command": "safe", "env": { "PATH": "/usr/bin" } }</code> and a
+hook returns <code>{ "env": { "EVIL": "1" } }</code>, deep merge would
+preserve both <code>PATH</code> and <code>EVIL</code>. Shallow merge
+replaces the entire <code>env</code> object, forcing the hook to be
+explicit about everything it permits.</p></li>
+</ol>
+<h3 id="ordering-guarantees">Ordering Guarantees</h3>
+<p>When multiple hooks return <code>updatedInput</code>, they apply in
+registration order — the same order covered in Chapter 18's priority
+system. Each hook sees the cumulative result of all previous hooks'
+modifications. This creates a pipeline:</p>
+<pre><code>Original input
+    → Hook A: rewrites &quot;command&quot; field
+        → Hook B: sees Hook A&#39;s rewritten command, adds &quot;timeout&quot;
+            → Hook C: sees both modifications, applies final transform
+                → Tool executes with final input</code></pre>
+<p>If this composability is undesirable, the hook author can inspect the
+input and bail out (exit 0, no output) when it detects modifications
+from another hook.</p>
+<h3 id="security-constraint-no-schema-expansion">Security Constraint: No
+Schema Expansion</h3>
+<p>The <code>updatedInput</code> can only modify fields that already
+exist in the tool's input schema or add fields the tool explicitly
+accepts. The hook engine validates the merged input against the tool's
+Zod schema before proceeding:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">validateMergedInput</span>(</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  tool<span class="op">:</span> Tool<span class="op">,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  mergedInput<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> result <span class="op">=</span> tool<span class="op">.</span><span class="at">inputSchema</span><span class="op">.</span><span class="fu">safeParse</span>(mergedInput)<span class="op">;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>result<span class="op">.</span><span class="at">success</span>) {</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">logWarning</span>(</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>      <span class="vs">`Hook produced invalid updatedInput for </span><span class="sc">${</span>tool<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">: `</span> <span class="op">+</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>      <span class="vs">`</span><span class="sc">${</span>result<span class="op">.</span><span class="at">error</span><span class="op">.</span><span class="at">message</span><span class="sc">}</span><span class="vs">. Using original input.`</span><span class="op">,</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    )<span class="op">;</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>If validation fails, the original input is used and a warning is
+logged. Hooks cannot silently inject arbitrary fields into tool
+inputs.</p>
+<hr />
+<h2
+id="192-updatedmcptooloutput--hooks-that-transform-tool-results">19.2
+<code>updatedMCPToolOutput</code> — Hooks That Transform Tool
+Results</h2>
+<p>Where <code>updatedInput</code> modifies what goes into a tool,
+<code>updatedMCPToolOutput</code> modifies what comes out. This is
+specifically designed for MCP tool results, where hooks can filter,
+redact, or enrich the output before it enters the LLM's context
+window.</p>
+<h3 id="the-problem-1">The Problem</h3>
+<p>MCP servers are external code. They may return sensitive data
+(database connection strings, internal URLs, PII) that should not be
+included in the conversation. They may also return verbose output that
+wastes context tokens. <code>PostToolUse</code> hooks with
+<code>updatedMCPToolOutput</code> solve both problems.</p>
+<h3 id="data-flow-1">Data Flow</h3>
+<pre><code>MCP tool executes and returns result
+         |
+         v
+PostToolUse hook fires with:
+  { &quot;tool_name&quot;: &quot;mcp__myserver__query&quot;,
+    &quot;tool_input&quot;: { ... },
+    &quot;tool_output&quot;: { &quot;content&quot;: [{ &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;...&quot; }] } }
+         |
+         v
+Hook script processes output, returns:
+  { &quot;hookSpecificOutput&quot;: {
+      &quot;hookEventName&quot;: &quot;PostToolUse&quot;,
+      &quot;updatedMCPToolOutput&quot;: {
+        &quot;content&quot;: [{ &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;[REDACTED: 3 rows removed]&quot; }]
+      }
+  }}
+         |
+         v
+Hook engine replaces MCP result with hook&#39;s version
+         |
+         v
+LLM sees only the filtered output</code></pre>
+<h3 id="implementation-1">Implementation</h3>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hooks.ts — processPostToolUseResults()</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PostToolUseHookOutput {</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  hookEventName<span class="op">:</span> <span class="st">&quot;PostToolUse&quot;</span><span class="op">;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  updatedMCPToolOutput<span class="op">?:</span> MCPToolResult<span class="op">;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  outputToAppend<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">processPostToolUseResults</span>(</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>  toolName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>  originalOutput<span class="op">:</span> ToolResult<span class="op">,</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>  hookResults<span class="op">:</span> HookResult[]<span class="op">,</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> ToolResult {</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> currentOutput <span class="op">=</span> originalOutput<span class="op">;</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> result <span class="kw">of</span> hookResults) {</span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parsed <span class="op">=</span> <span class="fu">parseHookOutput</span>(result<span class="op">.</span><span class="at">stdoutOutput</span>)<span class="op">;</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// MCP output replacement — only for MCP tools</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (parsed<span class="op">?.</span><span class="at">updatedMCPToolOutput</span> <span class="op">&amp;&amp;</span> <span class="fu">isMCPTool</span>(toolName)) {</span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>      currentOutput <span class="op">=</span> {</span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">...</span>currentOutput<span class="op">,</span></span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>        content<span class="op">:</span> parsed<span class="op">.</span><span class="at">updatedMCPToolOutput</span><span class="op">.</span><span class="at">content</span><span class="op">,</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>      }<span class="op">;</span></span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Generic output append — works for all tools</span></span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (parsed<span class="op">?.</span><span class="at">outputToAppend</span>) {</span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>      currentOutput <span class="op">=</span> <span class="fu">appendToOutput</span>(currentOutput<span class="op">,</span> parsed<span class="op">.</span><span class="at">outputToAppend</span>)<span class="op">;</span></span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> currentOutput<span class="op">;</span></span>
+<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="why-mcp-only">Why MCP-Only?</h3>
+<p>The restriction to MCP tools is deliberate. Built-in tools (Bash,
+FileRead, FileWrite) have outputs that the agent loop itself depends on
+— file contents for edit verification, exit codes for error handling,
+search results for navigation. Allowing hooks to silently replace these
+outputs would break the agent's internal consistency checks.</p>
+<p>MCP tools, by contrast, are opaque to the agent loop. Their outputs
+are passed straight to the LLM with no internal interpretation. This
+makes them safe targets for transformation.</p>
+<h3 id="the-outputtoappend-escape-hatch">The <code>outputToAppend</code>
+Escape Hatch</h3>
+<p>For built-in tools, <code>outputToAppend</code> provides a less
+powerful but safer alternative. Instead of replacing the output, it
+appends text. A linting hook can append "Warning: this file has 3 lint
+errors" to a FileWrite result without disturbing the original write
+confirmation that the agent loop needs to verify the edit succeeded.</p>
+<hr />
+<h2 id="193-initialusermessage--auto-prompting-at-session-start">19.3
+<code>initialUserMessage</code> — Auto-Prompting at Session Start</h2>
+<p><code>SessionStart</code> hooks can return an
+<code>initialUserMessage</code> field that gets injected as the first
+user message in the conversation. This turns hooks into automated
+workflow triggers.</p>
+<h3 id="use-cases">Use Cases</h3>
+<ul>
+<li><strong>CI/CD mode:</strong> A hook detects environment variables
+indicating the session is running in a CI pipeline and injects "Run all
+tests and report failures" as the initial prompt.</li>
+<li><strong>Code review mode:</strong> A hook detects uncommitted
+changes and injects "Review the staged changes for security
+issues."</li>
+<li><strong>Resume mode:</strong> A hook loads the last session's
+context from a file and injects "Continue from where we left off:
+[context]."</li>
+</ul>
+<h3 id="implementation-2">Implementation</h3>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hooks.ts — processSessionStartResults()</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SessionStartHookOutput {</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  hookEventName<span class="op">:</span> <span class="st">&quot;SessionStart&quot;</span><span class="op">;</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  initialUserMessage<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  watchPaths<span class="op">?:</span> <span class="dt">string</span>[]<span class="op">;</span>  <span class="co">// covered in 19.4</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">processSessionStartResults</span>(</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  hookResults<span class="op">:</span> HookResult[]<span class="op">,</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> SessionStartOutcome {</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> initialMessage<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">undefined</span><span class="op">;</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> watchPaths<span class="op">:</span> <span class="dt">string</span>[] <span class="op">=</span> []<span class="op">;</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> result <span class="kw">of</span> hookResults) {</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parsed <span class="op">=</span> <span class="fu">parseHookOutput</span>(result<span class="op">.</span><span class="at">stdoutOutput</span>)<span class="op">;</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (parsed<span class="op">?.</span><span class="at">initialUserMessage</span>) {</span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Last writer wins — later hooks override earlier ones</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>      initialMessage <span class="op">=</span> parsed<span class="op">.</span><span class="at">initialUserMessage</span><span class="op">;</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (parsed<span class="op">?.</span><span class="at">watchPaths</span>) {</span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>      watchPaths<span class="op">.</span><span class="fu">push</span>(<span class="op">...</span>parsed<span class="op">.</span><span class="at">watchPaths</span>)<span class="op">;</span></span>
+<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-27"><a href="#cb7-27" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { initialMessage<span class="op">,</span> watchPaths }<span class="op">;</span></span>
+<span id="cb7-28"><a href="#cb7-28" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="the-last-writer-wins-decision">The "Last Writer Wins"
+Decision</h3>
+<p>When multiple <code>SessionStart</code> hooks return
+<code>initialUserMessage</code>, the last one wins. This was chosen over
+alternatives:</p>
+<table>
+<thead>
+<tr>
+<th>Strategy</th>
+<th>Problem</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First writer wins</td>
+<td>Later, higher-priority hooks cannot override</td>
+</tr>
+<tr>
+<td>Concatenate all</td>
+<td>Creates incoherent prompts ("Run tests. Also review code. Also
+deploy.")</td>
+</tr>
+<tr>
+<td>Last writer wins</td>
+<td>Higher-priority hooks (loaded later) naturally override</td>
+</tr>
+<tr>
+<td>Error on conflict</td>
+<td>Too restrictive for extensible systems</td>
+</tr>
+</tbody>
+</table>
+<p>The ordering follows the hook registration priority from Chapter 18:
+managed hooks load before project hooks, which load before user hooks.
+Since user hooks load last and we use "last writer wins," user-level
+hooks always override managed hooks for initial messages. If the inverse
+priority is needed, the managed hook can use the <code>once: true</code>
+flag with a higher priority marker.</p>
+<h3 id="auto-submit-behavior">Auto-Submit Behavior</h3>
+<p>The initial message is not merely placed in the input buffer — it is
+auto-submitted. The session start sequence treats it as if the user had
+typed and pressed Enter:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// sessionInit.ts</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">initializeSession</span>(config<span class="op">:</span> SessionConfig)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Run SessionStart hooks</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> hookOutcome <span class="op">=</span> <span class="cf">await</span> <span class="fu">runSessionStartHooks</span>(config)<span class="op">;</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// If a hook provided an initial message, auto-submit it</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (hookOutcome<span class="op">.</span><span class="at">initialMessage</span>) {</span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">submitUserMessage</span>(hookOutcome<span class="op">.</span><span class="at">initialMessage</span><span class="op">,</span> {</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>      source<span class="op">:</span> <span class="st">&quot;hook&quot;</span><span class="op">,</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>      autoSubmit<span class="op">:</span> <span class="kw">true</span><span class="op">,</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Register any file watchers</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (hookOutcome<span class="op">.</span><span class="at">watchPaths</span><span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>    <span class="fu">registerFileWatchers</span>(hookOutcome<span class="op">.</span><span class="at">watchPaths</span>)<span class="op">;</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>source: "hook"</code> annotation ensures telemetry
+correctly attributes the message to automation rather than user input.
+This distinction matters for usage analytics and for the auto-mode
+classifier (Chapter 16), which may treat hook-initiated prompts
+differently from user-initiated ones.</p>
+<hr />
+<h2 id="194-watchpaths--file-watcher-registration">19.4
+<code>watchPaths</code> — File Watcher Registration</h2>
+<p><code>SessionStart</code> hooks can return a <code>watchPaths</code>
+array containing file or directory paths. The hook engine registers
+<code>fs.watch</code> listeners on these paths and fires
+<code>FileChanged</code> events whenever modifications are detected.</p>
+<h3 id="architecture">Architecture</h3>
+<pre><code>SessionStart hook returns:
+  { &quot;watchPaths&quot;: [&quot;/project/src&quot;, &quot;/project/config.yaml&quot;] }
+         |
+         v
+Hook engine calls registerFileWatchers()
+         |
+         v
+fs.watch(&quot;/project/src&quot;, { recursive: true })
+fs.watch(&quot;/project/config.yaml&quot;)
+         |
+         v
+File changes detected
+         |
+         v
+FileChanged hook event fires with:
+  { &quot;path&quot;: &quot;/project/src/auth.ts&quot;,
+    &quot;changeType&quot;: &quot;modify&quot; }</code></pre>
+<h3 id="implementation-3">Implementation</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// fileWatcher.ts</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> WatchEntry {</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  path<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  watcher<span class="op">:</span> FSWatcher<span class="op">;</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  debounceTimer<span class="op">?:</span> NodeJS<span class="op">.</span><span class="at">Timeout</span><span class="op">;</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEBOUNCE_MS <span class="op">=</span> <span class="dv">300</span><span class="op">;</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> activeWatchers<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> WatchEntry<span class="op">&gt;</span> <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span>()<span class="op">;</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">registerFileWatchers</span>(paths<span class="op">:</span> <span class="dt">string</span>[])<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> watchPath <span class="kw">of</span> paths) {</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Prevent duplicate watchers</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (activeWatchers<span class="op">.</span><span class="fu">has</span>(watchPath)) <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> resolvedPath <span class="op">=</span> path<span class="op">.</span><span class="fu">resolve</span>(watchPath)<span class="op">;</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Validate path exists and is within project boundary</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="fu">isWithinProjectRoot</span>(resolvedPath)) {</span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>      <span class="fu">logWarning</span>(<span class="vs">`watchPaths: </span><span class="sc">${</span>watchPath<span class="sc">}</span><span class="vs"> is outside project root, skipping`</span>)<span class="op">;</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>      <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> isDir <span class="op">=</span> fs<span class="op">.</span><span class="fu">statSync</span>(resolvedPath<span class="op">,</span> { throwIfNoEntry<span class="op">:</span> <span class="kw">false</span> })<span class="op">?.</span><span class="fu">isDirectory</span>()<span class="op">;</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span> {</span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> watcher <span class="op">=</span> fs<span class="op">.</span><span class="fu">watch</span>(</span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>        resolvedPath<span class="op">,</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>        { recursive<span class="op">:</span> isDir <span class="op">??</span> <span class="kw">false</span> }<span class="op">,</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>        (eventType<span class="op">,</span> filename) <span class="kw">=&gt;</span> {</span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>          <span class="fu">handleFileChange</span>(resolvedPath<span class="op">,</span> eventType<span class="op">,</span> filename)<span class="op">;</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>        }<span class="op">,</span></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>      )<span class="op">;</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>      watcher<span class="op">.</span><span class="fu">on</span>(<span class="st">&quot;error&quot;</span><span class="op">,</span> (err) <span class="kw">=&gt;</span> {</span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a>        <span class="fu">logWarning</span>(<span class="vs">`watchPaths: watcher error for </span><span class="sc">${</span>watchPath<span class="sc">}</span><span class="vs">: </span><span class="sc">${</span>err<span class="op">.</span><span class="at">message</span><span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a>        <span class="fu">cleanupWatcher</span>(watchPath)<span class="op">;</span></span>
+<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a>      })<span class="op">;</span></span>
+<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a>      activeWatchers<span class="op">.</span><span class="fu">set</span>(watchPath<span class="op">,</span> { path<span class="op">:</span> resolvedPath<span class="op">,</span> watcher })<span class="op">;</span></span>
+<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">catch</span> (err) {</span>
+<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a>      <span class="fu">logWarning</span>(<span class="vs">`watchPaths: failed to watch </span><span class="sc">${</span>watchPath<span class="sc">}</span><span class="vs">: </span><span class="sc">${</span>(err <span class="im">as</span> <span class="bu">Error</span>)<span class="op">.</span><span class="at">message</span><span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-47"><a href="#cb10-47" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">handleFileChange</span>(</span>
+<span id="cb10-48"><a href="#cb10-48" aria-hidden="true" tabindex="-1"></a>  basePath<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>  eventType<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb10-50"><a href="#cb10-50" aria-hidden="true" tabindex="-1"></a>  filename<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">,</span></span>
+<span id="cb10-51"><a href="#cb10-51" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb10-52"><a href="#cb10-52" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> fullPath <span class="op">=</span> filename <span class="op">?</span> path<span class="op">.</span><span class="fu">join</span>(basePath<span class="op">,</span> filename) <span class="op">:</span> basePath<span class="op">;</span></span>
+<span id="cb10-53"><a href="#cb10-53" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> entry <span class="op">=</span> activeWatchers<span class="op">.</span><span class="fu">get</span>(basePath)<span class="op">;</span></span>
+<span id="cb10-54"><a href="#cb10-54" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>entry) <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-56"><a href="#cb10-56" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Debounce: editors save files in multiple steps (write tmp, rename)</span></span>
+<span id="cb10-57"><a href="#cb10-57" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (entry<span class="op">.</span><span class="at">debounceTimer</span>) <span class="pp">clearTimeout</span>(entry<span class="op">.</span><span class="at">debounceTimer</span>)<span class="op">;</span></span>
+<span id="cb10-58"><a href="#cb10-58" aria-hidden="true" tabindex="-1"></a>  entry<span class="op">.</span><span class="at">debounceTimer</span> <span class="op">=</span> <span class="pp">setTimeout</span>(() <span class="kw">=&gt;</span> {</span>
+<span id="cb10-59"><a href="#cb10-59" aria-hidden="true" tabindex="-1"></a>    <span class="fu">runHooksForEvent</span>(<span class="st">&quot;FileChanged&quot;</span><span class="op">,</span> {</span>
+<span id="cb10-60"><a href="#cb10-60" aria-hidden="true" tabindex="-1"></a>      path<span class="op">:</span> fullPath<span class="op">,</span></span>
+<span id="cb10-61"><a href="#cb10-61" aria-hidden="true" tabindex="-1"></a>      changeType<span class="op">:</span> eventType <span class="op">===</span> <span class="st">&quot;rename&quot;</span> <span class="op">?</span> <span class="st">&quot;rename&quot;</span> <span class="op">:</span> <span class="st">&quot;modify&quot;</span><span class="op">,</span></span>
+<span id="cb10-62"><a href="#cb10-62" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb10-63"><a href="#cb10-63" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span> DEBOUNCE_MS)<span class="op">;</span></span>
+<span id="cb10-64"><a href="#cb10-64" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="debouncing">Debouncing</h3>
+<p>The 300ms debounce is critical. Text editors like VS Code write files
+through a temporary-rename cycle: write to <code>.tmp</code>,
+<code>fsync</code>, rename to target. Without debouncing, a single save
+triggers two or three <code>FileChanged</code> events. The debounce
+collapses these into one.</p>
+<h3 id="security-boundary">Security Boundary</h3>
+<p>Watch paths are validated against the project root. A hook cannot
+register watchers for <code>/etc/passwd</code> or <code>~/.ssh/</code>.
+This prevents a malicious plugin hook from monitoring sensitive system
+files. The validation function uses <code>path.resolve()</code> to
+canonicalize the path before checking the prefix, preventing traversal
+attacks like <code>watchPaths: ["/project/../../etc"]</code>.</p>
+<h3 id="cleanup">Cleanup</h3>
+<p>Watchers are cleaned up on session end. The
+<code>cleanupAllWatchers()</code> function is called from the session
+teardown sequence:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">cleanupAllWatchers</span>()<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [watchPath<span class="op">,</span> entry] <span class="kw">of</span> activeWatchers) {</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (entry<span class="op">.</span><span class="at">debounceTimer</span>) <span class="pp">clearTimeout</span>(entry<span class="op">.</span><span class="at">debounceTimer</span>)<span class="op">;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    entry<span class="op">.</span><span class="at">watcher</span><span class="op">.</span><span class="fu">close</span>()<span class="op">;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  activeWatchers<span class="op">.</span><span class="fu">clear</span>()<span class="op">;</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<hr />
+<h2 id="195-claude_env_file--environment-variable-injection">19.5
+<code>CLAUDE_ENV_FILE</code> — Environment Variable Injection</h2>
+<p>Hooks need environment variables. A secret-scanning hook needs to
+know the project root. A linting hook needs the path to the linter
+config. But embedding environment variables directly in
+<code>settings.json</code> is fragile — they change across machines,
+across projects, and across CI environments.</p>
+<p>The <code>CLAUDE_ENV_FILE</code> protocol solves this by pointing to
+a file that contains key-value pairs. The hook engine reads this file at
+session start and injects its contents into the environment of every
+hook subprocess.</p>
+<h3 id="the-protocol">The Protocol</h3>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Set in the shell environment before launching the agent</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">CLAUDE_ENV_FILE</span><span class="op">=</span><span class="st">&quot;/path/to/env-vars.txt&quot;</span></span></code></pre></div>
+<p>The env file uses a simple format:</p>
+<pre><code># Comments are allowed
+PROJECT_ROOT=/Users/dev/myproject
+LINT_CONFIG=/Users/dev/myproject/.eslintrc.js
+CI_MODE=true
+CUSTOM_HOOK_DATA=some-value</code></pre>
+<h3 id="implementation-4">Implementation</h3>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// envFile.ts</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> ENV_FILE_VAR <span class="op">=</span> <span class="st">&quot;CLAUDE_ENV_FILE&quot;</span><span class="op">;</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> EnvFileResult {</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  variables<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;;</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>  errors<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">loadEnvFile</span>()<span class="op">:</span> EnvFileResult {</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> envFilePath <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span>[ENV_FILE_VAR]<span class="op">;</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>envFilePath) <span class="cf">return</span> { variables<span class="op">:</span> {}<span class="op">,</span> errors<span class="op">:</span> [] }<span class="op">;</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> resolvedPath <span class="op">=</span> path<span class="op">.</span><span class="fu">resolve</span>(envFilePath)<span class="op">;</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> errors<span class="op">:</span> <span class="dt">string</span>[] <span class="op">=</span> []<span class="op">;</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Security: env file must be owned by current user</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">try</span> {</span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> stat <span class="op">=</span> fs<span class="op">.</span><span class="fu">statSync</span>(resolvedPath)<span class="op">;</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (stat<span class="op">.</span><span class="at">uid</span> <span class="op">!==</span> <span class="bu">process</span><span class="op">.</span><span class="fu">getuid</span><span class="op">?.</span>()) {</span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>      errors<span class="op">.</span><span class="fu">push</span>(</span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`</span><span class="sc">${</span>ENV_FILE_VAR<span class="sc">}</span><span class="vs">: </span><span class="sc">${</span>resolvedPath<span class="sc">}</span><span class="vs"> is not owned by current user, skipping`</span><span class="op">,</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>      )<span class="op">;</span></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> { variables<span class="op">:</span> {}<span class="op">,</span> errors }<span class="op">;</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">catch</span> {</span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>    errors<span class="op">.</span><span class="fu">push</span>(<span class="vs">`</span><span class="sc">${</span>ENV_FILE_VAR<span class="sc">}</span><span class="vs">: </span><span class="sc">${</span>resolvedPath<span class="sc">}</span><span class="vs"> does not exist`</span>)<span class="op">;</span></span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { variables<span class="op">:</span> {}<span class="op">,</span> errors }<span class="op">;</span></span>
+<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-30"><a href="#cb14-30" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> content <span class="op">=</span> fs<span class="op">.</span><span class="fu">readFileSync</span>(resolvedPath<span class="op">,</span> <span class="st">&quot;utf-8&quot;</span>)<span class="op">;</span></span>
+<span id="cb14-31"><a href="#cb14-31" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> variables<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;</span> <span class="op">=</span> {}<span class="op">;</span></span>
+<span id="cb14-32"><a href="#cb14-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-33"><a href="#cb14-33" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> line <span class="kw">of</span> content<span class="op">.</span><span class="fu">split</span>(<span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)) {</span>
+<span id="cb14-34"><a href="#cb14-34" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> trimmed <span class="op">=</span> line<span class="op">.</span><span class="fu">trim</span>()<span class="op">;</span></span>
+<span id="cb14-35"><a href="#cb14-35" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Skip comments and blank lines</span></span>
+<span id="cb14-36"><a href="#cb14-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>trimmed <span class="op">||</span> trimmed<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&quot;#&quot;</span>)) <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb14-37"><a href="#cb14-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-38"><a href="#cb14-38" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> eqIdx <span class="op">=</span> trimmed<span class="op">.</span><span class="fu">indexOf</span>(<span class="st">&quot;=&quot;</span>)<span class="op">;</span></span>
+<span id="cb14-39"><a href="#cb14-39" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (eqIdx <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) {</span>
+<span id="cb14-40"><a href="#cb14-40" aria-hidden="true" tabindex="-1"></a>      errors<span class="op">.</span><span class="fu">push</span>(<span class="vs">`</span><span class="sc">${</span>ENV_FILE_VAR<span class="sc">}</span><span class="vs">: invalid line (no =): </span><span class="sc">${</span>trimmed<span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb14-41"><a href="#cb14-41" aria-hidden="true" tabindex="-1"></a>      <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb14-42"><a href="#cb14-42" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb14-43"><a href="#cb14-43" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-44"><a href="#cb14-44" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> key <span class="op">=</span> trimmed<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> eqIdx)<span class="op">.</span><span class="fu">trim</span>()<span class="op">;</span></span>
+<span id="cb14-45"><a href="#cb14-45" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> value <span class="op">=</span> trimmed<span class="op">.</span><span class="fu">slice</span>(eqIdx <span class="op">+</span> <span class="dv">1</span>)<span class="op">.</span><span class="fu">trim</span>()<span class="op">;</span></span>
+<span id="cb14-46"><a href="#cb14-46" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-47"><a href="#cb14-47" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Validate key format</span></span>
+<span id="cb14-48"><a href="#cb14-48" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="ss">/</span><span class="sc">^[A-Za-z_][A-Za-z0-9_]*$</span><span class="ss">/</span><span class="op">.</span><span class="fu">test</span>(key)) {</span>
+<span id="cb14-49"><a href="#cb14-49" aria-hidden="true" tabindex="-1"></a>      errors<span class="op">.</span><span class="fu">push</span>(<span class="vs">`</span><span class="sc">${</span>ENV_FILE_VAR<span class="sc">}</span><span class="vs">: invalid variable name: </span><span class="sc">${</span>key<span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb14-50"><a href="#cb14-50" aria-hidden="true" tabindex="-1"></a>      <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb14-51"><a href="#cb14-51" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb14-52"><a href="#cb14-52" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-53"><a href="#cb14-53" aria-hidden="true" tabindex="-1"></a>    variables[key] <span class="op">=</span> value<span class="op">;</span></span>
+<span id="cb14-54"><a href="#cb14-54" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb14-55"><a href="#cb14-55" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-56"><a href="#cb14-56" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { variables<span class="op">,</span> errors }<span class="op">;</span></span>
+<span id="cb14-57"><a href="#cb14-57" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="injection-point">Injection Point</h3>
+<p>The loaded variables are merged into the environment of every hook
+subprocess, with explicit precedence: env-file variables override
+neither the parent process environment nor hook-specific environment
+variables set in <code>settings.json</code>. They fill the gap between
+"globally available" and "hook-specifically configured":</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">buildHookEnvironment</span>(</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  hookConfig<span class="op">:</span> HookConfig<span class="op">,</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  envFileVars<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;</span> {</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span><span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">,</span>                    <span class="co">// Base: parent process env</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span>envFileVars<span class="op">,</span>                    <span class="co">// Layer 2: env file variables</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span>hookConfig<span class="op">.</span><span class="at">env</span><span class="op">,</span>                 <span class="co">// Layer 3: hook-specific env from settings</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    CLAUDE_HOOK_EVENT<span class="op">:</span> hookConfig<span class="op">.</span><span class="at">event</span><span class="op">,</span> <span class="co">// Always injected</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>    CLAUDE_SESSION_ID<span class="op">:</span> <span class="fu">getSessionId</span>()<span class="op">,</span> <span class="co">// Always injected</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>  } <span class="im">as</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;;</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="ownership-check">Ownership Check</h3>
+<p>The ownership check (<code>stat.uid !== process.getuid()</code>)
+prevents a privilege escalation vector. If the agent runs as user A but
+the env file is writable by user B, user B could inject arbitrary
+environment variables into user A's hook processes. This matters in
+multi-user CI systems where shared directories are common.</p>
+<h3 id="why-not-env-parsing">Why Not <code>.env</code> Parsing?</h3>
+<p>The format deliberately avoids dotenv conventions like quoted values
+(<code>KEY="value"</code>), variable interpolation
+(<code>KEY=$OTHER</code>), and multi-line values. These features add
+parsing complexity and attack surface. The env file format is
+intentionally dumb — key=value, one per line, no escaping — because its
+contents are injected into subprocess environments where shell
+interpretation has already happened.</p>
+<hr />
+<h2 id="196-async-hooks-with-asyncrewake">19.6 Async Hooks with
+<code>asyncRewake</code></h2>
+<p>Most hooks run synchronously on the critical path: the tool execution
+blocks until all hooks complete. But some hooks need minutes, not
+milliseconds — a security scanner, a large test suite, a deployment
+verification. Running these synchronously would freeze the agent. The
+<code>asyncRewake</code> capability lets a hook run in the background
+and wake the agent when it finishes.</p>
+<h3 id="how-it-works">How It Works</h3>
+<p>A hook declares itself asynchronous by returning the
+<code>asyncRewake</code> field:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hookSpecificOutput&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hookEventName&quot;</span><span class="fu">:</span> <span class="st">&quot;PostToolUse&quot;</span><span class="fu">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;asyncRewake&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;taskId&quot;</span><span class="fu">:</span> <span class="st">&quot;security-scan-a1b2c3&quot;</span><span class="fu">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;statusMessage&quot;</span><span class="fu">:</span> <span class="st">&quot;Running security scan...&quot;</span><span class="fu">,</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;pollIntervalMs&quot;</span><span class="fu">:</span> <span class="dv">5000</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>The hook engine immediately proceeds (does not block), creates a
+background task to track the async hook, and periodically polls for
+completion.</p>
+<h3 id="implementation-5">Implementation</h3>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// asyncHookManager.ts</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> AsyncHookTask {</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  taskId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  hookConfig<span class="op">:</span> HookConfig<span class="op">;</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  statusMessage<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  pollIntervalMs<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  startTime<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  completed<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>  result<span class="op">?:</span> HookResult<span class="op">;</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> asyncTasks<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> AsyncHookTask<span class="op">&gt;</span> <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span>()<span class="op">;</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MAX_ASYNC_TIMEOUT_MS <span class="op">=</span> <span class="dv">10</span> <span class="op">*</span> <span class="dv">60</span> <span class="op">*</span> <span class="dv">1000</span><span class="op">;</span> <span class="co">// 10 minutes</span></span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">registerAsyncHook</span>(</span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>  hookConfig<span class="op">:</span> HookConfig<span class="op">,</span></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>  asyncRewake<span class="op">:</span> AsyncRewakeConfig<span class="op">,</span></span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> task<span class="op">:</span> AsyncHookTask <span class="op">=</span> {</span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>    taskId<span class="op">:</span> asyncRewake<span class="op">.</span><span class="at">taskId</span><span class="op">,</span></span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a>    hookConfig<span class="op">,</span></span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a>    statusMessage<span class="op">:</span> asyncRewake<span class="op">.</span><span class="at">statusMessage</span><span class="op">,</span></span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a>    pollIntervalMs<span class="op">:</span> asyncRewake<span class="op">.</span><span class="at">pollIntervalMs</span> <span class="op">??</span> <span class="dv">5000</span><span class="op">,</span></span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>    startTime<span class="op">:</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>()<span class="op">,</span></span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a>    completed<span class="op">:</span> <span class="kw">false</span><span class="op">,</span></span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>  asyncTasks<span class="op">.</span><span class="fu">set</span>(task<span class="op">.</span><span class="at">taskId</span><span class="op">,</span> task)<span class="op">;</span></span>
+<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Start polling loop</span></span>
+<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scheduleAsyncPoll</span>(task)<span class="op">;</span></span>
+<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-34"><a href="#cb17-34" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">scheduleAsyncPoll</span>(task<span class="op">:</span> AsyncHookTask)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb17-35"><a href="#cb17-35" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> timer <span class="op">=</span> <span class="pp">setInterval</span>(<span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb17-36"><a href="#cb17-36" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Timeout check</span></span>
+<span id="cb17-37"><a href="#cb17-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> task<span class="op">.</span><span class="at">startTime</span> <span class="op">&gt;</span> MAX_ASYNC_TIMEOUT_MS) {</span>
+<span id="cb17-38"><a href="#cb17-38" aria-hidden="true" tabindex="-1"></a>      <span class="pp">clearInterval</span>(timer)<span class="op">;</span></span>
+<span id="cb17-39"><a href="#cb17-39" aria-hidden="true" tabindex="-1"></a>      task<span class="op">.</span><span class="at">completed</span> <span class="op">=</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb17-40"><a href="#cb17-40" aria-hidden="true" tabindex="-1"></a>      task<span class="op">.</span><span class="at">result</span> <span class="op">=</span> {</span>
+<span id="cb17-41"><a href="#cb17-41" aria-hidden="true" tabindex="-1"></a>        exitCode<span class="op">:</span> <span class="dv">1</span><span class="op">,</span></span>
+<span id="cb17-42"><a href="#cb17-42" aria-hidden="true" tabindex="-1"></a>        stdoutOutput<span class="op">:</span> <span class="st">&quot;&quot;</span><span class="op">,</span></span>
+<span id="cb17-43"><a href="#cb17-43" aria-hidden="true" tabindex="-1"></a>        stderrOutput<span class="op">:</span> <span class="vs">`Async hook </span><span class="sc">${</span>task<span class="op">.</span><span class="at">taskId</span><span class="sc">}</span><span class="vs"> timed out after 10 minutes`</span><span class="op">,</span></span>
+<span id="cb17-44"><a href="#cb17-44" aria-hidden="true" tabindex="-1"></a>      }<span class="op">;</span></span>
+<span id="cb17-45"><a href="#cb17-45" aria-hidden="true" tabindex="-1"></a>      <span class="fu">emitAsyncHookComplete</span>(task)<span class="op">;</span></span>
+<span id="cb17-46"><a href="#cb17-46" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb17-47"><a href="#cb17-47" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb17-48"><a href="#cb17-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-49"><a href="#cb17-49" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Poll the hook&#39;s completion signal</span></span>
+<span id="cb17-50"><a href="#cb17-50" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> pollResult <span class="op">=</span> <span class="cf">await</span> <span class="fu">pollAsyncHook</span>(task)<span class="op">;</span></span>
+<span id="cb17-51"><a href="#cb17-51" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (pollResult<span class="op">.</span><span class="at">completed</span>) {</span>
+<span id="cb17-52"><a href="#cb17-52" aria-hidden="true" tabindex="-1"></a>      <span class="pp">clearInterval</span>(timer)<span class="op">;</span></span>
+<span id="cb17-53"><a href="#cb17-53" aria-hidden="true" tabindex="-1"></a>      task<span class="op">.</span><span class="at">completed</span> <span class="op">=</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb17-54"><a href="#cb17-54" aria-hidden="true" tabindex="-1"></a>      task<span class="op">.</span><span class="at">result</span> <span class="op">=</span> pollResult<span class="op">.</span><span class="at">result</span><span class="op">;</span></span>
+<span id="cb17-55"><a href="#cb17-55" aria-hidden="true" tabindex="-1"></a>      <span class="fu">emitAsyncHookComplete</span>(task)<span class="op">;</span></span>
+<span id="cb17-56"><a href="#cb17-56" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb17-57"><a href="#cb17-57" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span> task<span class="op">.</span><span class="at">pollIntervalMs</span>)<span class="op">;</span></span>
+<span id="cb17-58"><a href="#cb17-58" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="the-rewake-mechanism">The Rewake Mechanism</h3>
+<p>When the async hook completes, the engine emits an
+<code>AsyncHookComplete</code> event that the agent loop listens for. If
+the agent is idle (waiting for user input), the completion can inject a
+system message summarizing the result:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">emitAsyncHookComplete</span>(task<span class="op">:</span> AsyncHookTask)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> result <span class="op">=</span> task<span class="op">.</span><span class="at">result</span><span class="op">;</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>result) <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// If the hook blocked (exit code 2), inject an urgent message</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (result<span class="op">.</span><span class="at">exitCode</span> <span class="op">===</span> <span class="dv">2</span>) {</span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">injectSystemMessage</span>(</span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>      <span class="vs">`[Hook Alert] </span><span class="sc">${</span>task<span class="op">.</span><span class="at">statusMessage</span><span class="sc">}</span><span class="vs"> completed with a block: `</span> <span class="op">+</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>      <span class="vs">`</span><span class="sc">${</span>result<span class="op">.</span><span class="at">stderrOutput</span><span class="sc">}</span><span class="vs">`</span><span class="op">,</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>      { priority<span class="op">:</span> <span class="st">&quot;high&quot;</span> }<span class="op">,</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>    )<span class="op">;</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">else</span> <span class="cf">if</span> (result<span class="op">.</span><span class="at">stdoutOutput</span><span class="op">.</span><span class="fu">trim</span>()) {</span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">injectSystemMessage</span>(</span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>      <span class="vs">`[Hook Complete] </span><span class="sc">${</span>task<span class="op">.</span><span class="at">statusMessage</span><span class="sc">}</span><span class="vs">: </span><span class="sc">${</span>result<span class="op">.</span><span class="at">stdoutOutput</span><span class="op">.</span><span class="fu">trim</span>()<span class="sc">}</span><span class="vs">`</span><span class="op">,</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a>      { priority<span class="op">:</span> <span class="st">&quot;normal&quot;</span> }<span class="op">,</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>    )<span class="op">;</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>  asyncTasks<span class="op">.</span><span class="fu">delete</span>(task<span class="op">.</span><span class="at">taskId</span>)<span class="op">;</span></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="integration-with-the-task-system">Integration with the Task
+System</h3>
+<p>Async hooks integrate with the task management system covered in
+Chapter 14. Each async hook creates a background task of type
+<code>hook_async</code>, visible through the task list UI. This lets the
+user monitor long-running hooks, cancel them, and see their results
+alongside other background tasks.</p>
+<h3 id="timeout-and-cleanup">Timeout and Cleanup</h3>
+<p>The 10-minute maximum prevents forgotten async hooks from leaking
+resources indefinitely. On session teardown, all active async hooks are
+cancelled:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">cleanupAsyncHooks</span>()<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [taskId<span class="op">,</span> task] <span class="kw">of</span> asyncTasks) {</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>task<span class="op">.</span><span class="at">completed</span>) {</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>      <span class="fu">logInfo</span>(<span class="vs">`Cancelling async hook: </span><span class="sc">${</span>taskId<span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Kill any subprocess if still running</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>      <span class="fu">killAsyncHookProcess</span>(task)<span class="op">;</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>  asyncTasks<span class="op">.</span><span class="fu">clear</span>()<span class="op">;</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<hr />
+<h2 id="197-once-only-hooks-with-once-true">19.7 Once-Only Hooks with
+<code>once: true</code></h2>
+<p>Some hooks should fire exactly once per session. A session-setup hook
+that configures environment variables, a one-time authentication check,
+a workspace validation that only needs to run when the agent starts —
+these all fit the once-only pattern.</p>
+<h3 id="configuration">Configuration</h3>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;PreToolUse&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;matcher&quot;</span><span class="fu">:</span> <span class="st">&quot;Bash&quot;</span><span class="fu">,</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>          <span class="fu">{</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;command&quot;</span><span class="fu">,</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;command&quot;</span><span class="fu">:</span> <span class="st">&quot;./.claude/hooks/check-auth.sh&quot;</span><span class="fu">,</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;once&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;timeout&quot;</span><span class="fu">:</span> <span class="dv">10000</span><span class="fu">,</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;statusMessage&quot;</span><span class="fu">:</span> <span class="st">&quot;Checking authentication...&quot;</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>          <span class="fu">}</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>        <span class="ot">]</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="implementation-6">Implementation</h3>
+<p>The implementation uses a <code>Set&lt;string&gt;</code> of hook
+identifiers that have already fired. The identifier is derived from the
+hook's command and event combination:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hooks.ts</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> firedOnceHooks<span class="op">:</span> <span class="bu">Set</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;</span> <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span>()<span class="op">;</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">buildOnceKey</span>(hookConfig<span class="op">:</span> HookConfig<span class="op">,</span> event<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Use command + event as the dedup key</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// This means the same script registered for different events</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// fires once PER EVENT, not once globally</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="vs">`</span><span class="sc">${</span><span class="bu">event</span><span class="sc">}</span><span class="vs">:</span><span class="sc">${</span>hookConfig<span class="op">.</span><span class="at">command</span><span class="sc">}</span><span class="vs">`</span><span class="op">;</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">shouldSkipOnceHook</span>(hookConfig<span class="op">:</span> HookConfig<span class="op">,</span> event<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>hookConfig<span class="op">.</span><span class="at">once</span>) <span class="cf">return</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> key <span class="op">=</span> <span class="fu">buildOnceKey</span>(hookConfig<span class="op">,</span> <span class="bu">event</span>)<span class="op">;</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> firedOnceHooks<span class="op">.</span><span class="fu">has</span>(key)<span class="op">;</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">markOnceHookFired</span>(hookConfig<span class="op">:</span> HookConfig<span class="op">,</span> event<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>hookConfig<span class="op">.</span><span class="at">once</span>) <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> key <span class="op">=</span> <span class="fu">buildOnceKey</span>(hookConfig<span class="op">,</span> <span class="bu">event</span>)<span class="op">;</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>  firedOnceHooks<span class="op">.</span><span class="fu">add</span>(key)<span class="op">;</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="per-event-not-global">Per-Event, Not Global</h3>
+<p>The dedup key includes the event name. If the same script is
+registered for both <code>PreToolUse</code> and <code>PostToolUse</code>
+with <code>once: true</code>, it fires once for each event — not once
+total. This matches the expected behavior: a hook that checks
+authentication before the first tool call should not suppress a
+different hook that logs the first tool result.</p>
+<h3 id="reset-on-compaction">Reset on Compaction</h3>
+<p>When the context is compacted (Chapter 6), once-hooks are optionally
+reset. The reasoning: if the conversation has been running long enough
+to trigger compaction, the session state may have drifted enough that
+re-running a once-hook is appropriate. This is configurable via
+<code>onceResetOnCompact: true</code>:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">handleCompactionEvent</span>()<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Reset once-hooks that opted into compaction reset</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> key <span class="kw">of</span> [<span class="op">...</span>firedOnceHooks]) {</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> hookConfig <span class="op">=</span> <span class="fu">lookupHookByKey</span>(key)<span class="op">;</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (hookConfig<span class="op">?.</span><span class="at">onceResetOnCompact</span>) {</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>      firedOnceHooks<span class="op">.</span><span class="fu">delete</span>(key)<span class="op">;</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<hr />
+<h2 id="198-conditional-execution-with-if-matchers">19.8 Conditional
+Execution with <code>if</code> Matchers</h2>
+<p>Chapter 18 introduced the <code>matcher</code> field that controls
+which tools trigger a hook. The <code>if</code> field extends this with
+pattern-matching syntax that provides finer-grained control.</p>
+<h3 id="syntax">Syntax</h3>
+<p>The <code>if</code> field uses the same <code>Tool(pattern)</code>
+syntax as the permission system (Chapter 15):</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;PreToolUse&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;if&quot;</span><span class="fu">:</span> <span class="st">&quot;Bash(git *)&quot;</span><span class="fu">,</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>          <span class="fu">{</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;command&quot;</span><span class="fu">,</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;command&quot;</span><span class="fu">:</span> <span class="st">&quot;./.claude/hooks/git-policy.sh&quot;</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>          <span class="fu">}</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>        <span class="ot">]</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>This hook fires only for Bash tool calls where the command starts
+with <code>git </code>. It will not fire for
+<code>Bash(npm install)</code> or
+<code>FileRead(src/main.ts)</code>.</p>
+<h3 id="pattern-language">Pattern Language</h3>
+<p>The pattern language is a subset of the permission rule syntax:</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Matches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Bash(git *)</code></td>
+<td>Any Bash command starting with "git "</td>
+</tr>
+<tr>
+<td><code>Bash(npm install *)</code></td>
+<td>npm install with any arguments</td>
+</tr>
+<tr>
+<td><code>FileWrite(src/**)</code></td>
+<td>File writes anywhere under src/</td>
+</tr>
+<tr>
+<td><code>FileRead(*.env)</code></td>
+<td>Reading any .env file</td>
+</tr>
+<tr>
+<td><code>mcp__*</code></td>
+<td>Any MCP tool invocation</td>
+</tr>
+<tr>
+<td><code>Bash(* --force *)</code></td>
+<td>Any command containing --force</td>
+</tr>
+</tbody>
+</table>
+<h3 id="implementation-7">Implementation</h3>
+<p>The <code>if</code> field is parsed into a <code>ToolPattern</code>
+at hook registration time, not at match time. This avoids re-parsing the
+pattern on every tool call:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hookMatcher.ts</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ToolPattern {</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  toolName<span class="op">:</span> <span class="dt">string</span><span class="op">;</span>       <span class="co">// &quot;Bash&quot;, &quot;FileWrite&quot;, &quot;*&quot;, etc.</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  argumentGlob<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span>  <span class="co">// The pattern inside parentheses</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">parseToolPattern</span>(pattern<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> ToolPattern <span class="op">|</span> <span class="dt">null</span> {</span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Pattern format: ToolName(glob) or ToolName or *</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> parenIdx <span class="op">=</span> pattern<span class="op">.</span><span class="fu">indexOf</span>(<span class="st">&quot;(&quot;</span>)<span class="op">;</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (parenIdx <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) {</span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { toolName<span class="op">:</span> pattern }<span class="op">;</span></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>pattern<span class="op">.</span><span class="fu">endsWith</span>(<span class="st">&quot;)&quot;</span>)) <span class="cf">return</span> <span class="kw">null</span><span class="op">;</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> toolName <span class="op">=</span> pattern<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> parenIdx)<span class="op">;</span></span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> argumentGlob <span class="op">=</span> pattern<span class="op">.</span><span class="fu">slice</span>(parenIdx <span class="op">+</span> <span class="dv">1</span><span class="op">,</span> <span class="op">-</span><span class="dv">1</span>)<span class="op">;</span></span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { toolName<span class="op">,</span> argumentGlob }<span class="op">;</span></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">matchesToolPattern</span>(</span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a>  pattern<span class="op">:</span> ToolPattern<span class="op">,</span></span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a>  toolName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>  toolInput<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;,</span></span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Tool name match (supports * wildcard)</span></span>
+<span id="cb24-28"><a href="#cb24-28" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (pattern<span class="op">.</span><span class="at">toolName</span> <span class="op">!==</span> <span class="st">&quot;*&quot;</span> <span class="op">&amp;&amp;</span> pattern<span class="op">.</span><span class="at">toolName</span> <span class="op">!==</span> toolName) {</span>
+<span id="cb24-29"><a href="#cb24-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb24-30"><a href="#cb24-30" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb24-31"><a href="#cb24-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-32"><a href="#cb24-32" aria-hidden="true" tabindex="-1"></a>  <span class="co">// If no argument glob, tool name match is sufficient</span></span>
+<span id="cb24-33"><a href="#cb24-33" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>pattern<span class="op">.</span><span class="at">argumentGlob</span>) <span class="cf">return</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb24-34"><a href="#cb24-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-35"><a href="#cb24-35" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Extract the matchable string from tool input</span></span>
+<span id="cb24-36"><a href="#cb24-36" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> matchString <span class="op">=</span> <span class="fu">extractMatchString</span>(toolName<span class="op">,</span> toolInput)<span class="op">;</span></span>
+<span id="cb24-37"><a href="#cb24-37" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">globMatch</span>(pattern<span class="op">.</span><span class="at">argumentGlob</span><span class="op">,</span> matchString)<span class="op">;</span></span>
+<span id="cb24-38"><a href="#cb24-38" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb24-39"><a href="#cb24-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-40"><a href="#cb24-40" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">extractMatchString</span>(</span>
+<span id="cb24-41"><a href="#cb24-41" aria-hidden="true" tabindex="-1"></a>  toolName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb24-42"><a href="#cb24-42" aria-hidden="true" tabindex="-1"></a>  toolInput<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;,</span></span>
+<span id="cb24-43"><a href="#cb24-43" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb24-44"><a href="#cb24-44" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Different tools expose different matchable fields</span></span>
+<span id="cb24-45"><a href="#cb24-45" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> (toolName) {</span>
+<span id="cb24-46"><a href="#cb24-46" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&quot;Bash&quot;</span><span class="op">:</span></span>
+<span id="cb24-47"><a href="#cb24-47" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> (toolInput<span class="op">.</span><span class="at">command</span> <span class="im">as</span> <span class="dt">string</span>) <span class="op">??</span> <span class="st">&quot;&quot;</span><span class="op">;</span></span>
+<span id="cb24-48"><a href="#cb24-48" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&quot;FileRead&quot;</span><span class="op">:</span></span>
+<span id="cb24-49"><a href="#cb24-49" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&quot;FileWrite&quot;</span><span class="op">:</span></span>
+<span id="cb24-50"><a href="#cb24-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&quot;FileEdit&quot;</span><span class="op">:</span></span>
+<span id="cb24-51"><a href="#cb24-51" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> (toolInput<span class="op">.</span><span class="at">file_path</span> <span class="im">as</span> <span class="dt">string</span>) <span class="op">??</span> <span class="st">&quot;&quot;</span><span class="op">;</span></span>
+<span id="cb24-52"><a href="#cb24-52" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&quot;GlobTool&quot;</span><span class="op">:</span></span>
+<span id="cb24-53"><a href="#cb24-53" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> (toolInput<span class="op">.</span><span class="at">pattern</span> <span class="im">as</span> <span class="dt">string</span>) <span class="op">??</span> <span class="st">&quot;&quot;</span><span class="op">;</span></span>
+<span id="cb24-54"><a href="#cb24-54" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&quot;GrepTool&quot;</span><span class="op">:</span></span>
+<span id="cb24-55"><a href="#cb24-55" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> (toolInput<span class="op">.</span><span class="at">pattern</span> <span class="im">as</span> <span class="dt">string</span>) <span class="op">??</span> <span class="st">&quot;&quot;</span><span class="op">;</span></span>
+<span id="cb24-56"><a href="#cb24-56" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span></span>
+<span id="cb24-57"><a href="#cb24-57" aria-hidden="true" tabindex="-1"></a>      <span class="co">// MCP tools: match on the full tool name</span></span>
+<span id="cb24-58"><a href="#cb24-58" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> toolName<span class="op">;</span></span>
+<span id="cb24-59"><a href="#cb24-59" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb24-60"><a href="#cb24-60" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="if-vs-matcher"><code>if</code> vs. <code>matcher</code></h3>
+<p>The <code>matcher</code> field and the <code>if</code> field serve
+different roles:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th><code>matcher</code></th>
+<th><code>if</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scope</td>
+<td>Tool name only</td>
+<td>Tool name + arguments</td>
+</tr>
+<tr>
+<td>Syntax</td>
+<td>Simple string (e.g., "Bash")</td>
+<td>Pattern (e.g., "Bash(git *)")</td>
+</tr>
+<tr>
+<td>Evaluation</td>
+<td>String equality</td>
+<td>Glob matching</td>
+</tr>
+<tr>
+<td>When to use</td>
+<td>Broad tool-type filtering</td>
+<td>Fine-grained argument matching</td>
+</tr>
+</tbody>
+</table>
+<p>They compose conjunctively: if both <code>matcher</code> and
+<code>if</code> are specified, both must match for the hook to fire.
+This lets you write
+<code>"matcher": "Bash", "if": "Bash(git push *)"</code> — though in
+practice, the <code>if</code> pattern alone is sufficient since it
+already implies the tool name.</p>
+<hr />
+<h2 id="199-plugin-sourced-hooks-with-hot-reload">19.9 Plugin-Sourced
+Hooks with Hot-Reload</h2>
+<p>Hooks do not have to live in <code>settings.json</code>. The plugin
+system (covered in detail in Chapter 37) can contribute hooks, and these
+hooks support hot-reload when the plugin is updated.</p>
+<h3 id="plugin-hook-discovery">Plugin Hook Discovery</h3>
+<p>When a plugin is loaded, the plugin loader scans its manifest for
+hook declarations:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co">// pluginLoader.ts — relevant excerpt</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginManifest {</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  skills<span class="op">?:</span> SkillDefinition[]<span class="op">;</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>  hooks<span class="op">?:</span> PluginHookDefinition[]<span class="op">;</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>  mcpServers<span class="op">?:</span> MCPServerDefinition[]<span class="op">;</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginHookDefinition {</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>  event<span class="op">:</span> HookEventName<span class="op">;</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>  matcher<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span><span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>  command<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>  timeout<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a>  once<span class="op">?:</span> <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a>  statusMessage<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="registration">Registration</h3>
+<p>Plugin hooks are registered with a <code>source: "plugin"</code>
+marker that distinguishes them from project and user hooks:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hookRegistry.ts</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> RegisteredHook {</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  config<span class="op">:</span> HookConfig<span class="op">;</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  source<span class="op">:</span> <span class="st">&quot;managed&quot;</span> <span class="op">|</span> <span class="st">&quot;project&quot;</span> <span class="op">|</span> <span class="st">&quot;user&quot;</span> <span class="op">|</span> <span class="st">&quot;plugin&quot;</span><span class="op">;</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  pluginName<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>  registeredAt<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">registerPluginHooks</span>(</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>  pluginName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>  hooks<span class="op">:</span> PluginHookDefinition[]<span class="op">,</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> hookDef <span class="kw">of</span> hooks) {</span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> config <span class="op">=</span> <span class="fu">convertPluginHookToConfig</span>(hookDef<span class="op">,</span> pluginName)<span class="op">;</span></span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>    <span class="fu">registerHook</span>({</span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>      config<span class="op">,</span></span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>      source<span class="op">:</span> <span class="st">&quot;plugin&quot;</span><span class="op">,</span></span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>      pluginName<span class="op">,</span></span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a>      registeredAt<span class="op">:</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>()<span class="op">,</span></span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="hot-reload">Hot-Reload</h3>
+<p>When a plugin is updated (via marketplace update or manual
+replacement), its hooks are re-registered without restarting the
+session:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">// pluginHotReload.ts</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">handlePluginUpdate</span>(</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>  pluginName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  newManifest<span class="op">:</span> PluginManifest<span class="op">,</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Step 1: Deregister all existing hooks from this plugin</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">deregisterPluginHooks</span>(pluginName)<span class="op">;</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Step 2: Register new hooks from updated manifest</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (newManifest<span class="op">.</span><span class="at">hooks</span>) {</span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">registerPluginHooks</span>(pluginName<span class="op">,</span> newManifest<span class="op">.</span><span class="at">hooks</span>)<span class="op">;</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Step 3: Clear once-fired state for this plugin&#39;s hooks</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">clearOnceStateForPlugin</span>(pluginName)<span class="op">;</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">logInfo</span>(<span class="vs">`Hot-reloaded hooks for plugin: </span><span class="sc">${</span>pluginName<span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">deregisterPluginHooks</span>(pluginName<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> hookRegistry <span class="op">=</span> <span class="fu">getHookRegistry</span>()<span class="op">;</span></span>
+<span id="cb27-22"><a href="#cb27-22" aria-hidden="true" tabindex="-1"></a>  hookRegistry<span class="op">.</span><span class="fu">removeWhere</span>(</span>
+<span id="cb27-23"><a href="#cb27-23" aria-hidden="true" tabindex="-1"></a>    (hook) <span class="kw">=&gt;</span> hook<span class="op">.</span><span class="at">source</span> <span class="op">===</span> <span class="st">&quot;plugin&quot;</span> <span class="op">&amp;&amp;</span> hook<span class="op">.</span><span class="at">pluginName</span> <span class="op">===</span> pluginName<span class="op">,</span></span>
+<span id="cb27-24"><a href="#cb27-24" aria-hidden="true" tabindex="-1"></a>  )<span class="op">;</span></span>
+<span id="cb27-25"><a href="#cb27-25" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="priority-ordering">Priority Ordering</h3>
+<p>Plugin hooks slot into the registration priority between managed
+hooks and project hooks:</p>
+<pre><code>Priority (highest first):
+  1. Managed hooks (enterprise policy)
+  2. Plugin hooks (third-party extensions)
+  3. Project hooks (from .claude/settings.json)
+  4. User hooks (from ~/.claude/settings.json)</code></pre>
+<p>This ordering means managed hooks can always override plugin
+behavior, while plugins override project-local hooks. The rationale: a
+security-focused plugin (like a corporate compliance scanner) should
+take precedence over project-level hooks that might be less
+stringent.</p>
+<h3 id="sandboxing">Sandboxing</h3>
+<p>Plugin hooks run with the same subprocess isolation as all other
+hooks — they inherit environment variables, respect timeout limits, and
+use the standard exit-code protocol. However, an additional constraint
+applies: plugin hooks cannot use the <code>updatedInput</code>
+capability unless the plugin is explicitly trusted by the user. This
+prevents a malicious plugin from silently rewriting tool arguments:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">shouldAllowUpdatedInput</span>(hook<span class="op">:</span> RegisteredHook)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (hook<span class="op">.</span><span class="at">source</span> <span class="op">!==</span> <span class="st">&quot;plugin&quot;</span>) <span class="cf">return</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Plugin hooks need explicit trust for input rewriting</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">isPluginTrustedForInputRewrite</span>(hook<span class="op">.</span><span class="at">pluginName</span><span class="op">!</span>)<span class="op">;</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<hr />
+<h2 id="1910-composing-capabilities">19.10 Composing Capabilities</h2>
+<p>The nine capabilities described above are not independent features —
+they compose. A single hook configuration can combine multiple
+capabilities:</p>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;PreToolUse&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;if&quot;</span><span class="fu">:</span> <span class="st">&quot;Bash(git push *)&quot;</span><span class="fu">,</span></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;once&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>          <span class="fu">{</span></span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;command&quot;</span><span class="fu">,</span></span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;command&quot;</span><span class="fu">:</span> <span class="st">&quot;./.claude/hooks/pre-push-check.sh&quot;</span><span class="fu">,</span></span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;timeout&quot;</span><span class="fu">:</span> <span class="dv">30000</span><span class="fu">,</span></span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;statusMessage&quot;</span><span class="fu">:</span> <span class="st">&quot;Running pre-push validation...&quot;</span></span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>          <span class="fu">}</span></span>
+<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>        <span class="ot">]</span></span>
+<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
+<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb30-17"><a href="#cb30-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb30-18"><a href="#cb30-18" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>This hook fires only for <code>git push</code> commands
+(<code>if</code>), runs only once per session (<code>once</code>), has a
+30-second timeout, and the script can return <code>updatedInput</code>
+to modify the push command or exit code 2 to block it entirely.</p>
+<h3 id="composition-matrix">Composition Matrix</h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Composes With</th>
+<th>Conflict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>updatedInput</code></td>
+<td><code>if</code>, <code>once</code>, async</td>
+<td>Cannot compose with <code>updatedMCPToolOutput</code> (different
+events)</td>
+</tr>
+<tr>
+<td><code>updatedMCPToolOutput</code></td>
+<td><code>if</code>, <code>once</code></td>
+<td>PostToolUse only</td>
+</tr>
+<tr>
+<td><code>initialUserMessage</code></td>
+<td><code>watchPaths</code></td>
+<td>SessionStart only</td>
+</tr>
+<tr>
+<td><code>watchPaths</code></td>
+<td><code>initialUserMessage</code></td>
+<td>SessionStart only</td>
+</tr>
+<tr>
+<td><code>asyncRewake</code></td>
+<td><code>if</code>, <code>once</code></td>
+<td>Cannot return <code>updatedInput</code> (execution already
+proceeded)</td>
+</tr>
+<tr>
+<td><code>once</code></td>
+<td>All others</td>
+<td>Suppresses subsequent firings</td>
+</tr>
+<tr>
+<td><code>if</code></td>
+<td>All others</td>
+<td>Filters before any capability fires</td>
+</tr>
+<tr>
+<td><code>CLAUDE_ENV_FILE</code></td>
+<td>All others</td>
+<td>Orthogonal (environment layer)</td>
+</tr>
+<tr>
+<td>Plugin hot-reload</td>
+<td>All others</td>
+<td>Re-registers after update</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-execution-pipeline">The Execution Pipeline</h3>
+<p>When a tool call fires, the hook engine processes each registered
+hook through this pipeline:</p>
+<pre><code>For each registered hook matching the event:
+    1. Check `if` pattern → skip if no match
+    2. Check `once` flag → skip if already fired
+    3. Build environment (parent + env file + hook-specific)
+    4. Execute hook subprocess with timeout
+    5. Parse stdout for hookSpecificOutput
+    6. If asyncRewake → register background task, continue
+    7. If exit code 2 → block, stop processing
+    8. If updatedInput → merge into tool input
+    9. Mark once-hook as fired
+    10. Continue to next hook</code></pre>
+<p>This pipeline is the complete hook execution flow for
+<code>PreToolUse</code>. <code>PostToolUse</code> replaces steps 7-8
+with <code>updatedMCPToolOutput</code> and <code>outputToAppend</code>
+processing. <code>SessionStart</code> replaces them with
+<code>initialUserMessage</code> and <code>watchPaths</code>
+collection.</p>
+<hr />
+<h2 id="1911-architecture-decisions-and-trade-offs">19.11 Architecture
+Decisions and Trade-Offs</h2>
+<h3 id="ad-1-why-shell-scripts-not-in-process-callbacks">AD-1: Why Shell
+Scripts, Not In-Process Callbacks?</h3>
+<p>Every hook runs as a subprocess. This adds ~50ms of process spawn
+overhead per hook. In-process callbacks would be near-instantaneous. But
+subprocess isolation provides three properties that in-process callbacks
+cannot:</p>
+<ol type="1">
+<li><strong>Language independence.</strong> Hooks can be written in any
+language — Python, Bash, Ruby, Go. The team's existing scripts work
+without modification.</li>
+<li><strong>Crash isolation.</strong> A segfaulting hook kills the
+subprocess, not the agent. In-process callbacks that throw unhandled
+exceptions or corrupt memory would crash the entire agent.</li>
+<li><strong>Security boundary.</strong> Hook subprocesses cannot read
+the agent's memory, modify its state, or access its API keys. They
+communicate only through stdin/stdout/stderr and exit codes.</li>
+</ol>
+<p>The 50ms overhead is acceptable because hooks fire at tool-call
+boundaries, which already involve LLM API round trips measured in
+seconds. Adding 50ms of hook overhead to a 2-second API call is a 2.5%
+slowdown.</p>
+<h3 id="ad-2-why-json-for-hook-io-not-environment-variables">AD-2: Why
+JSON for Hook I/O, Not Environment Variables?</h3>
+<p>The hook engine sends input via stdin as JSON and reads output from
+stdout as JSON. An alternative design would encode the input as
+environment variables (<code>HOOK_TOOL_NAME=Bash</code>,
+<code>HOOK_COMMAND=git push</code>) and read the output as exit codes
+only.</p>
+<p>JSON was chosen because:</p>
+<ul>
+<li>Environment variables have platform-dependent size limits (32KB on
+many Linux systems). A large tool input could exceed this.</li>
+<li>Structured output (<code>updatedInput</code>,
+<code>asyncRewake</code>) cannot be expressed as exit codes.</li>
+<li>JSON is parseable in every language without shell-quoting
+concerns.</li>
+<li>The same format works identically on macOS, Linux, and Windows.</li>
+</ul>
+<h3 id="ad-3-why-last-writer-wins-for-initialusermessage">AD-3: Why
+"Last Writer Wins" for <code>initialUserMessage</code>?</h3>
+<p>As discussed in section 19.3, competing strategies were evaluated.
+"Last writer wins" was chosen because it aligns with the hook priority
+ordering — user hooks override project hooks, project hooks override
+managed hooks — and because concatenation of multiple initial messages
+creates incoherent prompts.</p>
+<h3 id="ad-4-why-restrict-updatedmcptooloutput-to-mcp-tools">AD-4: Why
+Restrict <code>updatedMCPToolOutput</code> to MCP Tools?</h3>
+<p>Built-in tool outputs are consumed by the agent loop's internal
+logic. The Bash tool's exit code determines error handling. FileEdit's
+output confirms whether the edit succeeded. Allowing hooks to rewrite
+these outputs would break invariants that the agent loop depends on,
+creating subtle and hard-to-debug failures.</p>
+<p>MCP tools have no such internal consumers — their output goes
+directly to the LLM. This makes them safe targets for
+transformation.</p>
+<h3
+id="ad-5-why-claude_env_file-instead-of-inline-environment-variables">AD-5:
+Why <code>CLAUDE_ENV_FILE</code> Instead of Inline Environment
+Variables?</h3>
+<p>Settings JSON supports <code>"env": { "KEY": "VALUE" }</code> per
+hook. <code>CLAUDE_ENV_FILE</code> exists for cross-hook variables that
+every hook needs — project root, CI flags, custom paths. Without it,
+every hook configuration would duplicate the same environment variables,
+creating maintenance burden and drift risk.</p>
+<p>The file-based approach also supports dynamic generation. A CI
+pipeline can write a fresh env file before launching the agent,
+containing build-specific values like commit SHA, branch name, and
+artifact paths. This would be impossible with static JSON
+configuration.</p>
+<h3 id="ad-6-why-10-minute-timeout-for-async-hooks">AD-6: Why 10-Minute
+Timeout for Async Hooks?</h3>
+<p>The timeout balances two extremes:</p>
+<ul>
+<li><strong>Too short (1 minute):</strong> Kills legitimate security
+scans, test suites, and deployment verifications.</li>
+<li><strong>Too long (1 hour):</strong> A forgotten async hook leaks a
+polling interval and a subprocess handle indefinitely.</li>
+</ul>
+<p>Ten minutes covers 95% of legitimate use cases (most CI steps
+complete in under 5 minutes) while providing a hard cap that prevents
+resource leaks. For truly long-running operations, the hook should use a
+dedicated background task through the task system (Chapter 14) instead
+of the async hook mechanism.</p>
+<hr />
+<h2 id="1912-error-handling-patterns">19.12 Error Handling Patterns</h2>
+<p>Hooks run external code. External code fails. The hook engine must
+handle failures gracefully without crashing the agent or silently
+dropping security checks.</p>
+<h3 id="the-failure-hierarchy">The Failure Hierarchy</h3>
+<pre><code>Hook failure modes (ordered by severity):
+    1. Hook script not found → log warning, skip hook
+    2. Hook script not executable → log warning, skip hook  
+    3. Hook script times out → kill subprocess, treat as non-blocking error
+    4. Hook script crashes (non-zero, non-2 exit) → log error, continue
+    5. Hook script exit 2 → treat as intentional block
+    6. Hook stdout unparseable → log warning, ignore output
+    7. Hook updatedInput fails schema validation → use original input</code></pre>
+<h3 id="fail-open-vs-fail-closed">Fail-Open vs. Fail-Closed</h3>
+<p>The default behavior for failures (modes 1-4, 6-7) is
+<strong>fail-open</strong>: the tool call proceeds as if the hook did
+not exist. This is deliberate. If hooks were fail-closed (blocking on
+any error), a broken hook script would paralyze the entire agent.</p>
+<p>The exception is exit code 2, which is always treated as an
+intentional block. This is the hook author's explicit signal that
+something is wrong. Even if the hook's stderr output is empty, exit code
+2 blocks the tool call.</p>
+<p>For environments that need fail-closed behavior, the hook script
+itself should implement it:</p>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a><span class="co"># This hook is fail-closed: if ANYTHING goes wrong, block the action</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a><span class="bu">trap</span> <span class="st">&#39;echo &quot;{\&quot;hookSpecificOutput\&quot;:{\&quot;hookEventName\&quot;:\&quot;PreToolUse\&quot;,\&quot;permissionDecision\&quot;:\&quot;deny\&quot;,\&quot;permissionDecisionReason\&quot;:\&quot;Hook error: safety check could not complete\&quot;}}&quot; &gt;&amp;2; exit 2&#39;</span> ERR</span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a><span class="co"># ... actual validation logic ...</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a><span class="bu">exit</span> 0</span></code></pre></div>
+<h3 id="timeout-handling">Timeout Handling</h3>
+<p>When a hook exceeds its configured timeout (default: 10 seconds for
+synchronous hooks), the subprocess is killed with <code>SIGTERM</code>,
+followed by <code>SIGKILL</code> after a 1-second grace period:</p>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">killHookProcess</span>(</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>  child<span class="op">:</span> ChildProcess<span class="op">,</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>  hookName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Graceful shutdown</span></span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>  child<span class="op">.</span><span class="fu">kill</span>(<span class="st">&quot;SIGTERM&quot;</span>)<span class="op">;</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Force kill after 1 second</span></span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a>  <span class="pp">setTimeout</span>(() <span class="kw">=&gt;</span> {</span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>child<span class="op">.</span><span class="at">killed</span>) {</span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a>      child<span class="op">.</span><span class="fu">kill</span>(<span class="st">&quot;SIGKILL&quot;</span>)<span class="op">;</span></span>
+<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a>      <span class="fu">logWarning</span>(<span class="vs">`Hook </span><span class="sc">${</span>hookName<span class="sc">}</span><span class="vs">: force-killed after SIGTERM timeout`</span>)<span class="op">;</span></span>
+<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span> <span class="dv">1000</span>)<span class="op">;</span></span>
+<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The two-phase kill pattern gives the hook a chance to clean up (flush
+logs, close file handles) while providing a hard guarantee that it will
+not run forever.</p>
+<hr />
+<h2 id="1913-testing-hook-capabilities">19.13 Testing Hook
+Capabilities</h2>
+<p>Testing hooks requires exercising the full subprocess lifecycle:
+spawn, stdin write, stdout read, exit code check, timeout handling. Here
+are the patterns used in the test suite.</p>
+<h3 id="unit-testing-hook-output-parsing">Unit Testing Hook Output
+Parsing</h3>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="fu">describe</span>(<span class="st">&quot;parseHookOutput&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">it</span>(<span class="st">&quot;parses updatedInput&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> stdout <span class="op">=</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">stringify</span>({</span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>      hookSpecificOutput<span class="op">:</span> {</span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>        hookEventName<span class="op">:</span> <span class="st">&quot;PreToolUse&quot;</span><span class="op">,</span></span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>        updatedInput<span class="op">:</span> { command<span class="op">:</span> <span class="st">&quot;new-command&quot;</span> }<span class="op">,</span></span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>      }<span class="op">,</span></span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> result <span class="op">=</span> <span class="fu">parseHookOutput</span>(stdout)<span class="op">;</span></span>
+<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(result<span class="op">?.</span><span class="at">updatedInput</span>)<span class="op">.</span><span class="fu">toEqual</span>({ command<span class="op">:</span> <span class="st">&quot;new-command&quot;</span> })<span class="op">;</span></span>
+<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb35-12"><a href="#cb35-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-13"><a href="#cb35-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">it</span>(<span class="st">&quot;handles malformed JSON gracefully&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb35-14"><a href="#cb35-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> result <span class="op">=</span> <span class="fu">parseHookOutput</span>(<span class="st">&quot;not json at all&quot;</span>)<span class="op">;</span></span>
+<span id="cb35-15"><a href="#cb35-15" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(result)<span class="op">.</span><span class="fu">toBeNull</span>()<span class="op">;</span></span>
+<span id="cb35-16"><a href="#cb35-16" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb35-17"><a href="#cb35-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-18"><a href="#cb35-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">it</span>(<span class="st">&quot;handles empty stdout&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb35-19"><a href="#cb35-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> result <span class="op">=</span> <span class="fu">parseHookOutput</span>(<span class="st">&quot;&quot;</span>)<span class="op">;</span></span>
+<span id="cb35-20"><a href="#cb35-20" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(result)<span class="op">.</span><span class="fu">toBeNull</span>()<span class="op">;</span></span>
+<span id="cb35-21"><a href="#cb35-21" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb35-22"><a href="#cb35-22" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="integration-testing-with-real-subprocesses">Integration Testing
+with Real Subprocesses</h3>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="fu">describe</span>(<span class="st">&quot;hook execution&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">it</span>(<span class="st">&quot;applies updatedInput from hook&quot;</span><span class="op">,</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Create a temporary hook script</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> hookScript <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(tmpDir<span class="op">,</span> <span class="st">&quot;rewrite-hook.sh&quot;</span>)<span class="op">;</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>    fs<span class="op">.</span><span class="fu">writeFileSync</span>(hookScript<span class="op">,</span> <span class="vs">`#!/bin/bash</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a><span class="vs">echo &#39;{&quot;hookSpecificOutput&quot;:{&quot;hookEventName&quot;:&quot;PreToolUse&quot;,&quot;updatedInput&quot;:{&quot;command&quot;:&quot;echo rewritten&quot;}}}&#39;</span></span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a><span class="vs">exit 0</span></span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a><span class="vs">`</span><span class="op">,</span> { mode<span class="op">:</span> <span class="bn">0o755</span> })<span class="op">;</span></span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> config<span class="op">:</span> HookConfig <span class="op">=</span> {</span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>      type<span class="op">:</span> <span class="st">&quot;command&quot;</span><span class="op">,</span></span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>      command<span class="op">:</span> hookScript<span class="op">,</span></span>
+<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>      timeout<span class="op">:</span> <span class="dv">5000</span><span class="op">,</span></span>
+<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a>    }<span class="op">;</span></span>
+<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-16"><a href="#cb36-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> result <span class="op">=</span> <span class="cf">await</span> <span class="fu">executeHook</span>(config<span class="op">,</span> <span class="st">&quot;PreToolUse&quot;</span><span class="op">,</span> {</span>
+<span id="cb36-17"><a href="#cb36-17" aria-hidden="true" tabindex="-1"></a>      tool_name<span class="op">:</span> <span class="st">&quot;Bash&quot;</span><span class="op">,</span></span>
+<span id="cb36-18"><a href="#cb36-18" aria-hidden="true" tabindex="-1"></a>      tool_input<span class="op">:</span> { command<span class="op">:</span> <span class="st">&quot;echo original&quot;</span> }<span class="op">,</span></span>
+<span id="cb36-19"><a href="#cb36-19" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb36-20"><a href="#cb36-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-21"><a href="#cb36-21" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(result<span class="op">.</span><span class="at">exitCode</span>)<span class="op">.</span><span class="fu">toBe</span>(<span class="dv">0</span>)<span class="op">;</span></span>
+<span id="cb36-22"><a href="#cb36-22" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parsed <span class="op">=</span> <span class="fu">parseHookOutput</span>(result<span class="op">.</span><span class="at">stdoutOutput</span>)<span class="op">;</span></span>
+<span id="cb36-23"><a href="#cb36-23" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(parsed<span class="op">?.</span><span class="at">updatedInput</span><span class="op">?.</span><span class="at">command</span>)<span class="op">.</span><span class="fu">toBe</span>(<span class="st">&quot;echo rewritten&quot;</span>)<span class="op">;</span></span>
+<span id="cb36-24"><a href="#cb36-24" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb36-25"><a href="#cb36-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-26"><a href="#cb36-26" aria-hidden="true" tabindex="-1"></a>  <span class="fu">it</span>(<span class="st">&quot;respects once: true&quot;</span><span class="op">,</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb36-27"><a href="#cb36-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> hookScript <span class="op">=</span> <span class="fu">createCountingHook</span>(tmpDir)<span class="op">;</span> <span class="co">// increments a file counter</span></span>
+<span id="cb36-28"><a href="#cb36-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> config<span class="op">:</span> HookConfig <span class="op">=</span> {</span>
+<span id="cb36-29"><a href="#cb36-29" aria-hidden="true" tabindex="-1"></a>      type<span class="op">:</span> <span class="st">&quot;command&quot;</span><span class="op">,</span></span>
+<span id="cb36-30"><a href="#cb36-30" aria-hidden="true" tabindex="-1"></a>      command<span class="op">:</span> hookScript<span class="op">,</span></span>
+<span id="cb36-31"><a href="#cb36-31" aria-hidden="true" tabindex="-1"></a>      timeout<span class="op">:</span> <span class="dv">5000</span><span class="op">,</span></span>
+<span id="cb36-32"><a href="#cb36-32" aria-hidden="true" tabindex="-1"></a>      once<span class="op">:</span> <span class="kw">true</span><span class="op">,</span></span>
+<span id="cb36-33"><a href="#cb36-33" aria-hidden="true" tabindex="-1"></a>    }<span class="op">;</span></span>
+<span id="cb36-34"><a href="#cb36-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-35"><a href="#cb36-35" aria-hidden="true" tabindex="-1"></a>    <span class="co">// First call: executes</span></span>
+<span id="cb36-36"><a href="#cb36-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">executeHookWithOnceCheck</span>(config<span class="op">,</span> <span class="st">&quot;PreToolUse&quot;</span><span class="op">,</span> sampleInput)<span class="op">;</span></span>
+<span id="cb36-37"><a href="#cb36-37" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(<span class="fu">readCounter</span>(tmpDir))<span class="op">.</span><span class="fu">toBe</span>(<span class="dv">1</span>)<span class="op">;</span></span>
+<span id="cb36-38"><a href="#cb36-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-39"><a href="#cb36-39" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Second call: skipped</span></span>
+<span id="cb36-40"><a href="#cb36-40" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">executeHookWithOnceCheck</span>(config<span class="op">,</span> <span class="st">&quot;PreToolUse&quot;</span><span class="op">,</span> sampleInput)<span class="op">;</span></span>
+<span id="cb36-41"><a href="#cb36-41" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(<span class="fu">readCounter</span>(tmpDir))<span class="op">.</span><span class="fu">toBe</span>(<span class="dv">1</span>)<span class="op">;</span> <span class="co">// Still 1</span></span>
+<span id="cb36-42"><a href="#cb36-42" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb36-43"><a href="#cb36-43" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="testing-async-hooks">Testing Async Hooks</h3>
+<p>Async hooks require verifying the background polling and completion
+flow:</p>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="fu">describe</span>(<span class="st">&quot;async hooks&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">it</span>(<span class="st">&quot;registers background task and polls&quot;</span><span class="op">,</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> hookScript <span class="op">=</span> <span class="fu">createAsyncHook</span>(tmpDir<span class="op">,</span> {</span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>      taskId<span class="op">:</span> <span class="st">&quot;test-async-123&quot;</span><span class="op">,</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>      pollIntervalMs<span class="op">:</span> <span class="dv">100</span><span class="op">,</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> result <span class="op">=</span> <span class="cf">await</span> <span class="fu">executeHook</span>(hookConfig<span class="op">,</span> <span class="st">&quot;PostToolUse&quot;</span><span class="op">,</span> sampleInput)<span class="op">;</span></span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parsed <span class="op">=</span> <span class="fu">parseHookOutput</span>(result<span class="op">.</span><span class="at">stdoutOutput</span>)<span class="op">;</span></span>
+<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-11"><a href="#cb37-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(parsed<span class="op">?.</span><span class="at">asyncRewake</span><span class="op">?.</span><span class="at">taskId</span>)<span class="op">.</span><span class="fu">toBe</span>(<span class="st">&quot;test-async-123&quot;</span>)<span class="op">;</span></span>
+<span id="cb37-12"><a href="#cb37-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(asyncTasks<span class="op">.</span><span class="fu">has</span>(<span class="st">&quot;test-async-123&quot;</span>))<span class="op">.</span><span class="fu">toBe</span>(<span class="kw">true</span>)<span class="op">;</span></span>
+<span id="cb37-13"><a href="#cb37-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-14"><a href="#cb37-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Simulate completion</span></span>
+<span id="cb37-15"><a href="#cb37-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">completeAsyncHookTask</span>(<span class="st">&quot;test-async-123&quot;</span><span class="op">,</span> {</span>
+<span id="cb37-16"><a href="#cb37-16" aria-hidden="true" tabindex="-1"></a>      exitCode<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb37-17"><a href="#cb37-17" aria-hidden="true" tabindex="-1"></a>      stdoutOutput<span class="op">:</span> <span class="st">&quot;Scan complete: no issues&quot;</span><span class="op">,</span></span>
+<span id="cb37-18"><a href="#cb37-18" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb37-19"><a href="#cb37-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-20"><a href="#cb37-20" aria-hidden="true" tabindex="-1"></a>    <span class="fu">expect</span>(asyncTasks<span class="op">.</span><span class="fu">has</span>(<span class="st">&quot;test-async-123&quot;</span>))<span class="op">.</span><span class="fu">toBe</span>(<span class="kw">false</span>)<span class="op">;</span></span>
+<span id="cb37-21"><a href="#cb37-21" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb37-22"><a href="#cb37-22" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<hr />
+<h2 id="1914-real-world-patterns">19.14 Real-World Patterns</h2>
+<h3 id="pattern-1-corporate-git-policy-enforcement">Pattern 1: Corporate
+Git Policy Enforcement</h3>
+<p>A <code>PreToolUse</code> hook that ensures all git pushes go through
+the approved remote and include a ticket reference:</p>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a><span class="va">INPUT</span><span class="op">=</span><span class="va">$(</span><span class="fu">cat</span><span class="va">)</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a><span class="va">COMMAND</span><span class="op">=</span><span class="va">$(</span><span class="bu">echo</span> <span class="st">&quot;</span><span class="va">${INPUT}</span><span class="st">&quot;</span> <span class="kw">|</span> <span class="ex">python3</span> <span class="at">-c</span> <span class="st">&quot;</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a><span class="st">import sys, json</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a><span class="st">data = json.load(sys.stdin)</span></span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a><span class="st">print(data.get(&#39;tool_input&#39;, {}).get(&#39;command&#39;, &#39;&#39;))</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span><span class="va">)</span></span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a><span class="co"># Only process git push commands</span></span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="ot">!</span> <span class="st">&quot;</span><span class="va">${COMMAND}</span><span class="st">&quot;</span> <span class="ot">=~</span> <span class="pp">^</span><span class="ss">git</span><span class="dt">\ </span><span class="ss">push</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a>  <span class="bu">exit</span> 0</span>
+<span id="cb38-14"><a href="#cb38-14" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb38-15"><a href="#cb38-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-16"><a href="#cb38-16" aria-hidden="true" tabindex="-1"></a><span class="co"># Ensure push goes to approved remote</span></span>
+<span id="cb38-17"><a href="#cb38-17" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="ot">!</span> <span class="st">&quot;</span><span class="va">${COMMAND}</span><span class="st">&quot;</span> <span class="ot">=~</span> <span class="pp">^</span><span class="ss">git</span><span class="dt">\ </span><span class="ss">push</span><span class="dt">\ </span><span class="op">(</span><span class="ss">origin</span><span class="pp">|</span><span class="ss">upstream</span><span class="op">)</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb38-18"><a href="#cb38-18" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="st">&#39;{&quot;hookSpecificOutput&quot;:{&quot;hookEventName&quot;:&quot;PreToolUse&quot;,&quot;permissionDecision&quot;:&quot;deny&quot;,&quot;permissionDecisionReason&quot;:&quot;Git push must target origin or upstream remote&quot;}}&#39;</span> <span class="op">&gt;&amp;</span><span class="dv">2</span></span>
+<span id="cb38-19"><a href="#cb38-19" aria-hidden="true" tabindex="-1"></a>  <span class="bu">exit</span> 2</span>
+<span id="cb38-20"><a href="#cb38-20" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb38-21"><a href="#cb38-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-22"><a href="#cb38-22" aria-hidden="true" tabindex="-1"></a><span class="co"># Check that the latest commit has a ticket reference</span></span>
+<span id="cb38-23"><a href="#cb38-23" aria-hidden="true" tabindex="-1"></a><span class="va">LAST_MSG</span><span class="op">=</span><span class="va">$(</span><span class="fu">git</span> log <span class="at">-1</span> <span class="at">--pretty</span><span class="op">=</span>%s<span class="va">)</span></span>
+<span id="cb38-24"><a href="#cb38-24" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="ot">!</span> <span class="st">&quot;</span><span class="va">${LAST_MSG}</span><span class="st">&quot;</span> <span class="ot">=~</span> <span class="op">(</span><span class="ss">JIRA</span><span class="pp">|</span><span class="ss">TICKET</span><span class="pp">|</span><span class="ss">GH</span><span class="op">)</span><span class="ss">-</span><span class="op">[</span><span class="ss">0</span><span class="op">-</span><span class="ss">9</span><span class="op">]</span><span class="pp">+</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb38-25"><a href="#cb38-25" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="st">&#39;{&quot;hookSpecificOutput&quot;:{&quot;hookEventName&quot;:&quot;PreToolUse&quot;,&quot;permissionDecision&quot;:&quot;deny&quot;,&quot;permissionDecisionReason&quot;:&quot;Last commit must reference a ticket (JIRA-123, GH-456)&quot;}}&#39;</span> <span class="op">&gt;&amp;</span><span class="dv">2</span></span>
+<span id="cb38-26"><a href="#cb38-26" aria-hidden="true" tabindex="-1"></a>  <span class="bu">exit</span> 2</span>
+<span id="cb38-27"><a href="#cb38-27" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb38-28"><a href="#cb38-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-29"><a href="#cb38-29" aria-hidden="true" tabindex="-1"></a><span class="bu">exit</span> 0</span></code></pre></div>
+<h3 id="pattern-2-mcp-output-redaction">Pattern 2: MCP Output
+Redaction</h3>
+<p>A <code>PostToolUse</code> hook that strips sensitive data from
+database query results:</p>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a><span class="va">INPUT</span><span class="op">=</span><span class="va">$(</span><span class="fu">cat</span><span class="va">)</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a><span class="va">TOOL_NAME</span><span class="op">=</span><span class="va">$(</span><span class="bu">echo</span> <span class="st">&quot;</span><span class="va">${INPUT}</span><span class="st">&quot;</span> <span class="kw">|</span> <span class="ex">python3</span> <span class="at">-c</span> <span class="st">&quot;</span></span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a><span class="st">import sys, json</span></span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a><span class="st">print(json.load(sys.stdin).get(&#39;tool_name&#39;, &#39;&#39;))</span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span><span class="va">)</span></span>
+<span id="cb39-9"><a href="#cb39-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-10"><a href="#cb39-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Only process database MCP tools</span></span>
+<span id="cb39-11"><a href="#cb39-11" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="ot">!</span> <span class="st">&quot;</span><span class="va">${TOOL_NAME}</span><span class="st">&quot;</span> <span class="ot">=~</span> <span class="pp">^</span><span class="ss">mcp__db__</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb39-12"><a href="#cb39-12" aria-hidden="true" tabindex="-1"></a>  <span class="bu">exit</span> 0</span>
+<span id="cb39-13"><a href="#cb39-13" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb39-14"><a href="#cb39-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-15"><a href="#cb39-15" aria-hidden="true" tabindex="-1"></a><span class="co"># Redact sensitive columns from output</span></span>
+<span id="cb39-16"><a href="#cb39-16" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;</span><span class="va">${INPUT}</span><span class="st">&quot;</span> <span class="kw">|</span> <span class="ex">python3</span> <span class="at">-c</span> <span class="st">&quot;</span></span>
+<span id="cb39-17"><a href="#cb39-17" aria-hidden="true" tabindex="-1"></a><span class="st">import sys, json, re</span></span>
+<span id="cb39-18"><a href="#cb39-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-19"><a href="#cb39-19" aria-hidden="true" tabindex="-1"></a><span class="st">data = json.load(sys.stdin)</span></span>
+<span id="cb39-20"><a href="#cb39-20" aria-hidden="true" tabindex="-1"></a><span class="st">output = data.get(&#39;tool_output&#39;, {})</span></span>
+<span id="cb39-21"><a href="#cb39-21" aria-hidden="true" tabindex="-1"></a><span class="st">content = output.get(&#39;content&#39;, [])</span></span>
+<span id="cb39-22"><a href="#cb39-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-23"><a href="#cb39-23" aria-hidden="true" tabindex="-1"></a><span class="st">SENSITIVE = [&#39;ssn&#39;, &#39;credit_card&#39;, &#39;password&#39;, &#39;api_key&#39;, &#39;token&#39;]</span></span>
+<span id="cb39-24"><a href="#cb39-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-25"><a href="#cb39-25" aria-hidden="true" tabindex="-1"></a><span class="st">for item in content:</span></span>
+<span id="cb39-26"><a href="#cb39-26" aria-hidden="true" tabindex="-1"></a><span class="st">    if item.get(&#39;type&#39;) == &#39;text&#39;:</span></span>
+<span id="cb39-27"><a href="#cb39-27" aria-hidden="true" tabindex="-1"></a><span class="st">        text = item[&#39;text&#39;]</span></span>
+<span id="cb39-28"><a href="#cb39-28" aria-hidden="true" tabindex="-1"></a><span class="st">        for field in SENSITIVE:</span></span>
+<span id="cb39-29"><a href="#cb39-29" aria-hidden="true" tabindex="-1"></a><span class="st">            text = re.sub(</span></span>
+<span id="cb39-30"><a href="#cb39-30" aria-hidden="true" tabindex="-1"></a><span class="st">                rf&#39;</span><span class="dt">\&quot;</span><span class="st">?{field}</span><span class="dt">\&quot;</span><span class="st">?\s*[:=]\s*</span><span class="dt">\&quot;</span><span class="st">?[^,</span><span class="dt">\&quot;</span><span class="st">}]+</span><span class="dt">\&quot;</span><span class="st">?&#39;,</span></span>
+<span id="cb39-31"><a href="#cb39-31" aria-hidden="true" tabindex="-1"></a><span class="st">                f&#39;</span><span class="dt">\&quot;</span><span class="st">{field}</span><span class="dt">\&quot;</span><span class="st">: </span><span class="dt">\&quot;</span><span class="st">[REDACTED]</span><span class="dt">\&quot;</span><span class="st">&#39;,</span></span>
+<span id="cb39-32"><a href="#cb39-32" aria-hidden="true" tabindex="-1"></a><span class="st">                text,</span></span>
+<span id="cb39-33"><a href="#cb39-33" aria-hidden="true" tabindex="-1"></a><span class="st">                flags=re.IGNORECASE,</span></span>
+<span id="cb39-34"><a href="#cb39-34" aria-hidden="true" tabindex="-1"></a><span class="st">            )</span></span>
+<span id="cb39-35"><a href="#cb39-35" aria-hidden="true" tabindex="-1"></a><span class="st">        item[&#39;text&#39;] = text</span></span>
+<span id="cb39-36"><a href="#cb39-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-37"><a href="#cb39-37" aria-hidden="true" tabindex="-1"></a><span class="st">result = {</span></span>
+<span id="cb39-38"><a href="#cb39-38" aria-hidden="true" tabindex="-1"></a><span class="st">    &#39;hookSpecificOutput&#39;: {</span></span>
+<span id="cb39-39"><a href="#cb39-39" aria-hidden="true" tabindex="-1"></a><span class="st">        &#39;hookEventName&#39;: &#39;PostToolUse&#39;,</span></span>
+<span id="cb39-40"><a href="#cb39-40" aria-hidden="true" tabindex="-1"></a><span class="st">        &#39;updatedMCPToolOutput&#39;: {&#39;content&#39;: content}</span></span>
+<span id="cb39-41"><a href="#cb39-41" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb39-42"><a href="#cb39-42" aria-hidden="true" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb39-43"><a href="#cb39-43" aria-hidden="true" tabindex="-1"></a><span class="st">print(json.dumps(result))</span></span>
+<span id="cb39-44"><a href="#cb39-44" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span></span></code></pre></div>
+<h3 id="pattern-3-auto-test-on-file-save">Pattern 3: Auto-Test on File
+Save</h3>
+<p>Combining <code>watchPaths</code> with <code>FileChanged</code> hooks
+to auto-run tests when source files change:</p>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;SessionStart&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>          <span class="fu">{</span></span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;command&quot;</span><span class="fu">,</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;command&quot;</span><span class="fu">:</span> <span class="st">&quot;echo &#39;{</span><span class="ch">\&quot;</span><span class="st">hookSpecificOutput</span><span class="ch">\&quot;</span><span class="st">:{</span><span class="ch">\&quot;</span><span class="st">hookEventName</span><span class="ch">\&quot;</span><span class="st">:</span><span class="ch">\&quot;</span><span class="st">SessionStart</span><span class="ch">\&quot;</span><span class="st">,</span><span class="ch">\&quot;</span><span class="st">watchPaths</span><span class="ch">\&quot;</span><span class="st">:[</span><span class="ch">\&quot;</span><span class="st">src/</span><span class="ch">\&quot;</span><span class="st">,</span><span class="ch">\&quot;</span><span class="st">tests/</span><span class="ch">\&quot;</span><span class="st">]}}&#39;&quot;</span><span class="fu">,</span></span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;timeout&quot;</span><span class="fu">:</span> <span class="dv">1000</span></span>
+<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a>          <span class="fu">}</span></span>
+<span id="cb40-11"><a href="#cb40-11" aria-hidden="true" tabindex="-1"></a>        <span class="ot">]</span></span>
+<span id="cb40-12"><a href="#cb40-12" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
+<span id="cb40-13"><a href="#cb40-13" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb40-14"><a href="#cb40-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;FileChanged&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb40-15"><a href="#cb40-15" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb40-16"><a href="#cb40-16" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;hooks&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb40-17"><a href="#cb40-17" aria-hidden="true" tabindex="-1"></a>          <span class="fu">{</span></span>
+<span id="cb40-18"><a href="#cb40-18" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;command&quot;</span><span class="fu">,</span></span>
+<span id="cb40-19"><a href="#cb40-19" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;command&quot;</span><span class="fu">:</span> <span class="st">&quot;./.claude/hooks/auto-test.sh&quot;</span><span class="fu">,</span></span>
+<span id="cb40-20"><a href="#cb40-20" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;timeout&quot;</span><span class="fu">:</span> <span class="dv">60000</span><span class="fu">,</span></span>
+<span id="cb40-21"><a href="#cb40-21" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;statusMessage&quot;</span><span class="fu">:</span> <span class="st">&quot;Running related tests...&quot;</span></span>
+<span id="cb40-22"><a href="#cb40-22" aria-hidden="true" tabindex="-1"></a>          <span class="fu">}</span></span>
+<span id="cb40-23"><a href="#cb40-23" aria-hidden="true" tabindex="-1"></a>        <span class="ot">]</span></span>
+<span id="cb40-24"><a href="#cb40-24" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
+<span id="cb40-25"><a href="#cb40-25" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb40-26"><a href="#cb40-26" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb40-27"><a href="#cb40-27" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="pattern-4-ci-environment-auto-prompt">Pattern 4: CI Environment
+Auto-Prompt</h3>
+<p>A <code>SessionStart</code> hook that detects CI mode and injects an
+appropriate initial prompt:</p>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Detect CI environment</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="ot">-n</span> <span class="st">&quot;</span><span class="va">${CI</span><span class="op">:-</span><span class="va">}</span><span class="st">&quot;</span> <span class="kw">]]</span> <span class="kw">||</span> <span class="kw">[[</span> <span class="ot">-n</span> <span class="st">&quot;</span><span class="va">${GITHUB_ACTIONS</span><span class="op">:-</span><span class="va">}</span><span class="st">&quot;</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>  <span class="va">PROMPT</span><span class="op">=</span><span class="st">&quot;Run the full test suite, fix any failures, and report results.&quot;</span></span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="kw">[[</span> <span class="ot">-n</span> <span class="st">&quot;</span><span class="va">${GITHUB_EVENT_PATH</span><span class="op">:-</span><span class="va">}</span><span class="st">&quot;</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a>    <span class="va">EVENT</span><span class="op">=</span><span class="va">$(</span><span class="ex">python3</span> <span class="at">-c</span> <span class="st">&quot;import json; e=json.load(open(&#39;</span><span class="va">${GITHUB_EVENT_PATH}</span><span class="st">&#39;)); print(e.get(&#39;action&#39;,&#39;&#39;))&quot;</span><span class="va">)</span></span>
+<span id="cb41-10"><a href="#cb41-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">[[</span> <span class="st">&quot;</span><span class="va">${EVENT}</span><span class="st">&quot;</span> <span class="ot">==</span> <span class="st">&quot;opened&quot;</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb41-11"><a href="#cb41-11" aria-hidden="true" tabindex="-1"></a>      <span class="va">PROMPT</span><span class="op">=</span><span class="st">&quot;Review the PR changes for security issues and code quality.&quot;</span></span>
+<span id="cb41-12"><a href="#cb41-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">fi</span></span>
+<span id="cb41-13"><a href="#cb41-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">fi</span></span>
+<span id="cb41-14"><a href="#cb41-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb41-15"><a href="#cb41-15" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="st">&quot;{</span><span class="dt">\&quot;</span><span class="st">hookSpecificOutput</span><span class="dt">\&quot;</span><span class="st">:{</span><span class="dt">\&quot;</span><span class="st">hookEventName</span><span class="dt">\&quot;</span><span class="st">:</span><span class="dt">\&quot;</span><span class="st">SessionStart</span><span class="dt">\&quot;</span><span class="st">,</span><span class="dt">\&quot;</span><span class="st">initialUserMessage</span><span class="dt">\&quot;</span><span class="st">:</span><span class="dt">\&quot;</span><span class="va">${PROMPT}</span><span class="dt">\&quot;</span><span class="st">}}&quot;</span></span>
+<span id="cb41-16"><a href="#cb41-16" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb41-17"><a href="#cb41-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb41-18"><a href="#cb41-18" aria-hidden="true" tabindex="-1"></a><span class="bu">exit</span> 0</span></code></pre></div>
+<hr />
+<h2 id="1915-key-takeaways">19.15 Key Takeaways</h2>
+<ol type="1">
+<li><p><strong>Hooks are not just gatekeepers.</strong> The nine
+capabilities transform hooks from binary allow/deny switches into active
+participants that can rewrite inputs, transform outputs, inject prompts,
+monitor files, configure environments, run asynchronously, fire
+conditionally, and reload dynamically. When you build a hook system,
+design the output protocol to be extensible from the start.</p></li>
+<li><p><strong>Shallow merge is the right default for
+<code>updatedInput</code>.</strong> Deep merge introduces ambiguity and
+security risks. Let hook authors be explicit about what they are
+replacing.</p></li>
+<li><p><strong>MCP output transformation is safe; built-in output
+transformation is not.</strong> The distinction hinges on whether the
+agent loop itself consumes the output. If it does, transformation breaks
+invariants. If it does not (MCP tools), transformation is safe.</p></li>
+<li><p><strong>Async hooks need hard timeouts and background-task
+integration.</strong> Without timeouts, forgotten async hooks leak
+resources. Without task-system integration, they are invisible to the
+user.</p></li>
+<li><p><strong><code>once: true</code> dedup is per-event, not
+global.</strong> The same script registered for different lifecycle
+events should fire once per event, not once across all events.</p></li>
+<li><p><strong><code>if</code> patterns reuse permission-rule
+syntax.</strong> Do not invent a new pattern language when you already
+have one. Reusing <code>Tool(pattern)</code> syntax means hook authors
+and permission-rule authors learn one language.</p></li>
+<li><p><strong>Plugin hooks need restricted capabilities.</strong>
+Untrusted code should not be able to silently rewrite tool inputs. Gate
+powerful capabilities behind explicit trust decisions.</p></li>
+<li><p><strong>Fail-open is the right default for hook errors.</strong>
+A broken hook should not paralyze the agent. The exception is exit code
+2, which is always an intentional block.</p></li>
+<li><p><strong>The env-file protocol separates dynamic configuration
+from static settings.</strong> <code>CLAUDE_ENV_FILE</code> lets CI
+pipelines inject build-specific variables without modifying
+<code>settings.json</code>. Keep your configuration layered: static
+settings for structure, env files for values.</p></li>
+<li><p><strong>Test hooks with real subprocesses.</strong> Unit tests
+that mock <code>child_process.spawn</code> do not catch encoding issues,
+quoting problems, or platform-specific behavior. Integration tests with
+actual shell scripts are essential.</p></li>
+</ol>
+</div>
+</body>
+</html>

@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 39: Analytics & Telemetry — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-39-analytics--telemetry">Chapter 39: Analytics &amp;
+Telemetry</h1>
+<p>Every CLI agent generates a staggering volume of operational data.
+Each session records dozens of API calls, tool invocations, token
+counts, latencies, errors, model switches, compaction events, and cost
+accruals. That data flows past, is consumed by the current turn, and
+vanishes. Without an analytics and telemetry system, you are flying
+blind -- unable to answer basic questions like "How much did my team
+spend on Opus last week?", "What's my p99 tool latency?", or "Which
+feature flags are actually being used in production?"</p>
+<p>This chapter covers the full observability stack of a production CLI
+agent: the OpenTelemetry integration that provides distributed tracing
+and metrics, the feature flag system that gates hundreds of runtime
+behaviors, the privacy architecture that ensures telemetry respects user
+consent, and the analytics engine that persists everything to a local
+SQLite database with export pipelines for BigQuery and other data
+warehouses. We will trace the path of a single telemetry event from the
+moment it is emitted in user code to the moment it lands in an external
+collector, examining every buffering, batching, sampling, and
+privacy-filtering step along the way.</p>
+<p>The engineering challenge is threefold: collect enough data to be
+useful, respect user privacy absolutely, and add zero perceptible
+latency to the interactive experience. Get any one of these wrong and
+the telemetry system becomes either useless, unethical, or a performance
+liability.</p>
+<hr />
+<h2 id="391-the-telemetry-architecture-at-a-glance">39.1 The Telemetry
+Architecture at a Glance</h2>
+<p>The observability stack is organized into four layers, each with a
+distinct responsibility:</p>
+<pre><code>User interaction
+       |
+       v
++-------------------+
+| Event Emission    |  EventBuilder, track_*() helpers
++-------------------+
+       |
+       v
++-------------------+
+| Privacy Filtering |  DataCategory gates, PII anonymization
++-------------------+
+       |
+       v
++-------------------+
+| Buffering &amp; Batch |  EventBuffer, RateLimiter, sampling
++-------------------+
+       |
+       v
++-------------------+
+| Transport / Sink  |  HTTP, gRPC, file fallback, Datadog, BigQuery
++-------------------+</code></pre>
+<p>The first layer is hot-path code that runs inline during every turn.
+It must be allocation-light and lock-free where possible. The second
+layer enforces user consent -- if the user has opted out of error
+reporting, error events are dropped before they ever touch a buffer. The
+third layer accumulates events in memory and flushes them in batches to
+amortize I/O. The fourth layer handles the actual network or disk I/O,
+with retry logic, exponential backoff, and offline fallback.</p>
+<p>Let's examine each layer in detail.</p>
+<hr />
+<h2 id="392-event-types-and-the-telemetry-event-model">39.2 Event Types
+and the Telemetry Event Model</h2>
+<h3 id="the-event-envelope">The Event Envelope</h3>
+<p>Every telemetry event shares a common envelope that carries metadata
+independent of the event's specific payload:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> TelemetryEvent <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> timestamp<span class="op">:</span> SystemTime<span class="op">,</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> session_id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> app_version<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> payload<span class="op">:</span> EventPayload<span class="op">,</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>id</code> is a unique identifier generated from a
+high-resolution timestamp. The <code>session_id</code> ties the event to
+a specific interactive session, enabling session-level aggregation
+downstream. The <code>app_version</code> allows filtering telemetry by
+release, which is critical during staged rollouts.</p>
+<h3 id="event-payloads">Event Payloads</h3>
+<p>The <code>EventPayload</code> enum defines every category of
+telemetry the system can emit:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> EventPayload <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    SessionStart <span class="op">{</span> model<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> project_dir<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">},</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    SessionEnd <span class="op">{</span> duration_secs<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> turns_completed<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> <span class="op">...</span> <span class="op">},</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    TurnComplete <span class="op">{</span> turn_number<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> latency_ms<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> input_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> <span class="op">...</span> <span class="op">},</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    ToolUsed <span class="op">{</span> tool_name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> latency_ms<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> success<span class="op">:</span> <span class="dt">bool</span> <span class="op">},</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    ErrorOccurred <span class="op">{</span> error_type<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> error_code<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span> retryable<span class="op">:</span> <span class="dt">bool</span> <span class="op">},</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    CommandExecuted <span class="op">{</span> command_name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> exit_code<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">i32</span><span class="op">&gt;,</span> <span class="op">...</span> <span class="op">},</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    ModelSwitched <span class="op">{</span> from_model<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> to_model<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> reason<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    CompactionTriggered <span class="op">{</span> before_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> after_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> <span class="op">...</span> <span class="op">},</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    FeatureUsed <span class="op">{</span> feature_name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> metadata<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;</span> <span class="op">},</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    CostIncurred <span class="op">{</span> model<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> input_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> cost_usd<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span> <span class="op">...</span> <span class="op">},</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    PerformanceMetric <span class="op">{</span> metric_name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> value<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span> unit<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> <span class="op">...</span> <span class="op">},</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Eleven event types cover the complete operational surface. Notice
+that none of them carry user content -- no code snippets, no file
+contents, no prompts, no responses. This is an architectural invariant,
+not a policy. The type system enforces it: there is no
+<code>String</code> field named <code>content</code> or
+<code>code</code> anywhere in the payload hierarchy. If a future
+contributor tries to add one, the code review tooling (and this chapter)
+should flag it immediately.</p>
+<h3 id="data-categories-for-privacy-filtering">Data Categories for
+Privacy Filtering</h3>
+<p>Every event type maps to a <code>DataCategory</code> that determines
+whether the event can be recorded at all:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> DataCategory <span class="op">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    SessionLifecycle<span class="op">,</span>    <span class="co">// SessionStart, SessionEnd</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    CommandExecution<span class="op">,</span>    <span class="co">// ToolUsed, CommandExecuted</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    ModelUsage<span class="op">,</span>          <span class="co">// ModelSwitched</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    Performance<span class="op">,</span>         <span class="co">// TurnComplete, PerformanceMetric</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    Errors<span class="op">,</span>              <span class="co">// ErrorOccurred</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    FeatureUsage<span class="op">,</span>        <span class="co">// FeatureUsed</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    Compaction<span class="op">,</span>          <span class="co">// CompactionTriggered</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    CostTracking<span class="op">,</span>        <span class="co">// CostIncurred</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The mapping is implemented as a method on
+<code>TelemetryEvent</code>:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> TelemetryEvent <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> data_category(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> DataCategory <span class="op">{</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>payload <span class="op">{</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>            <span class="pp">EventPayload::</span>SessionStart <span class="op">{</span> <span class="op">..</span> <span class="op">}</span> <span class="op">=&gt;</span> <span class="pp">DataCategory::</span>SessionLifecycle<span class="op">,</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>            <span class="pp">EventPayload::</span>ToolUsed <span class="op">{</span> <span class="op">..</span> <span class="op">}</span> <span class="op">=&gt;</span> <span class="pp">DataCategory::</span>CommandExecution<span class="op">,</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>            <span class="pp">EventPayload::</span>ErrorOccurred <span class="op">{</span> <span class="op">..</span> <span class="op">}</span> <span class="op">=&gt;</span> <span class="pp">DataCategory::</span>Errors<span class="op">,</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>            <span class="co">// ... exhaustive match</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This design means a user can say "I want session lifecycle and cost
+tracking, but nothing else" and the system will respect that precisely.
+The category check happens at the entry point of the recording path --
+before any buffering or serialization work is performed.</p>
+<h3 id="the-event-builder-pattern">The Event Builder Pattern</h3>
+<p>Rather than constructing events manually with struct literals
+(error-prone, verbose), the system provides an <code>EventBuilder</code>
+that stamps every event with the session ID and app version:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> EventBuilder <span class="op">{</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    session_id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    app_version<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> EventBuilder <span class="op">{</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> tool_used(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> tool_name<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> latency_ms<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> success<span class="op">:</span> <span class="dt">bool</span>) <span class="op">-&gt;</span> TelemetryEvent <span class="op">{</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>make_event(<span class="pp">EventPayload::</span>ToolUsed <span class="op">{</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>            tool_name<span class="op">:</span> tool_name<span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>            latency_ms<span class="op">,</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>            success<span class="op">,</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> cost_incurred(</span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> model<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> input_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>        output_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> cache_read_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> cost_usd<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> TelemetryEvent <span class="op">{</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>make_event(<span class="pp">EventPayload::</span>CostIncurred <span class="op">{</span> <span class="op">...</span> <span class="op">}</span>)</span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The builder is created once at session start and threaded through the
+engine. Every call site that records telemetry uses the builder, which
+makes it impossible to forget to set the session ID or version.</p>
+<hr />
+<h2 id="393-the-privacy-architecture">39.3 The Privacy Architecture</h2>
+<h3 id="opt-in-by-default">Opt-In by Default</h3>
+<p>The single most important design decision in the telemetry system:
+telemetry is <strong>opt-in</strong>, not opt-out. The
+<code>PrivacyConfig</code> struct's <code>Default</code> implementation
+sets <code>opted_in: false</code>:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> <span class="bu">Default</span> <span class="cf">for</span> PrivacyConfig <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> default() <span class="op">-&gt;</span> <span class="dt">Self</span> <span class="op">{</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span> <span class="op">{</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>            opted_in<span class="op">:</span> <span class="cn">false</span><span class="op">,</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>            categories<span class="op">:</span> <span class="co">/* all categories enabled */</span><span class="op">,</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>            include_machine_id<span class="op">:</span> <span class="cn">false</span><span class="op">,</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>            include_user_id<span class="op">:</span> <span class="cn">false</span><span class="op">,</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>            hash_identifiers<span class="op">:</span> <span class="cn">true</span><span class="op">,</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>            min_aggregation_count<span class="op">:</span> <span class="dv">1</span><span class="op">,</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Even when the user opts in, machine IDs and user IDs are excluded by
+default. Identifiers are hashed rather than stored in plaintext. And the
+<code>min_aggregation_count</code> field supports k-anonymity -- you can
+configure the system to only transmit aggregated data when at least
+<code>k</code> data points contribute, preventing individual session
+fingerprinting.</p>
+<h3 id="per-category-consent">Per-Category Consent</h3>
+<p>The <code>PrivacyConfig</code> carries a
+<code>HashMap&lt;DataCategory, bool&gt;</code> that lets users enable or
+disable individual categories:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> is_category_enabled(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> category<span class="op">:</span> DataCategory) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>opted_in <span class="op">&amp;&amp;</span> <span class="kw">self</span><span class="op">.</span>categories<span class="op">.</span>get(<span class="op">&amp;</span>category)<span class="op">.</span>copied()<span class="op">.</span>unwrap_or(<span class="cn">false</span>)</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Both conditions must be true: the global opt-in flag AND the
+per-category flag. This is a logical AND, not an OR. Disabling the
+global flag kills all telemetry regardless of per-category settings.</p>
+<h3 id="pii-anonymization">PII Anonymization</h3>
+<p>Even with careful event type design, PII can leak through metadata
+fields. The <code>anonymize_event</code> function scrubs events before
+they leave the process:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> anonymize_event(event<span class="op">:</span> <span class="op">&amp;</span><span class="kw">mut</span> TelemetryEvent) <span class="op">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Hash email-like user IDs</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> event<span class="op">.</span>user_id<span class="op">.</span>contains(<span class="ch">&#39;@&#39;</span>) <span class="op">{</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>        event<span class="op">.</span>user_id <span class="op">=</span> hash_string(<span class="op">&amp;</span>event<span class="op">.</span>user_id)<span class="op">;</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Scrub known PII property keys</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> pii_keys <span class="op">=</span> [<span class="st">&quot;email&quot;</span><span class="op">,</span> <span class="st">&quot;username&quot;</span><span class="op">,</span> <span class="st">&quot;name&quot;</span><span class="op">,</span> <span class="st">&quot;ip&quot;</span><span class="op">,</span> <span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;cwd&quot;</span><span class="op">,</span> <span class="st">&quot;home&quot;</span>]<span class="op">;</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> key <span class="kw">in</span> <span class="op">&amp;</span>pii_keys <span class="op">{</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(val) <span class="op">=</span> event<span class="op">.</span>properties<span class="op">.</span>get_mut(<span class="op">*</span>key) <span class="op">{</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>            <span class="op">*</span>val <span class="op">=</span> hash_string(val)<span class="op">;</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Redact file paths from error messages</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(msg) <span class="op">=</span> event<span class="op">.</span>properties<span class="op">.</span>get_mut(<span class="st">&quot;error&quot;</span>) <span class="op">{</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>msg <span class="op">=</span> redact_paths(msg)<span class="op">;</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>redact_paths</code> function strips patterns like
+<code>/Users/john/project/...</code> and <code>C:\Users\...</code> from
+strings, replacing them with <code>&lt;redacted-path&gt;</code>. This is
+a defense-in-depth measure -- ideally no PII reaches this point, but if
+it does, the anonymizer catches it.</p>
+<h3 id="the-remote-killswitch">The Remote Killswitch</h3>
+<p>Production telemetry systems need a way to shut down telemetry
+fleet-wide without pushing a code update. The deep telemetry module
+implements a killswitch:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> KILLSWITCH_URL<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;https://telemetry.rcode.dev/killswitch&quot;</span><span class="op">;</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> killswitch_check() <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="pp">std::env::</span>var(<span class="st">&quot;RCODE_TELEMETRY_KILL&quot;</span>)<span class="op">.</span>is_ok() <span class="op">{</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Local override for testing</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>        with_manager(<span class="op">|</span>m<span class="op">|</span> <span class="op">{</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>            m<span class="op">.</span>killswitch_active<span class="op">.</span>store(<span class="cn">true</span><span class="op">,</span> <span class="pp">Ordering::</span>Relaxed)<span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// In production: HTTP GET to killswitch URL, parse JSON response</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>    <span class="cn">false</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>TelemetryManager.is_enabled()</code> method checks both the
+config flag and the killswitch:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> is_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>config<span class="op">.</span>enabled <span class="op">&amp;&amp;</span> <span class="op">!</span><span class="kw">self</span><span class="op">.</span>killswitch_active<span class="op">.</span>load(<span class="pp">Ordering::</span>Relaxed)</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>If the backend team discovers a bug in telemetry collection -- say, a
+code path that accidentally logs prompt content -- they flip the
+killswitch endpoint to <code>{"kill": true}</code> and every running
+client stops transmitting within minutes. The local
+<code>RCODE_TELEMETRY_KILL</code> environment variable provides the same
+functionality for development and CI.</p>
+<h3 id="privacy-settings-persistence">Privacy Settings Persistence</h3>
+<p>Users manage their privacy preferences through a dedicated
+<code>/privacy</code> command that reads and writes a JSON configuration
+file:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;telemetry_enabled&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;crash_reports_enabled&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;retention_days&quot;</span><span class="fu">:</span> <span class="dv">30</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>The retention period (1-365 days) controls how long local analytics
+data is kept. The <code>clear_stored_data</code> function lets users
+wipe specific categories on demand, and <code>show_collected_data</code>
+provides full transparency about what is stored and where:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> show_collected_data(base_dir<span class="op">:</span> <span class="op">&amp;</span><span class="dt">Path</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>CollectedDataInfo<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Scans .rcode/data/ and reports:</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// - category name</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// - human-readable description</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// - file path</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// - retention period</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// - size on disk</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This transparency is not just good practice -- it is a prerequisite
+for compliance with GDPR, CCPA, and similar privacy regulations that
+require data controllers to enumerate what data they hold about a
+user.</p>
+<hr />
+<h2 id="394-the-telemetry-manager-and-event-buffer">39.4 The Telemetry
+Manager and Event Buffer</h2>
+<h3 id="recording-events">Recording Events</h3>
+<p>The <code>TelemetryManager</code> is the central coordinator. It owns
+the privacy config, the event buffer, session statistics, and the
+enabled/disabled state:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> TelemetryManager <span class="op">{</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    config<span class="op">:</span> TelemetryConfig<span class="op">,</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    enabled<span class="op">:</span> AtomicBool<span class="op">,</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>    event_count<span class="op">:</span> AtomicU64<span class="op">,</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    buffer<span class="op">:</span> Mutex<span class="op">&lt;</span>EventBuffer<span class="op">&gt;,</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    stats<span class="op">:</span> Mutex<span class="op">&lt;</span>SessionStats<span class="op">&gt;,</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    dropped_events<span class="op">:</span> AtomicU64<span class="op">,</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>record</code> method is the hot-path entry point. It
+performs three checks before touching any shared state:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> record(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> event<span class="op">:</span> TelemetryEvent) <span class="op">{</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 1. Global killswitch</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">!</span><span class="kw">self</span><span class="op">.</span>is_enabled() <span class="op">{</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 2. Per-category privacy check</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> category <span class="op">=</span> event<span class="op">.</span>data_category()<span class="op">;</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">!</span><span class="kw">self</span><span class="op">.</span>config<span class="op">.</span>privacy<span class="op">.</span>is_category_enabled(category) <span class="op">{</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 3. Increment event count (atomic, no lock)</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>event_count<span class="op">.</span>fetch_add(<span class="dv">1</span><span class="op">,</span> <span class="pp">Ordering::</span>Relaxed)<span class="op">;</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 4. Update session stats (short lock)</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Ok</span>(<span class="kw">mut</span> stats) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>stats<span class="op">.</span>lock() <span class="op">{</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="op">&amp;</span>event<span class="op">.</span>payload <span class="op">{</span></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a>            <span class="pp">EventPayload::</span>TurnComplete <span class="op">{</span> latency_ms<span class="op">,</span> input_tokens<span class="op">,</span> output_tokens<span class="op">,</span> <span class="op">..</span> <span class="op">}</span> <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>                stats<span class="op">.</span>record_turn(<span class="op">*</span>latency_ms<span class="op">,</span> <span class="op">*</span>input_tokens<span class="op">,</span> <span class="op">*</span>output_tokens)<span class="op">;</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>            <span class="pp">EventPayload::</span>ToolUsed <span class="op">{</span> tool_name<span class="op">,</span> <span class="op">..</span> <span class="op">}</span> <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>                stats<span class="op">.</span>record_tool(tool_name)<span class="op">;</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a>            <span class="co">// ... other payload types</span></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 5. Buffer the event (short lock)</span></span>
+<span id="cb15-30"><a href="#cb15-30" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Ok</span>(<span class="kw">mut</span> buffer) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>buffer<span class="op">.</span>lock() <span class="op">{</span></span>
+<span id="cb15-31"><a href="#cb15-31" aria-hidden="true" tabindex="-1"></a>        buffer<span class="op">.</span>push(event)<span class="op">;</span></span>
+<span id="cb15-32"><a href="#cb15-32" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb15-33"><a href="#cb15-33" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>dropped_events<span class="op">.</span>fetch_add(<span class="dv">1</span><span class="op">,</span> <span class="pp">Ordering::</span>Relaxed)<span class="op">;</span></span>
+<span id="cb15-34"><a href="#cb15-34" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb15-35"><a href="#cb15-35" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Steps 1 and 2 are branch predictions that return immediately in the
+common case (telemetry disabled or category disabled). Step 3 is an
+atomic increment -- no contention. Steps 4 and 5 acquire short-lived
+mutex locks. If either lock is poisoned (previous holder panicked), the
+event is dropped and the dropped counter increments. The system never
+blocks or panics in the recording path.</p>
+<h3 id="the-event-buffer">The Event Buffer</h3>
+<p>The <code>EventBuffer</code> implements size-based and time-based
+flush triggers:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> EventBuffer <span class="op">{</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    events<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>TelemetryEvent<span class="op">&gt;,</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    max_size<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    max_age<span class="op">:</span> Duration<span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    oldest_event<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>Instant<span class="op">&gt;,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> EventBuffer <span class="op">{</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> should_flush(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">self</span><span class="op">.</span>events<span class="op">.</span>len() <span class="op">&gt;=</span> <span class="kw">self</span><span class="op">.</span>max_size <span class="op">{</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(oldest) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>oldest_event <span class="op">{</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> oldest<span class="op">.</span>elapsed() <span class="op">&gt;=</span> <span class="kw">self</span><span class="op">.</span>max_age <span class="op">{</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>        <span class="cn">false</span></span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The default configuration buffers 50 events or 60 seconds, whichever
+comes first. This means a busy session that generates events rapidly
+will flush every 50 events, while a quiet session with sparse events
+will flush every minute. The <code>drain</code> method uses
+<code>std::mem::take</code> to swap the buffer contents with an empty
+vector, releasing events to the transport layer without copying.</p>
+<h3 id="session-statistics">Session Statistics</h3>
+<p>The <code>SessionStats</code> struct aggregates running totals that
+are used by the <code>/stats</code> command and the session-end
+summary:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> SessionStats <span class="op">{</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> turns_completed<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> tools_used<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">u64</span><span class="op">&gt;,</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> total_input_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> total_output_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> total_cost_usd<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> errors<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">u64</span><span class="op">&gt;,</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> compaction_count<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> model_switches<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> avg_turn_latency_ms<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> max_turn_latency_ms<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Statistics are updated inline during <code>record()</code> so they
+are always consistent with the buffered events. When the session ends,
+the manager generates a <code>SessionEnd</code> event that carries the
+final aggregated values.</p>
+<hr />
+<h2 id="395-opentelemetry-integration">39.5 OpenTelemetry
+Integration</h2>
+<p>The CLI agent integrates with the OpenTelemetry standard through a
+custom <code>OtelManager</code> that provides distributed tracing
+(spans), metrics (counters, gauges, histograms), and context
+propagation. This is not a full OTLP SDK -- it is a lightweight,
+self-contained implementation tailored to the specific needs of a CLI
+tool.</p>
+<h3 id="why-not-use-the-official-opentelemetry-sdk">Why Not Use the
+Official OpenTelemetry SDK?</h3>
+<p>The official OpenTelemetry Rust SDK (<code>opentelemetry-rust</code>)
+is designed for long-running server processes. It assumes you have a
+background exporter thread, a global tracer provider, and a runtime that
+stays alive for the duration of the process. A CLI agent's lifecycle is
+fundamentally different: sessions last seconds to hours, the process may
+fork subagents, and latency on the critical path (REPL
+input-to-response) must stay below perceptible thresholds. The custom
+implementation gives us:</p>
+<ol type="1">
+<li>No background threads -- flush is explicit and synchronous.</li>
+<li>No global tracer provider -- the <code>OtelManager</code> is an
+owned struct passed by reference.</li>
+<li>No SDK dependency chain -- no <code>opentelemetry-api</code>,
+<code>opentelemetry-sdk</code>, <code>tonic</code>,
+<code>prost</code>.</li>
+<li>Full control over the OTLP JSON payload format for direct export to
+collectors.</li>
+</ol>
+<h3 id="span-lifecycle">Span Lifecycle</h3>
+<p>A span represents a unit of work with a start time, end time,
+attributes, and child events:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> Span <span class="op">{</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> context<span class="op">:</span> TraceContext<span class="op">,</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> kind<span class="op">:</span> SpanKind<span class="op">,</span>       <span class="co">// Internal, Client, Server, Producer, Consumer</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> status<span class="op">:</span> SpanStatus<span class="op">,</span>   <span class="co">// Ok, Error(String), Unset</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> start_time<span class="op">:</span> SystemTime<span class="op">,</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> end_time<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>SystemTime<span class="op">&gt;,</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> attributes<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> Value<span class="op">&gt;,</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> events<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>SpanEvent<span class="op">&gt;,</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>OtelManager</code> tracks active and completed spans:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> OtelManager <span class="op">{</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    config<span class="op">:</span> ExportConfig<span class="op">,</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    active_spans<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> Span<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    completed_spans<span class="op">:</span> Arc<span class="op">&lt;</span>Mutex<span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>Span<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    metrics<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> MetricDefinition<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>    metric_buffer<span class="op">:</span> Arc<span class="op">&lt;</span>Mutex<span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>Metric<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    root_context<span class="op">:</span> TraceContext<span class="op">,</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Starting a span returns a span ID. Ending a span moves it from the
+active set to the completed set. Child spans share their parent's
+<code>trace_id</code> through the <code>TraceContext.child()</code>
+method:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> start_span(</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> name<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> kind<span class="op">:</span> SpanKind<span class="op">,</span> parent_span_id<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;&amp;</span><span class="dt">str</span><span class="op">&gt;,</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> OtelError<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> ctx <span class="op">=</span> <span class="cf">match</span> parent_span_id <span class="op">{</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Some</span>(pid) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> spans <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>active_spans<span class="op">.</span>read()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> parent <span class="op">=</span> spans<span class="op">.</span>get(pid)</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>ok_or_else(<span class="op">||</span> <span class="pp">OtelError::</span>SpanNotFound(pid<span class="op">.</span>into()))<span class="op">?;</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>            parent<span class="op">.</span>context<span class="op">.</span>child()</span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>        <span class="cn">None</span> <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>root_context<span class="op">.</span>child()<span class="op">,</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> span_id <span class="op">=</span> ctx<span class="op">.</span>span_id<span class="op">.</span>clone()<span class="op">;</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> span <span class="op">=</span> <span class="pp">Span::</span>new(name<span class="op">,</span> kind<span class="op">,</span> ctx)<span class="op">;</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>active_spans<span class="op">.</span>write()<span class="op">.</span><span class="kw">await</span><span class="op">.</span>insert(span_id<span class="op">.</span>clone()<span class="op">,</span> span)<span class="op">;</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(span_id)</span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>A typical instrumented code path looks like this:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Start a span for the API call</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> span_id <span class="op">=</span> otel<span class="op">.</span>start_span(<span class="st">&quot;llm.api_call&quot;</span><span class="op">,</span> <span class="pp">SpanKind::</span>Client<span class="op">,</span> <span class="cn">None</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>set_attribute(<span class="op">&amp;</span>span_id<span class="op">,</span> <span class="st">&quot;model&quot;</span><span class="op">,</span> <span class="pp">json!</span>(<span class="st">&quot;claude-sonnet-4&quot;</span>))<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Make the API call</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> response <span class="op">=</span> api_client<span class="op">.</span>send_request(<span class="op">&amp;</span>request)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a><span class="co">// Record token counts as an event</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>add_event(<span class="op">&amp;</span>span_id<span class="op">,</span> <span class="pp">SpanEvent::</span>new(<span class="st">&quot;tokens_received&quot;</span>)</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>with_attribute(<span class="st">&quot;input_tokens&quot;</span><span class="op">,</span> <span class="pp">json!</span>(response<span class="op">.</span>input_tokens))</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>with_attribute(<span class="st">&quot;output_tokens&quot;</span><span class="op">,</span> <span class="pp">json!</span>(response<span class="op">.</span>output_tokens))</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a><span class="co">// End the span</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>end_span(<span class="op">&amp;</span>span_id<span class="op">,</span> <span class="pp">SpanStatus::</span><span class="cn">Ok</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span></code></pre></div>
+<h3 id="w3c-trace-context-propagation">W3C Trace Context
+Propagation</h3>
+<p>When the CLI agent calls MCP servers, subagents, or external APIs, it
+needs to propagate the trace context so that spans from different
+processes can be correlated. The implementation follows the W3C Trace
+Context specification:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> TraceContext <span class="op">{</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> trace_id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>      <span class="co">// 32 hex chars</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> span_id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>       <span class="co">// 16 hex chars</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> parent_span_id<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> flags<span class="op">:</span> <span class="dt">u8</span><span class="op">,</span>             <span class="co">// 0x01 = sampled</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> TraceContext <span class="op">{</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> to_traceparent(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">String</span> <span class="op">{</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>        <span class="pp">format!</span>(<span class="st">&quot;00-{}-{}-{:02x}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>trace_id<span class="op">,</span> <span class="kw">self</span><span class="op">.</span>span_id<span class="op">,</span> <span class="kw">self</span><span class="op">.</span>flags)</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> from_traceparent(header<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Self</span><span class="op">,</span> OtelError<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> parts<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;&amp;</span><span class="dt">str</span><span class="op">&gt;</span> <span class="op">=</span> header<span class="op">.</span>split(<span class="ch">&#39;-&#39;</span>)<span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Validate: 4 parts, trace_id=32 hex, span_id=16 hex</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ...</span></span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The manager injects and extracts context through header maps:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Outgoing: inject trace context into MCP request headers</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>inject_context(<span class="op">&amp;</span>current_context<span class="op">,</span> <span class="op">&amp;</span><span class="kw">mut</span> headers)<span class="op">;</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="co">// headers now contains: {&quot;traceparent&quot;: &quot;00-{trace_id}-{span_id}-01&quot;}</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Incoming: extract context from MCP response headers</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx <span class="op">=</span> otel<span class="op">.</span>extract_context(<span class="op">&amp;</span>response_headers)<span class="op">?;</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> child_span <span class="op">=</span> otel<span class="op">.</span>start_span(<span class="st">&quot;mcp.response&quot;</span><span class="op">,</span> <span class="pp">SpanKind::</span>Server<span class="op">,</span> <span class="cn">Some</span>(<span class="op">&amp;</span>ctx<span class="op">.</span>span_id))<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span></code></pre></div>
+<p>This enables end-to-end tracing across the CLI agent, its MCP
+servers, and any downstream services. When you open a trace in Perfetto
+or Jaeger, you see the complete call chain: user prompt -&gt; system
+prompt assembly -&gt; API call -&gt; tool execution -&gt; MCP call -&gt;
+response assembly.</p>
+<h3 id="metrics-counters-gauges-and-histograms">Metrics: Counters,
+Gauges, and Histograms</h3>
+<p>The <code>OtelManager</code> supports three metric types:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Use Case</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Counter</td>
+<td>Monotonically increasing totals</td>
+<td><code>requests_total</code>, <code>tokens_consumed</code></td>
+</tr>
+<tr>
+<td>Gauge</td>
+<td>Point-in-time values</td>
+<td><code>active_spans</code>, <code>buffer_utilization</code></td>
+</tr>
+<tr>
+<td>Histogram</td>
+<td>Distribution of observations</td>
+<td><code>request_duration_ms</code>, <code>tokens_per_turn</code></td>
+</tr>
+</tbody>
+</table>
+<p>Counters and histograms are registered by name and accumulate
+values:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Register a counter</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>create_counter(<span class="st">&quot;api_requests_total&quot;</span><span class="op">,</span> <span class="st">&quot;Total API requests&quot;</span><span class="op">,</span> <span class="st">&quot;1&quot;</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>increment_counter(<span class="st">&quot;api_requests_total&quot;</span><span class="op">,</span> <span class="dv">1.0</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Register and observe a histogram</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>create_histogram(<span class="st">&quot;turn_latency_ms&quot;</span><span class="op">,</span> <span class="st">&quot;Turn latency&quot;</span><span class="op">,</span> <span class="st">&quot;ms&quot;</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>otel<span class="op">.</span>observe_histogram(<span class="st">&quot;turn_latency_ms&quot;</span><span class="op">,</span> <span class="dv">342.0</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span></code></pre></div>
+<p>Histograms compute percentile statistics on demand:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> stats <span class="op">=</span> otel<span class="op">.</span>histogram_stats(<span class="st">&quot;turn_latency_ms&quot;</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="co">// HistogramStats { count: 150, sum: 48200.0, min: 85.0, max: 2300.0,</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="co">//                  mean: 321.3, p50: 280.0, p90: 650.0, p99: 1800.0 }</span></span></code></pre></div>
+<h3 id="otlp-export">OTLP Export</h3>
+<p>Completed spans are serialized to the OTLP JSON format and exported
+via the configured protocol:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> export_batch(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> spans<span class="op">:</span> <span class="op">&amp;</span>[Span]) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Value<span class="op">,</span> OtelError<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> resource_spans<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>Value<span class="op">&gt;</span> <span class="op">=</span> spans<span class="op">.</span>iter()<span class="op">.</span>map(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>to_export_json())<span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(<span class="pp">json!</span>(<span class="op">{</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;resourceSpans&quot;</span><span class="op">:</span> [<span class="op">{</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;resource&quot;</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>                <span class="st">&quot;attributes&quot;</span><span class="op">:</span> [<span class="op">{</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;key&quot;</span><span class="op">:</span> <span class="st">&quot;service.name&quot;</span><span class="op">,</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;value&quot;</span><span class="op">:</span> <span class="op">{</span> <span class="st">&quot;stringValue&quot;</span><span class="op">:</span> <span class="st">&quot;rcode&quot;</span> <span class="op">}</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span>]</span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>            <span class="op">},</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;scopeSpans&quot;</span><span class="op">:</span> [<span class="op">{</span></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>                <span class="st">&quot;scope&quot;</span><span class="op">:</span> <span class="op">{</span> <span class="st">&quot;name&quot;</span><span class="op">:</span> <span class="st">&quot;rcode.otel&quot;</span> <span class="op">},</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>                <span class="st">&quot;spans&quot;</span><span class="op">:</span> resource_spans</span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span>]</span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>]</span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>))</span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>ExportConfig</code> supports four protocols:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> ExportProtocol <span class="op">{</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    Grpc<span class="op">,</span>           <span class="co">// OTLP/gRPC (port 4317)</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    HttpJson<span class="op">,</span>       <span class="co">// OTLP/HTTP+JSON (port 4318)</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>    HttpProtobuf<span class="op">,</span>   <span class="co">// OTLP/HTTP+Protobuf</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>    Stdout<span class="op">,</span>         <span class="co">// Print to stdout (development)</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The default is <code>HttpJson</code> targeting
+<code>localhost:4318</code>, which is the standard OTLP HTTP receiver
+port. In development, <code>Stdout</code> dumps formatted JSON to the
+terminal. In production, <code>HttpJson</code> sends batches to an
+OpenTelemetry Collector that routes to your backend of choice (Jaeger,
+Grafana Tempo, Datadog, etc.).</p>
+<hr />
+<h2 id="396-feature-flags-at-scale">39.6 Feature Flags at Scale</h2>
+<h3 id="the-growthbook-inspired-registry">The GrowthBook-Inspired
+Registry</h3>
+<p>The feature flag system manages runtime behavior for every aspect of
+the agent. The reference implementation defines 50+ flags across 15
+categories, and production deployments frequently carry hundreds more
+for A/B tests, gradual rollouts, and kill-switches.</p>
+<p>The <code>FeatureFlagRegistry</code> is the central data
+structure:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> FeatureFlagRegistry <span class="op">{</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>    flags<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> FeatureFlag<span class="op">&gt;,</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>    overrides<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">bool</span><span class="op">&gt;,</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    user_type<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Each flag carries a name, default value, description, and a gating
+strategy:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> FeatureFlag <span class="op">{</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> default_value<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> description<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> gate_type<span class="op">:</span> FlagGate<span class="op">,</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="gate-types">Gate Types</h3>
+<p>The <code>FlagGate</code> enum supports six gating strategies, from
+simple to sophisticated:</p>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> FlagGate <span class="op">{</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>    AlwaysOn<span class="op">,</span>                                    <span class="co">// Ship it</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>    AlwaysOff<span class="op">,</span>                                   <span class="co">// Not ready</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>    EnvVar(<span class="dt">String</span>)<span class="op">,</span>                              <span class="co">// RCODE_PROACTIVE=1</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>    UserType(<span class="dt">String</span>)<span class="op">,</span>                            <span class="co">// &quot;beta&quot;, &quot;internal&quot;</span></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>    Percentage(<span class="dt">f64</span>)<span class="op">,</span>                             <span class="co">// 50% rollout</span></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    Custom(Arc<span class="op">&lt;</span><span class="kw">dyn</span> <span class="bu">Fn</span>() <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">+</span> <span class="bu">Send</span> <span class="op">+</span> <span class="bu">Sync</span><span class="op">&gt;</span>)<span class="op">,</span> <span class="co">// Arbitrary logic</span></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Gate evaluation is a simple match:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> evaluate(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> user_type<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;&amp;</span><span class="dt">str</span><span class="op">&gt;</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span> <span class="op">{</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span><span class="pp">::</span>AlwaysOn <span class="op">=&gt;</span> <span class="cn">true</span><span class="op">,</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span><span class="pp">::</span>AlwaysOff <span class="op">=&gt;</span> <span class="cn">false</span><span class="op">,</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span><span class="pp">::</span>EnvVar(var) <span class="op">=&gt;</span> <span class="pp">std::env::</span>var(var)<span class="op">.</span>map(<span class="op">|</span>v<span class="op">|</span> <span class="op">!</span>v<span class="op">.</span>is_empty())<span class="op">.</span>unwrap_or(<span class="cn">false</span>)<span class="op">,</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span><span class="pp">::</span>UserType(expected) <span class="op">=&gt;</span> user_type<span class="op">.</span>map(<span class="op">|</span>u<span class="op">|</span> u <span class="op">==</span> expected<span class="op">.</span>as_str())<span class="op">.</span>unwrap_or(<span class="cn">false</span>)<span class="op">,</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span><span class="pp">::</span>Percentage(pct) <span class="op">=&gt;</span> pseudo_random_percent() <span class="op">&lt;</span> <span class="op">*</span>pct<span class="op">,</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span><span class="pp">::</span>Custom(pred) <span class="op">=&gt;</span> pred()<span class="op">,</span></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>Percentage</code> gate uses a deterministic hash-based
+random number rather than a true RNG, ensuring that repeated evaluations
+within a session return consistent results (a property called "sticky
+evaluation" in feature flag terminology).</p>
+<h3 id="flag-categories">Flag Categories</h3>
+<p>Flags are organized into 15 categories for display and
+management:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Examples</th>
+<th>Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Core Agent Modes</td>
+<td><code>kairos</code>, <code>daemon</code>, <code>voice_mode</code>,
+<code>bridge_mode</code></td>
+<td>7</td>
+</tr>
+<tr>
+<td>Planning &amp; Execution</td>
+<td><code>ultraplan</code>, <code>fork_subagent</code></td>
+<td>3</td>
+</tr>
+<tr>
+<td>Proactive Features</td>
+<td><code>proactive</code>, <code>auto_dream</code>,
+<code>auto_memory</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td>Search &amp; Retrieval</td>
+<td><code>treesitter_indexing</code>, <code>vector_search</code></td>
+<td>3</td>
+</tr>
+<tr>
+<td>UI &amp; Display</td>
+<td><code>tui_mode</code>, <code>syntax_highlighting</code>,
+<code>diff_preview</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td>Security &amp; Permissions</td>
+<td><code>permission_system</code>, <code>sandbox_mode</code>,
+<code>secret_scanning</code></td>
+<td>3</td>
+</tr>
+<tr>
+<td>LLM &amp; Inference</td>
+<td><code>prompt_cache</code>, <code>streaming</code>,
+<code>multi_model</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Integrations</td>
+<td><code>git_integration</code>, <code>mcp_support</code>,
+<code>azure_devops</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Telemetry &amp; Analytics</td>
+<td><code>telemetry</code>, <code>detailed_analytics</code></td>
+<td>2</td>
+</tr>
+<tr>
+<td>Session &amp; Persistence</td>
+<td><code>session_persistence</code>, <code>session_replay</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Memory &amp; Knowledge</td>
+<td><code>memory_indexing</code>, <code>knowledge_graph</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Agent Capabilities</td>
+<td><code>agent_delegation</code>, <code>agent_reflection</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Code Intelligence</td>
+<td><code>semantic_analysis</code>,
+<code>dead_code_detection</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Network &amp; Offline</td>
+<td><code>offline_mode</code>, <code>request_retry</code></td>
+<td>3</td>
+</tr>
+<tr>
+<td>Experimental</td>
+<td><code>a_b_test_new_planner</code>, <code>test_generation</code></td>
+<td>4</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-evaluation-hierarchy">The Evaluation Hierarchy</h3>
+<p>When code checks a feature flag, the registry evaluates three levels
+in priority order:</p>
+<ol type="1">
+<li><strong>Runtime override</strong> -- set via
+<code>set_flag("daemon", true)</code>. Highest priority.</li>
+<li><strong>Gate evaluation</strong> -- the <code>FlagGate</code> is
+evaluated with the current user context.</li>
+<li><strong>Default value</strong> -- the hardcoded default from the
+flag definition.</li>
+</ol>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> feature(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> name<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 1. Check runtime overrides first</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="op">&amp;</span>val) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>overrides<span class="op">.</span>get(name) <span class="op">{</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> val<span class="op">;</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 2. Evaluate the gate</span></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(flag) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>flags<span class="op">.</span>get(name) <span class="op">{</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> gate_result <span class="op">=</span> flag<span class="op">.</span>gate_type<span class="op">.</span>evaluate(<span class="kw">self</span><span class="op">.</span>user_type<span class="op">.</span>as_deref())<span class="op">;</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="op">&amp;</span>flag<span class="op">.</span>gate_type <span class="op">{</span></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>            <span class="pp">FlagGate::</span>AlwaysOn <span class="op">|</span> <span class="pp">FlagGate::</span>AlwaysOff <span class="op">=&gt;</span> gate_result<span class="op">,</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> gate_result <span class="op">||</span> flag<span class="op">.</span>default_value<span class="op">,</span></span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 3. Unknown flag: warn and return false</span></span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>        <span class="pp">warn!</span>(name<span class="op">,</span> <span class="st">&quot;unknown feature flag queried&quot;</span>)<span class="op">;</span></span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a>        <span class="cn">false</span></span>
+<span id="cb32-17"><a href="#cb32-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb32-18"><a href="#cb32-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This three-level hierarchy mirrors how services like GrowthBook,
+LaunchDarkly, and Unleash work: server-side overrides &gt; targeting
+rules &gt; default value.</p>
+<h3 id="override-sources">Override Sources</h3>
+<p>Overrides can come from three places:</p>
+<p><strong>Environment variable</strong> (<code>RCODE_FLAGS</code>):</p>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="va">RCODE_FLAGS</span><span class="op">=</span><span class="st">&quot;daemon,voice_mode,!kairos&quot;</span> <span class="ex">rcode</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="co"># daemon=true, voice_mode=true, kairos=false</span></span></code></pre></div>
+<p>The comma-separated format with <code>!</code> prefix for disabling
+is compact enough for shell one-liners and CI scripts.</p>
+<p><strong>JSON config file</strong>:</p>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span> <span class="dt">&quot;flags&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="dt">&quot;daemon&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span> <span class="dt">&quot;buddy&quot;</span><span class="fu">:</span> <span class="kw">true</span> <span class="fu">}</span> <span class="fu">}</span></span></code></pre></div>
+<p>Loaded via <code>registry.from_config(path)</code>. This is the path
+for managed deployments where an admin pushes flag configurations.</p>
+<p><strong>Runtime API</strong>:</p>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="pp">feature_flags::</span>set_flag(<span class="st">&quot;experimental_planner&quot;</span><span class="op">,</span> <span class="cn">true</span>)<span class="op">;</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="co">// ... try the new planner ...</span></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="pp">feature_flags::</span>reset_flag(<span class="st">&quot;experimental_planner&quot;</span>)<span class="op">;</span></span></code></pre></div>
+<p>The global singleton registry (<code>SharedFlagRegistry</code>) wraps
+the registry in <code>Arc&lt;RwLock&lt;&gt;&gt;</code> for thread-safe
+access from any point in the codebase.</p>
+<h3 id="checking-flags-in-practice">Checking Flags in Practice</h3>
+<p>The convenience free functions make flag checks a one-liner:</p>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="kw">crate</span><span class="pp">::config::</span>feature_flags<span class="op">;</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="pp">feature_flags::</span>feature(<span class="st">&quot;prompt_cache&quot;</span>) <span class="op">{</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Use cached prompt prefix</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="pp">feature_flags::</span>feature(<span class="st">&quot;daemon&quot;</span>) <span class="op">{</span></span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Start background daemon loop</span></span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<hr />
+<h2 id="397-the-analytics-engine">39.7 The Analytics Engine</h2>
+<p>While the telemetry system sends data to external collectors, the
+analytics engine persists data locally in a SQLite database for the
+user's own consumption. This powers the <code>/stats</code>,
+<code>/insights</code>, and <code>/cost</code> commands.</p>
+<h3 id="schema-and-storage">Schema and Storage</h3>
+<p>The engine stores events in a single <code>events</code> table:</p>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode sql"><code class="sourceCode sql"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="kw">CREATE</span> <span class="kw">TABLE</span> <span class="cf">IF</span> <span class="kw">NOT</span> <span class="kw">EXISTS</span> <span class="kw">events</span> (</span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">id</span> TEXT <span class="kw">PRIMARY</span> <span class="kw">KEY</span>,</span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">timestamp</span> TEXT <span class="kw">NOT</span> <span class="kw">NULL</span>,</span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>    kind TEXT <span class="kw">NOT</span> <span class="kw">NULL</span>,</span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>    session_id TEXT <span class="kw">NOT</span> <span class="kw">NULL</span>,</span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>    properties TEXT <span class="kw">NOT</span> <span class="kw">NULL</span></span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>);</span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a><span class="kw">CREATE</span> <span class="kw">INDEX</span> <span class="cf">IF</span> <span class="kw">NOT</span> <span class="kw">EXISTS</span> idx_events_session <span class="kw">ON</span> <span class="kw">events</span>(session_id);</span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a><span class="kw">CREATE</span> <span class="kw">INDEX</span> <span class="cf">IF</span> <span class="kw">NOT</span> <span class="kw">EXISTS</span> idx_events_kind <span class="kw">ON</span> <span class="kw">events</span>(kind);</span>
+<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a><span class="kw">CREATE</span> <span class="kw">INDEX</span> <span class="cf">IF</span> <span class="kw">NOT</span> <span class="kw">EXISTS</span> idx_events_timestamp <span class="kw">ON</span> <span class="kw">events</span>(<span class="dt">timestamp</span>);</span></code></pre></div>
+<p>The <code>properties</code> column stores a JSON object, making the
+schema flexible enough to handle all event types without schema
+migrations. The trade-off is that queries against specific properties
+require JSON parsing, but SQLite's JSON functions handle this
+efficiently for the data volumes we are dealing with (thousands to tens
+of thousands of events per day).</p>
+<h3 id="event-tracking-api">Event Tracking API</h3>
+<p>The <code>AnalyticsEngine</code> provides typed tracking methods:</p>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a>engine<span class="op">.</span>track_session_start(<span class="st">&quot;sess-1&quot;</span><span class="op">,</span> <span class="st">&quot;claude-sonnet-4&quot;</span>)<span class="op">?;</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>engine<span class="op">.</span>track_tool_used(<span class="st">&quot;sess-1&quot;</span><span class="op">,</span> <span class="st">&quot;bash&quot;</span><span class="op">,</span> <span class="pp">Duration::</span>from_millis(<span class="dv">350</span>)<span class="op">,</span> <span class="cn">true</span>)<span class="op">?;</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>engine<span class="op">.</span>track_tokens(<span class="st">&quot;sess-1&quot;</span><span class="op">,</span> <span class="dv">1200</span><span class="op">,</span> <span class="dv">800</span><span class="op">,</span> <span class="st">&quot;claude-sonnet-4&quot;</span>)<span class="op">?;</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>engine<span class="op">.</span>track_error(<span class="st">&quot;sess-1&quot;</span><span class="op">,</span> <span class="st">&quot;rate_limit&quot;</span><span class="op">,</span> <span class="st">&quot;429 Too Many Requests&quot;</span>)<span class="op">?;</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>engine<span class="op">.</span>track_model_switch(<span class="st">&quot;sess-1&quot;</span><span class="op">,</span> <span class="st">&quot;claude-sonnet-4&quot;</span><span class="op">,</span> <span class="st">&quot;claude-haiku-4&quot;</span>)<span class="op">?;</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>engine<span class="op">.</span>track_permission_requested(<span class="st">&quot;sess-1&quot;</span><span class="op">,</span> <span class="st">&quot;bash&quot;</span><span class="op">,</span> <span class="cn">true</span>)<span class="op">?;</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>engine<span class="op">.</span>track_file_changed(<span class="st">&quot;sess-1&quot;</span><span class="op">,</span> <span class="st">&quot;src/main.rs&quot;</span><span class="op">,</span> <span class="st">&quot;edit&quot;</span>)<span class="op">?;</span></span></code></pre></div>
+<p>Events are buffered in memory and flushed to SQLite in batches using
+a transaction:</p>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> flush(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> events <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> buf <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>buffer<span class="op">.</span>lock()<span class="op">?;</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">std::mem::</span>take(<span class="op">&amp;</span><span class="kw">mut</span> <span class="op">*</span>buf)</span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> db <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>db<span class="op">.</span>lock()<span class="op">?;</span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> tx <span class="op">=</span> db<span class="op">.</span>unchecked_transaction()<span class="op">?;</span></span>
+<span id="cb39-9"><a href="#cb39-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> event <span class="kw">in</span> <span class="op">&amp;</span>events <span class="op">{</span></span>
+<span id="cb39-10"><a href="#cb39-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span><span class="pp">::</span>insert_event(<span class="op">&amp;</span>tx<span class="op">,</span> event)<span class="op">?;</span></span>
+<span id="cb39-11"><a href="#cb39-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb39-12"><a href="#cb39-12" aria-hidden="true" tabindex="-1"></a>    tx<span class="op">.</span>commit()<span class="op">?;</span></span>
+<span id="cb39-13"><a href="#cb39-13" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(events<span class="op">.</span>len())</span>
+<span id="cb39-14"><a href="#cb39-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The default buffer size is 1,024 events, and the default flush
+interval is 30 seconds. Auto-flush triggers when the buffer is full.</p>
+<h3 id="query-api">Query API</h3>
+<p>The engine exposes rich query methods:</p>
+<p><strong>Session summary</strong>: Returns a
+<code>MetricSnapshot</code> with token counts, tool invocations, error
+counts, cost, and average response time for a single session.</p>
+<p><strong>Daily summary</strong>: Same metrics scoped to a calendar
+day.</p>
+<p><strong>Tool statistics</strong>: Per-tool invocation count, average
+duration, success rate, sorted by frequency.</p>
+<p><strong>Error summary</strong>: Error types ranked by count with
+last-seen timestamps.</p>
+<p><strong>Response time percentiles</strong>: p50, p95, p99 latencies
+computed from tool execution durations over a configurable lookback
+window.</p>
+<p><strong>Cost by model</strong>: Total estimated cost per model,
+computed from stored token counts and configurable per-model
+pricing:</p>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> default_cost_rates() <span class="op">-&gt;</span> <span class="dt">Vec</span><span class="op">&lt;</span>CostRate<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>    <span class="pp">vec!</span>[</span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">CostRate::</span>new(<span class="st">&quot;claude-sonnet-4&quot;</span><span class="op">,</span> <span class="dv">3.0</span><span class="op">,</span> <span class="dv">15.0</span>)<span class="op">,</span>    <span class="co">// $3/M in, $15/M out</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">CostRate::</span>new(<span class="st">&quot;claude-haiku-4&quot;</span><span class="op">,</span> <span class="dv">0.25</span><span class="op">,</span> <span class="dv">1.25</span>)<span class="op">,</span>     <span class="co">// $0.25/M in, $1.25/M out</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>        <span class="pp">CostRate::</span>new(<span class="st">&quot;claude-opus-4&quot;</span><span class="op">,</span> <span class="dv">15.0</span><span class="op">,</span> <span class="dv">75.0</span>)<span class="op">,</span>      <span class="co">// $15/M in, $75/M out</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>    ]</span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>Cost by day</strong>: Daily cost and token totals for trend
+analysis.</p>
+<p><strong>Hourly activity</strong>: 24-element array showing event
+counts per hour of day, useful for identifying peak usage patterns.</p>
+<h3 id="the-ascii-dashboard">The ASCII Dashboard</h3>
+<p>The <code>/insights summary</code> command renders a full-width ASCII
+dashboard in the terminal:</p>
+<pre class="text"><code>            ═══ rcode Analytics Dashboard ═══
+────────────────────────────────────────────────────────────
+Total events: 2,847
+Telemetry: disabled
+
+Tool Usage
+  bash     ████████████████████████████████  847
+  edit     ██████████████████████           583
+  grep     ████████████████                 412
+  read     ██████████████                   371
+  glob     ████████████                     298
+
+Model Distribution
+  claude-sonnet-4     ██████████████████████████████  1,204
+  claude-opus-4       █████████████                   502
+  claude-haiku-4      ██████                          241
+
+Hourly Activity (last 7d)
+  00-03: ▁▁▁▂
+  04-07: ▁▁▁▁
+  08-11: ▃▅▇█
+  12-15: ████
+  16-19: ███▇
+  20-23: ▅▃▂▁
+
+Response Time Percentiles (last 7d)
+  p50: 285.3ms
+  p95: 1,247.8ms
+  p99: 3,892.1ms
+  min: 12.0ms  max: 8,421.0ms  n=2,511
+
+Error Summary
+  rate_limit: 23 occurrences (last: 2026-04-12 14:32)
+  api_timeout: 8 occurrences (last: 2026-04-11 09:15)
+  connection_reset: 3 occurrences (last: 2026-04-10 22:47)
+
+Total Cost: $4.2817
+  claude-sonnet-4: $2.1340
+  claude-opus-4: $1.8922
+  claude-haiku-4: $0.2555
+────────────────────────────────────────────────────────────</code></pre>
+<p>The dashboard is rendered entirely with ASCII art -- no Unicode
+box-drawing characters that might break in minimal terminal emulators.
+The bar chart scales to the terminal width and shows the top 10 entries
+by count.</p>
+<h3 id="export-pipelines">Export Pipelines</h3>
+<p>The analytics engine supports two export formats for offline
+analysis:</p>
+<p><strong>JSON export</strong>:</p>
+<div class="sourceCode" id="cb42"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> json <span class="op">=</span> engine<span class="op">.</span>export_json(<span class="cn">Some</span>(from_date)<span class="op">,</span> <span class="cn">Some</span>(to_date))<span class="op">?;</span></span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="pp">fs::</span>write(<span class="st">&quot;analytics_export.json&quot;</span><span class="op">,</span> json)<span class="op">?;</span></span></code></pre></div>
+<p><strong>CSV export</strong>:</p>
+<div class="sourceCode" id="cb43"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> csv <span class="op">=</span> engine<span class="op">.</span>export_csv(<span class="cn">None</span><span class="op">,</span> <span class="cn">None</span>)<span class="op">?;</span></span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a><span class="pp">fs::</span>write(<span class="st">&quot;analytics_export.csv&quot;</span><span class="op">,</span> csv)<span class="op">?;</span></span></code></pre></div>
+<p>The CSV format uses RFC 4180 quoting for JSON property values:</p>
+<pre class="csv"><code>id,timestamp,kind,session_id,properties
+evt_001,2026-04-12T10:30:00Z,tool_used,sess-1,&quot;{&quot;&quot;tool&quot;&quot;:&quot;&quot;bash&quot;&quot;,&quot;&quot;duration_ms&quot;&quot;:350}&quot;</code></pre>
+<h3 id="bigquery-event-export">BigQuery Event Export</h3>
+<p>For teams that need warehouse-scale analytics, the deep telemetry
+module provides structured event export compatible with BigQuery's JSONL
+ingestion format:</p>
+<div class="sourceCode" id="cb45"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> export_events(path<span class="op">:</span> <span class="op">&amp;</span><span class="dt">Path</span><span class="op">,</span> format<span class="op">:</span> ExportFormat) <span class="op">-&gt;</span> <span class="pp">io::</span><span class="dt">Result</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> format <span class="op">{</span></span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">ExportFormat::</span>Jsonl <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> <span class="kw">mut</span> file <span class="op">=</span> <span class="pp">fs::File::</span>create(path)<span class="op">?;</span></span>
+<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a>            <span class="cf">for</span> event <span class="kw">in</span> <span class="op">&amp;</span>events <span class="op">{</span></span>
+<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a>                <span class="pp">writeln!</span>(file<span class="op">,</span> <span class="st">&quot;{}&quot;</span><span class="op">,</span> event<span class="op">.</span>to_json())<span class="op">?;</span></span>
+<span id="cb45-7"><a href="#cb45-7" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb45-8"><a href="#cb45-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb45-9"><a href="#cb45-9" aria-hidden="true" tabindex="-1"></a>        <span class="pp">ExportFormat::</span>Csv <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb45-10"><a href="#cb45-10" aria-hidden="true" tabindex="-1"></a>            <span class="co">// CSV with name, timestamp, session_id, user_id, duration_ms columns</span></span>
+<span id="cb45-11"><a href="#cb45-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb45-12"><a href="#cb45-12" aria-hidden="true" tabindex="-1"></a>        <span class="pp">ExportFormat::</span>Json <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb45-13"><a href="#cb45-13" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Pretty-printed JSON array</span></span>
+<span id="cb45-14"><a href="#cb45-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb45-15"><a href="#cb45-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb45-16"><a href="#cb45-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The JSONL format writes one JSON object per line -- the exact format
+that BigQuery's <code>bq load</code> command expects. A typical export
+pipeline runs nightly via cron:</p>
+<div class="sourceCode" id="cb46"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Export yesterday&#39;s telemetry events</span></span>
+<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a><span class="ex">rcode</span> insights export <span class="at">--format</span> jsonl <span class="at">--days</span> 1 <span class="at">--output</span> /tmp/telemetry.jsonl</span>
+<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-7"><a href="#cb46-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Upload to BigQuery</span></span>
+<span id="cb46-8"><a href="#cb46-8" aria-hidden="true" tabindex="-1"></a><span class="ex">bq</span> load <span class="at">--source_format</span><span class="op">=</span>NEWLINE_DELIMITED_JSON <span class="dt">\</span></span>
+<span id="cb46-9"><a href="#cb46-9" aria-hidden="true" tabindex="-1"></a>    project:dataset.telemetry_events <span class="dt">\</span></span>
+<span id="cb46-10"><a href="#cb46-10" aria-hidden="true" tabindex="-1"></a>    /tmp/telemetry.jsonl <span class="dt">\</span></span>
+<span id="cb46-11"><a href="#cb46-11" aria-hidden="true" tabindex="-1"></a>    schema.json</span>
+<span id="cb46-12"><a href="#cb46-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-13"><a href="#cb46-13" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> /tmp/telemetry.jsonl</span></code></pre></div>
+<p>The BigQuery table schema mirrors the event structure:</p>
+<div class="sourceCode" id="cb47"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="ot">[</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;name&quot;</span><span class="fu">,</span> <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;STRING&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;timestamp&quot;</span><span class="fu">,</span> <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;INTEGER&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;session_id&quot;</span><span class="fu">,</span> <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;STRING&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;user_id&quot;</span><span class="fu">,</span> <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;STRING&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;duration_ms&quot;</span><span class="fu">,</span> <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;INTEGER&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;properties&quot;</span><span class="fu">,</span> <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;JSON&quot;</span><span class="fu">}</span></span>
+<span id="cb47-8"><a href="#cb47-8" aria-hidden="true" tabindex="-1"></a><span class="ot">]</span></span></code></pre></div>
+<p>Once data lands in BigQuery, teams can run SQL analytics across their
+entire fleet: average cost per developer per week, feature adoption
+curves, tool usage heatmaps by project type, error rate trends
+correlated with model version changes.</p>
+<hr />
+<h2 id="398-session-tracing-with-perfetto">39.8 Session Tracing with
+Perfetto</h2>
+<p>Perfetto is Google's open-source tracing framework, and its web-based
+trace viewer (ui.perfetto.dev) is the gold standard for visualizing
+distributed traces. The OTel integration described in Section 39.5
+produces OTLP-formatted spans, but Perfetto can ingest these through an
+OpenTelemetry Collector configured with a Perfetto exporter.</p>
+<h3 id="configuring-the-collector">Configuring the Collector</h3>
+<p>A minimal <code>otel-collector-config.yaml</code> for local
+development:</p>
+<div class="sourceCode" id="cb48"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="fu">receivers</span><span class="kw">:</span></span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">otlp</span><span class="kw">:</span></span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">protocols</span><span class="kw">:</span></span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">http</span><span class="kw">:</span></span>
+<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">endpoint</span><span class="kw">:</span><span class="at"> 0.0.0.0:4318</span></span>
+<span id="cb48-6"><a href="#cb48-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-7"><a href="#cb48-7" aria-hidden="true" tabindex="-1"></a><span class="fu">exporters</span><span class="kw">:</span></span>
+<span id="cb48-8"><a href="#cb48-8" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">otlp/perfetto</span><span class="kw">:</span></span>
+<span id="cb48-9"><a href="#cb48-9" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">endpoint</span><span class="kw">:</span><span class="at"> localhost:4317</span></span>
+<span id="cb48-10"><a href="#cb48-10" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">tls</span><span class="kw">:</span></span>
+<span id="cb48-11"><a href="#cb48-11" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">insecure</span><span class="kw">:</span><span class="at"> </span><span class="ch">true</span></span>
+<span id="cb48-12"><a href="#cb48-12" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">file</span><span class="kw">:</span></span>
+<span id="cb48-13"><a href="#cb48-13" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">path</span><span class="kw">:</span><span class="at"> /tmp/traces.json</span></span>
+<span id="cb48-14"><a href="#cb48-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-15"><a href="#cb48-15" aria-hidden="true" tabindex="-1"></a><span class="fu">service</span><span class="kw">:</span></span>
+<span id="cb48-16"><a href="#cb48-16" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">pipelines</span><span class="kw">:</span></span>
+<span id="cb48-17"><a href="#cb48-17" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">traces</span><span class="kw">:</span></span>
+<span id="cb48-18"><a href="#cb48-18" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">receivers</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="at">otlp</span><span class="kw">]</span></span>
+<span id="cb48-19"><a href="#cb48-19" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">exporters</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="at">otlp/perfetto</span><span class="kw">,</span><span class="at"> file</span><span class="kw">]</span></span></code></pre></div>
+<p>The file exporter writes Chrome Trace Event Format (CTEF) compatible
+JSON that can be loaded directly into <code>ui.perfetto.dev</code> or
+<code>chrome://tracing</code>. Each span becomes a "Complete Event" with
+a begin time, duration, category, and name:</p>
+<div class="sourceCode" id="cb49"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb49-2"><a href="#cb49-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;traceEvents&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb49-3"><a href="#cb49-3" aria-hidden="true" tabindex="-1"></a>        <span class="fu">{</span></span>
+<span id="cb49-4"><a href="#cb49-4" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;ph&quot;</span><span class="fu">:</span> <span class="st">&quot;X&quot;</span><span class="fu">,</span> <span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;llm.api_call&quot;</span><span class="fu">,</span></span>
+<span id="cb49-5"><a href="#cb49-5" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;ts&quot;</span><span class="fu">:</span> <span class="dv">1712928000000</span><span class="fu">,</span> <span class="dt">&quot;dur&quot;</span><span class="fu">:</span> <span class="dv">1543000</span><span class="fu">,</span></span>
+<span id="cb49-6"><a href="#cb49-6" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;pid&quot;</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span> <span class="dt">&quot;tid&quot;</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span></span>
+<span id="cb49-7"><a href="#cb49-7" aria-hidden="true" tabindex="-1"></a>            <span class="dt">&quot;args&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;model&quot;</span><span class="fu">:</span> <span class="st">&quot;claude-sonnet-4&quot;</span><span class="fu">,</span> <span class="dt">&quot;tokens&quot;</span><span class="fu">:</span> <span class="dv">1200</span><span class="fu">}</span></span>
+<span id="cb49-8"><a href="#cb49-8" aria-hidden="true" tabindex="-1"></a>        <span class="fu">}</span></span>
+<span id="cb49-9"><a href="#cb49-9" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb49-10"><a href="#cb49-10" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="what-a-session-trace-looks-like">What a Session Trace Looks
+Like</h3>
+<p>When you open a session trace in Perfetto, you see nested spans
+arranged on a timeline:</p>
+<pre><code>session &quot;abc-123&quot;  [0ms ─────────────────────────────────── 45,000ms]
+  ├── turn.1  [0ms ──────────── 8,200ms]
+  │   ├── system_prompt.assembly  [0ms ─ 45ms]
+  │   ├── llm.api_call  [50ms ────── 4,800ms]
+  │   │   └── streaming.tokens  [120ms ─── 4,700ms]
+  │   ├── tool.bash  [4,850ms ──── 6,100ms]
+  │   │   └── bash.execution  [4,870ms ── 6,050ms]
+  │   └── tool.edit  [6,200ms ── 6,500ms]
+  ├── turn.2  [8,300ms ──────── 15,400ms]
+  │   ├── llm.api_call  [8,350ms ─── 12,900ms]
+  │   │   ├── prompt_cache.hit  [8,355ms ─ 8,360ms]
+  │   │   └── streaming.tokens  [8,500ms ── 12,800ms]
+  │   └── tool.read  [13,000ms ── 13,200ms]
+  ...</code></pre>
+<p>This visualization makes it immediately obvious where time is spent.
+In the example above, 58% of turn 1's wall time is the API call, and
+within that, streaming accounts for 97% of the API call duration. The
+prompt cache hit on turn 2 is a 5ms blip that saves potentially hundreds
+of milliseconds of re-processing.</p>
+<h3 id="instrumenting-critical-paths">Instrumenting Critical Paths</h3>
+<p>The key paths to instrument are:</p>
+<ol type="1">
+<li><strong>Turn lifecycle</strong> -- from user input received to
+response rendered.</li>
+<li><strong>API calls</strong> -- from request sent to last token
+received, including prompt cache status.</li>
+<li><strong>Tool execution</strong> -- from tool dispatch to result
+returned.</li>
+<li><strong>Context assembly</strong> -- system prompt construction,
+memory retrieval, rule loading.</li>
+<li><strong>Compaction</strong> -- when and why compaction fires, and
+how long it takes.</li>
+<li><strong>Hook execution</strong> -- pre/post tool use hooks, their
+latency impact.</li>
+<li><strong>MCP calls</strong> -- outbound requests to MCP servers,
+including serialization overhead.</li>
+</ol>
+<p>Each of these gets a span kind appropriate to its role:
+<code>Internal</code> for local processing, <code>Client</code> for
+outbound calls, <code>Server</code> for handling incoming requests from
+IDE bridges.</p>
+<hr />
+<h2 id="399-diagnostic-tracking-and-error-logging">39.9 Diagnostic
+Tracking and Error Logging</h2>
+<h3 id="the-two-tier-error-model">The Two-Tier Error Model</h3>
+<p>The telemetry system distinguishes between two kinds of error
+tracking:</p>
+<ol type="1">
+<li><p><strong>Error events</strong> in the telemetry stream
+(<code>EventPayload::ErrorOccurred</code>) -- these carry the error
+<em>type</em> and <em>code</em> but never the full message. They are
+used for aggregate analysis: "How many 429s did we get last
+week?"</p></li>
+<li><p><strong>Error summaries</strong> in the analytics database --
+these carry the error type, count, and last-seen timestamp, enabling the
+error summary table shown in the dashboard.</p></li>
+</ol>
+<p>The separation is intentional. The telemetry stream may leave the
+user's machine (if opted in), so it must be minimal. The analytics
+database stays local, so it can store slightly more detail for
+debugging.</p>
+<h3 id="retryable-vs-fatal-errors">Retryable vs. Fatal Errors</h3>
+<p>The <code>ErrorOccurred</code> payload includes a
+<code>retryable: bool</code> field:</p>
+<div class="sourceCode" id="cb51"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a>ErrorOccurred <span class="op">{</span></span>
+<span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a>    error_type<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb51-3"><a href="#cb51-3" aria-hidden="true" tabindex="-1"></a>    error_code<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span></span>
+<span id="cb51-4"><a href="#cb51-4" aria-hidden="true" tabindex="-1"></a>    retryable<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb51-5"><a href="#cb51-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This enables downstream dashboards to distinguish between transient
+failures (rate limits, timeouts, connection resets) and permanent
+failures (authentication errors, invalid requests, model not found). A
+high rate of retryable errors with eventual success indicates
+infrastructure pressure. A high rate of non-retryable errors indicates
+bugs.</p>
+<h3 id="system-metadata-collection">System Metadata Collection</h3>
+<p>The <code>collect_metadata()</code> function gathers environment
+information for diagnostic purposes:</p>
+<div class="sourceCode" id="cb52"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> collect_metadata() <span class="op">-&gt;</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> meta <span class="op">=</span> <span class="pp">HashMap::</span>new()<span class="op">;</span></span>
+<span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a>    meta<span class="op">.</span>insert(<span class="st">&quot;os&quot;</span><span class="op">,</span> <span class="pp">std::env::consts::</span>OS)<span class="op">;</span>           <span class="co">// &quot;macos&quot;, &quot;linux&quot;</span></span>
+<span id="cb52-4"><a href="#cb52-4" aria-hidden="true" tabindex="-1"></a>    meta<span class="op">.</span>insert(<span class="st">&quot;arch&quot;</span><span class="op">,</span> <span class="pp">std::env::consts::</span>ARCH)<span class="op">;</span>        <span class="co">// &quot;aarch64&quot;, &quot;x86_64&quot;</span></span>
+<span id="cb52-5"><a href="#cb52-5" aria-hidden="true" tabindex="-1"></a>    meta<span class="op">.</span>insert(<span class="st">&quot;shell&quot;</span><span class="op">,</span> <span class="pp">env::</span>var(<span class="st">&quot;SHELL&quot;</span>))<span class="op">;</span>             <span class="co">// &quot;/bin/zsh&quot;</span></span>
+<span id="cb52-6"><a href="#cb52-6" aria-hidden="true" tabindex="-1"></a>    meta<span class="op">.</span>insert(<span class="st">&quot;terminal&quot;</span><span class="op">,</span> <span class="pp">env::</span>var(<span class="st">&quot;TERM&quot;</span>))<span class="op">;</span>           <span class="co">// &quot;xterm-256color&quot;</span></span>
+<span id="cb52-7"><a href="#cb52-7" aria-hidden="true" tabindex="-1"></a>    meta<span class="op">.</span>insert(<span class="st">&quot;rcode_version&quot;</span><span class="op">,</span> <span class="pp">env!</span>(<span class="st">&quot;CARGO_PKG_VERSION&quot;</span>))<span class="op">;</span></span>
+<span id="cb52-8"><a href="#cb52-8" aria-hidden="true" tabindex="-1"></a>    meta<span class="op">.</span>insert(<span class="st">&quot;ci&quot;</span><span class="op">,</span> (<span class="pp">env::</span>var(<span class="st">&quot;CI&quot;</span>)<span class="op">.</span>is_ok())<span class="op">.</span>to_string())<span class="op">;</span></span>
+<span id="cb52-9"><a href="#cb52-9" aria-hidden="true" tabindex="-1"></a>    meta</span>
+<span id="cb52-10"><a href="#cb52-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The CI detection is particularly important: sessions running in CI/CD
+pipelines have fundamentally different usage patterns (non-interactive,
+often running <code>/batch</code> operations) and should be segmented
+separately in analytics.</p>
+<hr />
+<h2 id="3910-transport-layer-and-delivery-guarantees">39.10 Transport
+Layer and Delivery Guarantees</h2>
+<h3 id="multi-sink-architecture">Multi-Sink Architecture</h3>
+<p>The deep telemetry module supports four transport sinks:</p>
+<div class="sourceCode" id="cb53"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> TelemetrySink <span class="op">{</span></span>
+<span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a>    Datadog<span class="op">,</span>      <span class="co">// POST to Datadog intake API</span></span>
+<span id="cb53-3"><a href="#cb53-3" aria-hidden="true" tabindex="-1"></a>    FirstParty<span class="op">,</span>   <span class="co">// POST to telemetry.rcode.dev/v1/events</span></span>
+<span id="cb53-4"><a href="#cb53-4" aria-hidden="true" tabindex="-1"></a>    File<span class="op">,</span>         <span class="co">// Append JSONL to local file</span></span>
+<span id="cb53-5"><a href="#cb53-5" aria-hidden="true" tabindex="-1"></a>    Null<span class="op">,</span>         <span class="co">// Discard (disabled/testing)</span></span>
+<span id="cb53-6"><a href="#cb53-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>Null</code> sink is the default, meaning a fresh
+installation with no configuration transmits nothing. The
+<code>File</code> sink is useful for enterprises that want telemetry
+data but cannot send it to external services -- they analyze the local
+JSONL files with their own tools.</p>
+<h3 id="http-transport-with-retry">HTTP Transport with Retry</h3>
+<p>The <code>TransportManager</code> handles batching, rate limiting,
+retry, and offline fallback:</p>
+<div class="sourceCode" id="cb54"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> TransportManager <span class="op">{</span></span>
+<span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a>    config<span class="op">:</span> TransportConfig<span class="op">,</span></span>
+<span id="cb54-3"><a href="#cb54-3" aria-hidden="true" tabindex="-1"></a>    client<span class="op">:</span> <span class="dt">Box</span><span class="op">&lt;</span><span class="kw">dyn</span> HttpClient<span class="op">&gt;,</span></span>
+<span id="cb54-4"><a href="#cb54-4" aria-hidden="true" tabindex="-1"></a>    rate_limiter<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>RateLimiter<span class="op">&gt;,</span></span>
+<span id="cb54-5"><a href="#cb54-5" aria-hidden="true" tabindex="-1"></a>    fallback<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>FileFallback<span class="op">&gt;,</span></span>
+<span id="cb54-6"><a href="#cb54-6" aria-hidden="true" tabindex="-1"></a>    queue<span class="op">:</span> VecDeque<span class="op">&lt;</span>TelemetryEvent<span class="op">&gt;,</span></span>
+<span id="cb54-7"><a href="#cb54-7" aria-hidden="true" tabindex="-1"></a>    total_sent<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb54-8"><a href="#cb54-8" aria-hidden="true" tabindex="-1"></a>    total_dropped<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb54-9"><a href="#cb54-9" aria-hidden="true" tabindex="-1"></a>    total_fell_back<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb54-10"><a href="#cb54-10" aria-hidden="true" tabindex="-1"></a>    consecutive_failures<span class="op">:</span> <span class="dt">u32</span><span class="op">,</span></span>
+<span id="cb54-11"><a href="#cb54-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The retry logic uses exponential backoff with configurable base delay
+and maximum delay:</p>
+<div class="sourceCode" id="cb55"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> backoff_delay(retry<span class="op">:</span> <span class="dt">u32</span><span class="op">,</span> base<span class="op">:</span> Duration<span class="op">,</span> max<span class="op">:</span> Duration) <span class="op">-&gt;</span> Duration <span class="op">{</span></span>
+<span id="cb55-2"><a href="#cb55-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> delay <span class="op">=</span> base<span class="op">.</span>mul_f64(<span class="dv">2.0_f64</span><span class="op">.</span>powi(retry <span class="kw">as</span> <span class="dt">i32</span> <span class="op">-</span> <span class="dv">1</span>))<span class="op">;</span></span>
+<span id="cb55-3"><a href="#cb55-3" aria-hidden="true" tabindex="-1"></a>    delay<span class="op">.</span>min(max)</span>
+<span id="cb55-4"><a href="#cb55-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>With the default base of 500ms and max of 30s, the retry schedule is:
+500ms, 1s, 2s, 4s, 8s, 16s, 30s, 30s, ... Only retryable HTTP status
+codes trigger retry: 429, 500, 502, 503, 504. A 400 or 401 fails
+immediately -- retrying a bad request wastes time.</p>
+<h3 id="token-bucket-rate-limiting">Token Bucket Rate Limiting</h3>
+<p>The <code>RateLimiter</code> implements a token bucket algorithm to
+prevent the telemetry system from overwhelming the network:</p>
+<div class="sourceCode" id="cb56"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> RateLimiter <span class="op">{</span></span>
+<span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a>    max_per_sec<span class="op">:</span> <span class="dt">u32</span><span class="op">,</span></span>
+<span id="cb56-3"><a href="#cb56-3" aria-hidden="true" tabindex="-1"></a>    tokens<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb56-4"><a href="#cb56-4" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span>     <span class="co">// 2x max_per_sec for burst allowance</span></span>
+<span id="cb56-5"><a href="#cb56-5" aria-hidden="true" tabindex="-1"></a>    last_refill<span class="op">:</span> Instant<span class="op">,</span></span>
+<span id="cb56-6"><a href="#cb56-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The default rate is 50 events per second, with a burst capacity of
+100. Under normal operation (a few events per second), the rate limiter
+never fires. During pathological scenarios -- a loop that generates
+thousands of error events -- the limiter prevents the telemetry system
+from consuming all available bandwidth.</p>
+<h3 id="file-based-offline-fallback">File-Based Offline Fallback</h3>
+<p>When HTTP delivery fails after all retries, events are saved to a
+local fallback directory:</p>
+<div class="sourceCode" id="cb57"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb57-1"><a href="#cb57-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> FileFallback <span class="op">{</span></span>
+<span id="cb57-2"><a href="#cb57-2" aria-hidden="true" tabindex="-1"></a>    dir<span class="op">:</span> <span class="dt">PathBuf</span><span class="op">,</span></span>
+<span id="cb57-3"><a href="#cb57-3" aria-hidden="true" tabindex="-1"></a>    max_files<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb57-4"><a href="#cb57-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Fallback files are named <code>telemetry_{timestamp}.json</code> and
+automatically cleaned up when the count exceeds <code>max_files</code>
+(default 100). On the next successful connection,
+<code>retry_fallback()</code> attempts to re-send stored files and
+deletes them upon success.</p>
+<p>This store-and-forward pattern ensures no data loss during network
+outages, airplane mode, or VPN disconnections -- scenarios that are
+common for a developer tool that runs on laptops.</p>
+<hr />
+<h2 id="3911-putting-it-all-together">39.11 Putting It All Together</h2>
+<p>Let's trace the complete lifecycle of a single telemetry event from
+emission to persistence:</p>
+<ol type="1">
+<li><p><strong>Emission</strong>: The tool executor calls
+<code>builder.tool_used("bash", 350, true)</code>, which creates a
+<code>TelemetryEvent</code> with the current timestamp, session ID, and
+<code>ToolUsed</code> payload.</p></li>
+<li><p><strong>Privacy check</strong>:
+<code>TelemetryManager.record()</code> checks <code>is_enabled()</code>
+(global opt-in) and <code>is_category_enabled(CommandExecution)</code>.
+If either returns false, the event is silently dropped.</p></li>
+<li><p><strong>Session stats update</strong>: The manager acquires the
+stats lock and calls <code>stats.record_tool("bash")</code>,
+incrementing the per-tool counter.</p></li>
+<li><p><strong>Buffering</strong>: The event is pushed to the
+<code>EventBuffer</code>. If the buffer now holds 50+ events or the
+oldest event is 60+ seconds old, a flush is triggered.</p></li>
+<li><p><strong>Flush</strong>: The buffer is drained. Events are
+simultaneously written to the local analytics SQLite database (for the
+user's <code>/stats</code> command) and enqueued in the
+<code>TransportManager</code> (for remote telemetry, if opted
+in).</p></li>
+<li><p><strong>Transport</strong>: The transport manager batches events,
+applies rate limiting, serializes to JSON, optionally compresses with
+gzip, and POSTs to the configured endpoint. On failure, events are saved
+to the fallback directory.</p></li>
+<li><p><strong>Export</strong>: Periodically (or on demand), the user
+can export events from SQLite to JSON, CSV, or JSONL for BigQuery
+ingestion.</p></li>
+</ol>
+<p>Throughout this pipeline, the event never carries PII, code content,
+or prompt text. The privacy architecture is not a filter applied at the
+end -- it is a structural property of the event type system itself.</p>
+<hr />
+<h2 id="3912-design-decisions-and-trade-offs">39.12 Design Decisions and
+Trade-offs</h2>
+<p><strong>Why SQLite for local analytics?</strong> SQLite is embedded,
+requires no server process, handles concurrent reads from the TUI while
+the engine writes, and its single-file storage makes backup and
+migration trivial. The alternative -- writing to flat files and parsing
+them on query -- would require reimplementing indexing and
+aggregation.</p>
+<p><strong>Why a custom OTel implementation instead of the official
+SDK?</strong> As discussed in Section 39.5, the official SDK's
+architecture (background threads, global providers, long-running runtime
+assumptions) is a poor fit for a CLI tool. The custom implementation is
+~900 lines of Rust versus a multi-crate dependency tree, and it gives us
+precise control over export timing.</p>
+<p><strong>Why opt-in rather than opt-out telemetry?</strong> User
+trust. A CLI agent has deep access to a developer's filesystem, code,
+and credentials. Any perception that the tool is "phoning home" without
+explicit consent would be toxic to adoption. The engineering cost of
+opt-in (lower data volume) is far outweighed by the trust benefit.</p>
+<p><strong>Why per-category privacy controls?</strong> Different
+organizations have different compliance requirements. A healthcare
+company might allow anonymous session duration telemetry but prohibit
+error reports that could contain PHI in stack traces. Per-category
+controls let them participate in the parts they are comfortable
+with.</p>
+<p><strong>Why a remote killswitch?</strong> In case of a privacy
+incident -- say, a bug that causes prompt text to leak into error
+messages -- the killswitch lets the team stop all telemetry fleet-wide
+within the next polling interval. Without it, they would need to ship a
+hotfix and wait for users to update, potentially exposing data for
+days.</p>
+<hr />
+<h2 id="3913-summary">39.13 Summary</h2>
+<p>The analytics and telemetry system is the nervous system of the CLI
+agent -- it surfaces what the agent is doing, how well it is doing it,
+and how much it costs. The architecture separates concerns cleanly:
+event types define what can be measured, privacy controls define what
+may be measured, buffers and transports define how measurements are
+delivered, and the analytics engine provides local persistence and
+visualization.</p>
+<p>The key engineering principles at work:</p>
+<ol type="1">
+<li><strong>Privacy by design</strong>: Opt-in, per-category consent, no
+PII in the type system, anonymization as defense-in-depth, remote
+killswitch.</li>
+<li><strong>Zero-overhead when disabled</strong>: Early returns on the
+hot path, atomic flag checks, no allocations for dropped events.</li>
+<li><strong>Local-first</strong>: The SQLite analytics database works
+without any network connectivity. Remote telemetry is an optional
+add-on, not a requirement.</li>
+<li><strong>Standards-based</strong>: W3C Trace Context for propagation,
+OTLP JSON for export, OpenTelemetry-compatible span and metric
+models.</li>
+<li><strong>Graceful degradation</strong>: File fallback when offline,
+rate limiting when overloaded, store-and-forward for eventual
+delivery.</li>
+</ol>
+<p>In the next chapter, we will examine the testing infrastructure that
+validates all of these subsystems -- how to test privacy controls, mock
+HTTP transports, verify event serialization, and ensure that the
+killswitch actually kills.</p>
+</div>
+</body>
+</html>

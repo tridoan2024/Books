@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 21: The Configuration System — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-21-the-configuration-system">Chapter 21: The
+Configuration System</h1>
+<p>Every complex application eventually faces the same question: how do
+you let users, teams, and organizations each have a say in how the tool
+behaves — without those layers conflicting in unpredictable ways? Claude
+Code's configuration system answers this with a multi-layered
+architecture spanning seven priority tiers, a schema-driven validation
+engine, enterprise policy enforcement with cryptographic verification,
+and a feature flag registry managing 55+ runtime gates. At roughly 6,652
+lines across six core files, it is one of the most carefully designed
+subsystems in the entire codebase — because configuration errors are
+among the hardest bugs to diagnose.</p>
+<p>In this chapter, we'll build a configuration system capable of
+handling everything from a solo developer's personal preferences to an
+enterprise organization's locked-down security policies. We'll see how
+merge semantics differ by field type, why two separate settings systems
+coexist, and how to implement hot-reload without race conditions.</p>
+<hr />
+<h2 id="211-architecture-overview">21.1 Architecture Overview</h2>
+<p>The configuration system is split into three distinct layers, each
+serving a different audience and use case:</p>
+<pre><code>          Org Policy (managed.rs)         ← HMAC-signed, locked fields
+              │
+              ▼
+    Deep Settings (deep_settings.rs)      ← Schema, migration, watch, diff
+              │
+              ▼
+    Project Settings (settings/mod.rs)    ← Permissions, hooks, env, merge
+              │
+              ▼
+    Layered Config (config/layered.rs)    ← 5-layer precedence via Figment
+              │
+              ▼
+    CLI Config (config/mod.rs)            ← Unified final config + source tracking
+              │
+              ▼
+    Feature Flags (feature_flags.rs)      ← Runtime feature gates</code></pre>
+<p>Each layer has a well-defined responsibility. Project settings handle
+the JSON files that teams commit to repositories. Deep settings add
+schema validation, version migration, and change detection. Managed
+settings enforce organization-level policies that individual users
+cannot override. Layered config provides the final resolution using a
+priority cascade. And feature flags gate experimental or
+progressive-rollout functionality at runtime.</p>
+<h3 id="the-seven-tier-priority-cascade">The Seven-Tier Priority
+Cascade</h3>
+<p>When the same setting appears at multiple levels, the resolution
+order determines which value wins:</p>
+<table>
+<thead>
+<tr>
+<th>Priority</th>
+<th>Source</th>
+<th>Example Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 (highest)</td>
+<td>Org Policy (managed)</td>
+<td>Remote endpoint, HMAC-verified</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Environment variables (<code>CLAUDE_*</code>)</td>
+<td><code>CLAUDE_MODEL=opus</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Local settings (gitignored)</td>
+<td><code>.claude/settings.local.json</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td>Project settings (shared)</td>
+<td><code>.claude/settings.json</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>User global settings</td>
+<td><code>~/.config/claude/settings.json</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td>Legacy TOML config</td>
+<td><code>~/.config/claude/config.toml</code></td>
+</tr>
+<tr>
+<td>7 (lowest)</td>
+<td>Built-in defaults</td>
+<td>Hardcoded in source</td>
+</tr>
+</tbody>
+</table>
+<p>This ordering follows a principle you'll encounter in many production
+systems: <strong>specificity wins</strong>. An organization's security
+policy overrides everything because it represents compliance
+requirements. Environment variables come next because they represent the
+current execution context. Local settings beat project settings because
+personal preferences shouldn't require modifying shared files. And
+built-in defaults are the fallback of last resort.</p>
+<hr />
+<h2 id="212-project-level-settings">21.2 Project-Level Settings</h2>
+<p>The foundation of the configuration system is the project settings
+file — the JSON that teams commit to their repository.</p>
+<h3 id="the-settings-data-model">The Settings Data Model</h3>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ProjectSettings {</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  permissions<span class="op">:</span> ProjectPermissions<span class="op">;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  hooks<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> HookConfig[]<span class="op">&gt;;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  env<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  contextTokens<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  model<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  effortLevel<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  mcpServers<span class="op">:</span> McpServerEntry[]<span class="op">;</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  toolConfig<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>  features<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">boolean</span><span class="op">&gt;;</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ProjectPermissions {</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>  allow<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span>  <span class="co">// e.g., [&quot;Bash(git diff *)&quot;, &quot;Read(**)&quot;]</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>  deny<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span>   <span class="co">// e.g., [&quot;Read(./.env)&quot;, &quot;Bash(rm -rf *)&quot;]</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> HookConfig {</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="dt">string</span><span class="op">;</span>        <span class="co">// &quot;command&quot; | &quot;script&quot; | &quot;function&quot;</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>  command<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>  timeout<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>     <span class="co">// default: 5000ms</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  matcher<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span>    <span class="co">// tool-name filter, e.g., &quot;Bash&quot;</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> McpServerEntry {</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>  command<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  args<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>  env<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;;</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>  enabled<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span>    <span class="co">// default: true</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Every field uses a default value, ensuring partial JSON files
+deserialize without error. This is a critical design decision: a
+settings file with just <code>{ "model": "opus" }</code> is perfectly
+valid. Missing keys get their type's default (empty array, empty object,
+<code>undefined</code> for optionals).</p>
+<h3 id="known-constants-and-forward-compatibility">Known Constants and
+Forward Compatibility</h3>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> KNOWN_MODELS <span class="op">=</span> [</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;sonnet&quot;</span><span class="op">,</span> <span class="st">&quot;opus&quot;</span><span class="op">,</span> <span class="st">&quot;haiku&quot;</span><span class="op">,</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;claude-3-opus&quot;</span><span class="op">,</span> <span class="st">&quot;claude-3-sonnet&quot;</span><span class="op">,</span> <span class="st">&quot;claude-3-haiku&quot;</span><span class="op">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;claude-3.5-sonnet&quot;</span><span class="op">,</span> <span class="st">&quot;claude-3.5-haiku&quot;</span><span class="op">,</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;claude-4-sonnet&quot;</span><span class="op">,</span> <span class="st">&quot;claude-4-opus&quot;</span><span class="op">,</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;gpt-4&quot;</span><span class="op">,</span> <span class="st">&quot;gpt-4o&quot;</span><span class="op">,</span> <span class="st">&quot;gpt-4o-mini&quot;</span><span class="op">,</span> <span class="st">&quot;gpt-4-turbo&quot;</span><span class="op">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>]<span class="op">;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> KNOWN_HOOK_EVENTS <span class="op">=</span> [</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;PreToolUse&quot;</span><span class="op">,</span> <span class="st">&quot;PostToolUse&quot;</span><span class="op">,</span> <span class="st">&quot;SessionStart&quot;</span><span class="op">,</span> <span class="st">&quot;SessionEnd&quot;</span><span class="op">,</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Setup&quot;</span><span class="op">,</span> <span class="st">&quot;PreToolUseFailure&quot;</span><span class="op">,</span> <span class="st">&quot;PostToolUseFailure&quot;</span><span class="op">,</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;PermissionRequest&quot;</span><span class="op">,</span> <span class="st">&quot;PermissionDenied&quot;</span><span class="op">,</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>]<span class="op">;</span></span></code></pre></div>
+<p>Unknown values generate warnings, not errors. This preserves forward
+compatibility — if a newer version of the tool introduces a new hook
+event, older versions don't reject the settings file. They simply warn
+and continue. This is the same principle HTTP uses with unknown headers:
+ignore what you don't understand.</p>
+<h3 id="effort-level-aliases">Effort Level Aliases</h3>
+<p>The effort level configuration accepts multiple aliases for developer
+convenience:</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Maps to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"low"</code>, <code>"lo"</code>, <code>"min"</code></td>
+<td>Low</td>
+</tr>
+<tr>
+<td><code>"medium"</code>, <code>"med"</code>, <code>"mid"</code>,
+<code>"default"</code></td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><code>"high"</code>, <code>"hi"</code>, <code>"max"</code></td>
+<td>High</td>
+</tr>
+</tbody>
+</table>
+<p>Case-insensitive matching via <code>toLowerCase()</code>. This is a
+small touch, but it matters: developers shouldn't need to look up the
+exact string when <code>"hi"</code> clearly means high effort.</p>
+<h3 id="the-two-file-strategy">The Two-File Strategy</h3>
+<p>Settings are loaded from two files:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">loadProjectSettings</span>(projectRoot<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> ProjectSettings {</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> settingsPath <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(projectRoot<span class="op">,</span> <span class="st">&quot;.claude&quot;</span><span class="op">,</span> <span class="st">&quot;settings.json&quot;</span>)<span class="op">;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> localPath <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(projectRoot<span class="op">,</span> <span class="st">&quot;.claude&quot;</span><span class="op">,</span> <span class="st">&quot;settings.local.json&quot;</span>)<span class="op">;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Load shared settings (committed to git)</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> settings <span class="op">=</span> fs<span class="op">.</span><span class="fu">existsSync</span>(settingsPath)</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">?</span> <span class="fu">parseOrDefault</span>(settingsPath)</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">:</span> <span class="fu">defaultSettings</span>()<span class="op">;</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Merge local overrides (gitignored)</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (fs<span class="op">.</span><span class="fu">existsSync</span>(localPath)) {</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> local <span class="op">=</span> <span class="fu">parseOrDefault</span>(localPath)<span class="op">;</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    settings <span class="op">=</span> <span class="fu">mergeLocal</span>(settings<span class="op">,</span> local)<span class="op">;</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> settings<span class="op">;</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The shared file (<code>.claude/settings.json</code>) captures team
+conventions. The local file (<code>.claude/settings.local.json</code>)
+captures personal preferences. The local file is
+<code>.gitignore</code>d so developers can have permissive settings
+locally without affecting the team.</p>
+<hr />
+<h2 id="213-the-merge-system">21.3 The Merge System</h2>
+<p>Merge semantics vary by field type — and getting this wrong creates
+the subtlest configuration bugs imaginable.</p>
+<h3 id="local-merge-local-overrides-shared">Local Merge (Local Overrides
+Shared)</h3>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">mergeLocal</span>(base<span class="op">:</span> ProjectSettings<span class="op">,</span> local<span class="op">:</span> ProjectSettings)<span class="op">:</span> ProjectSettings {</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    permissions<span class="op">:</span> {</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Permissions: EXTENDED (local appended to shared)</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>      allow<span class="op">:</span> [<span class="op">...</span>base<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">allow</span><span class="op">,</span> <span class="op">...</span>local<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">allow</span>]<span class="op">,</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>      deny<span class="op">:</span> [<span class="op">...</span>base<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">deny</span><span class="op">,</span> <span class="op">...</span>local<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">deny</span>]<span class="op">,</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Hooks: REPLACED per event key</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    hooks<span class="op">:</span> { <span class="op">...</span>base<span class="op">.</span><span class="at">hooks</span><span class="op">,</span> <span class="op">...</span>local<span class="op">.</span><span class="at">hooks</span> }<span class="op">,</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Env: EXTENDED (local wins on key collision)</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    env<span class="op">:</span> { <span class="op">...</span>base<span class="op">.</span><span class="at">env</span><span class="op">,</span> <span class="op">...</span>local<span class="op">.</span><span class="at">env</span> }<span class="op">,</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Scalars: overridden only when local has a value</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    model<span class="op">:</span> local<span class="op">.</span><span class="at">model</span> <span class="op">??</span> base<span class="op">.</span><span class="at">model</span><span class="op">,</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    effortLevel<span class="op">:</span> local<span class="op">.</span><span class="at">effortLevel</span> <span class="op">??</span> base<span class="op">.</span><span class="at">effortLevel</span><span class="op">,</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>    contextTokens<span class="op">:</span> local<span class="op">.</span><span class="at">contextTokens</span> <span class="op">??</span> base<span class="op">.</span><span class="at">contextTokens</span><span class="op">,</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Collections: additive merge</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>    mcpServers<span class="op">:</span> [<span class="op">...</span>base<span class="op">.</span><span class="at">mcpServers</span><span class="op">,</span> <span class="op">...</span>local<span class="op">.</span><span class="at">mcpServers</span>]<span class="op">,</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>    toolConfig<span class="op">:</span> { <span class="op">...</span>base<span class="op">.</span><span class="at">toolConfig</span><span class="op">,</span> <span class="op">...</span>local<span class="op">.</span><span class="at">toolConfig</span> }<span class="op">,</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    features<span class="op">:</span> { <span class="op">...</span>base<span class="op">.</span><span class="at">features</span><span class="op">,</span> <span class="op">...</span>local<span class="op">.</span><span class="at">features</span> }<span class="op">,</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The merge strategies per field type:</p>
+<table>
+<thead>
+<tr>
+<th>Field Type</th>
+<th>Strategy</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>permissions.allow/deny</code></td>
+<td>Extend (append)</td>
+<td>Local can add permissions but never remove shared ones</td>
+</tr>
+<tr>
+<td><code>hooks</code></td>
+<td>Replace per event key</td>
+<td>A local hook completely replaces the shared hook for that event</td>
+</tr>
+<tr>
+<td><code>env</code></td>
+<td>Extend (local wins on collision)</td>
+<td>Local environment overrides team defaults</td>
+</tr>
+<tr>
+<td>Scalar <code>Option&lt;T&gt;</code></td>
+<td>Override only when present</td>
+<td>Missing local values don't clear shared settings</td>
+</tr>
+<tr>
+<td><code>mcpServers</code></td>
+<td>Append (no dedup)</td>
+<td>Local can add servers; removing requires editing shared file</td>
+</tr>
+<tr>
+<td><code>toolConfig</code>, <code>features</code></td>
+<td>Extend (local wins)</td>
+<td>Local feature overrides team defaults</td>
+</tr>
+</tbody>
+</table>
+<h3 id="user-merge-user-settings-are-lower-priority">User Merge (User
+Settings Are Lower Priority)</h3>
+<p>When merging user-global settings into project settings, the
+direction reverses:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">mergeFromUser</span>(project<span class="op">:</span> ProjectSettings<span class="op">,</span> user<span class="op">:</span> UserSettings)<span class="op">:</span> ProjectSettings {</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">// User permissions are PREPENDED (lower priority)</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> combinedAllow <span class="op">=</span> [<span class="op">...</span>user<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">allow</span><span class="op">,</span> <span class="op">...</span>project<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">allow</span>]<span class="op">;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> combinedDeny <span class="op">=</span> [<span class="op">...</span>user<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">deny</span><span class="op">,</span> <span class="op">...</span>project<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">deny</span>]<span class="op">;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// User env fills gaps — project wins on collision</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> env <span class="op">=</span> { <span class="op">...</span>user<span class="op">.</span><span class="at">env</span><span class="op">,</span> <span class="op">...</span>project<span class="op">.</span><span class="at">env</span> }<span class="op">;</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Scalar: project wins</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> model <span class="op">=</span> project<span class="op">.</span><span class="at">model</span> <span class="op">??</span> user<span class="op">.</span><span class="at">model</span><span class="op">;</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> effortLevel <span class="op">=</span> project<span class="op">.</span><span class="at">effortLevel</span> <span class="op">??</span> user<span class="op">.</span><span class="at">effortLevel</span><span class="op">;</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { <span class="op">...</span>project<span class="op">,</span> permissions<span class="op">:</span> { allow<span class="op">:</span> combinedAllow<span class="op">,</span> deny<span class="op">:</span> combinedDeny }<span class="op">,</span> env<span class="op">,</span> model<span class="op">,</span> effortLevel }<span class="op">;</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The key insight is <strong>prepending</strong> user permissions
+rather than appending them. Since the permission system evaluates deny
+rules first in array order (as discussed in Chapter 15), project-level
+deny rules need to appear after user-level ones to take evaluation
+priority. By prepending user permissions, project rules always win
+during the deny-first scan.</p>
+<hr />
+<h2 id="214-permission-checking-in-settings">21.4 Permission Checking in
+Settings</h2>
+<p>The permission check function is called on every tool invocation —
+it's the hottest path in the entire configuration system.</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">checkPermission</span>(</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  settings<span class="op">:</span> ProjectSettings<span class="op">,</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  toolName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  inputSummary<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">boolean</span> <span class="op">|</span> <span class="dt">undefined</span> {</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> callStr <span class="op">=</span> <span class="vs">`</span><span class="sc">${</span>toolName<span class="sc">}</span><span class="vs">(</span><span class="sc">${</span>inputSummary<span class="sc">}</span><span class="vs">)`</span><span class="op">;</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Deny takes priority</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> pattern <span class="kw">of</span> settings<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">deny</span>) {</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">globMatch</span>(pattern<span class="op">,</span> callStr)) <span class="cf">return</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Then allow</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> pattern <span class="kw">of</span> settings<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">allow</span>) {</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">globMatch</span>(pattern<span class="op">,</span> callStr)) <span class="cf">return</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>  <span class="co">// No match — fall through to default logic</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">undefined</span><span class="op">;</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Three-valued return: <code>true</code> means allow,
+<code>false</code> means deny, <code>undefined</code> means no rule
+matched. The caller (typically the permission system from Chapter 15)
+decides the default behavior when no rule matches — usually "ask the
+user."</p>
+<h3 id="the-custom-glob-matcher">The Custom Glob Matcher</h3>
+<p>Permission patterns aren't file paths — they're tool call signatures
+like <code>Bash(git diff *)</code>. The standard <code>glob</code>
+library expects filesystem paths with separators. So the configuration
+system implements its own 64-line recursive-descent glob matcher:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">globMatch</span>(pattern<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> text<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> pi <span class="op">=</span> <span class="dv">0</span><span class="op">;</span>  <span class="co">// pattern index</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ti <span class="op">=</span> <span class="dv">0</span><span class="op">;</span>  <span class="co">// text index</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> starPi <span class="op">=</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span>   <span class="co">// position after last *</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> starTi <span class="op">=</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span>   <span class="co">// text position when * was hit</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> dstarPi <span class="op">=</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span>  <span class="co">// position after last **</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> dstarTi <span class="op">=</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span>  <span class="co">// text position when ** was hit</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> (ti <span class="op">&lt;</span> text<span class="op">.</span><span class="at">length</span>) {</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (pi <span class="op">&lt;</span> pattern<span class="op">.</span><span class="at">length</span> <span class="op">-</span> <span class="dv">1</span> </span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;&amp;</span> pattern[pi] <span class="op">===</span> <span class="st">&#39;*&#39;</span> <span class="op">&amp;&amp;</span> pattern[pi <span class="op">+</span> <span class="dv">1</span>] <span class="op">===</span> <span class="st">&#39;*&#39;</span>) {</span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>      <span class="co">// ** matches zero or more chars INCLUDING /</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>      dstarPi <span class="op">=</span> pi <span class="op">+</span> <span class="dv">2</span><span class="op">;</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>      dstarTi <span class="op">=</span> ti<span class="op">;</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>      pi <span class="op">+=</span> <span class="dv">2</span><span class="op">;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (pi <span class="op">&lt;</span> pattern<span class="op">.</span><span class="at">length</span> <span class="op">&amp;&amp;</span> pattern[pi] <span class="op">===</span> <span class="st">&#39;*&#39;</span>) {</span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>      <span class="co">// * matches zero or more chars EXCEPT /</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>      starPi <span class="op">=</span> pi <span class="op">+</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>      starTi <span class="op">=</span> ti<span class="op">;</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>      pi<span class="op">++;</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (pi <span class="op">&lt;</span> pattern<span class="op">.</span><span class="at">length</span> </span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>               <span class="op">&amp;&amp;</span> (pattern[pi] <span class="op">===</span> text[ti] <span class="op">||</span> pattern[pi] <span class="op">===</span> <span class="st">&#39;?&#39;</span>)) {</span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Exact match or ? wildcard</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>      pi<span class="op">++;</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>      ti<span class="op">++;</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (starPi <span class="op">!==</span> <span class="op">-</span><span class="dv">1</span> <span class="op">&amp;&amp;</span> text[ti] <span class="op">!==</span> <span class="st">&#39;/&#39;</span>) {</span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Backtrack to * (cannot cross /)</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>      pi <span class="op">=</span> starPi<span class="op">;</span></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>      ti <span class="op">=</span> <span class="op">++</span>starTi<span class="op">;</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (dstarPi <span class="op">!==</span> <span class="op">-</span><span class="dv">1</span>) {</span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Backtrack to ** (crosses anything)</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a>      pi <span class="op">=</span> dstarPi<span class="op">;</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>      ti <span class="op">=</span> <span class="op">++</span>dstarTi<span class="op">;</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Consume trailing wildcards</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> (pi <span class="op">&lt;</span> pattern<span class="op">.</span><span class="at">length</span> <span class="op">&amp;&amp;</span> pattern[pi] <span class="op">===</span> <span class="st">&#39;*&#39;</span>) pi<span class="op">++;</span></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> pi <span class="op">===</span> pattern<span class="op">.</span><span class="at">length</span><span class="op">;</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The wildcard semantics:</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Matches</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>*</code></td>
+<td>Zero or more chars except <code>/</code></td>
+<td><code>Bash(git *)</code> matches <code>Bash(git diff)</code> but not
+<code>Bash(git log/foo)</code></td>
+</tr>
+<tr>
+<td><code>**</code></td>
+<td>Zero or more chars including <code>/</code></td>
+<td><code>Read(**)</code> matches <code>Read(src/foo/bar.ts)</code></td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>Exactly one character</td>
+<td><code>Read(?.ts)</code> matches <code>Read(a.ts)</code> but not
+<code>Read(ab.ts)</code></td>
+</tr>
+</tbody>
+</table>
+<p>This avoids a crate dependency for a performance-critical path.
+Permission checking happens on every single tool call — potentially
+dozens per conversation turn.</p>
+<hr />
+<h2 id="215-settings-validation">21.5 Settings Validation</h2>
+<p>The validation system performs 12 checks across 5 categories, all
+non-blocking:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">validateSettings</span>(settings<span class="op">:</span> ProjectSettings)<span class="op">:</span> SettingsWarning[] {</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> warnings<span class="op">:</span> SettingsWarning[] <span class="op">=</span> []<span class="op">;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Permission validation</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> pattern <span class="kw">of</span> [<span class="op">...</span>settings<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">allow</span><span class="op">,</span> <span class="op">...</span>settings<span class="op">.</span><span class="at">permissions</span><span class="op">.</span><span class="at">deny</span>]) {</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (pattern<span class="op">.</span><span class="fu">trim</span>() <span class="op">===</span> <span class="st">&#39;&#39;</span>) {</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>      warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;empty_pattern&#39;</span><span class="op">,</span> message<span class="op">:</span> <span class="st">&#39;Empty permission pattern&#39;</span> })<span class="op">;</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> ((pattern<span class="op">.</span><span class="fu">match</span>(<span class="ss">/</span><span class="sc">\(</span><span class="ss">/g</span>) <span class="op">||</span> [])<span class="op">.</span><span class="at">length</span> <span class="op">!==</span> (pattern<span class="op">.</span><span class="fu">match</span>(<span class="ss">/</span><span class="sc">\)</span><span class="ss">/g</span>) <span class="op">||</span> [])<span class="op">.</span><span class="at">length</span>) {</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>      warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;unbalanced_parens&#39;</span><span class="op">,</span> pattern })<span class="op">;</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Model validation</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (settings<span class="op">.</span><span class="at">model</span> <span class="op">&amp;&amp;</span> <span class="op">!</span>KNOWN_MODELS<span class="op">.</span><span class="fu">includes</span>(settings<span class="op">.</span><span class="at">model</span>)) {</span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;unknown_model&#39;</span><span class="op">,</span> model<span class="op">:</span> settings<span class="op">.</span><span class="at">model</span> })<span class="op">;</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Effort level validation</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (settings<span class="op">.</span><span class="at">effortLevel</span>) {</span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span> { <span class="fu">parseEffortLevel</span>(settings<span class="op">.</span><span class="at">effortLevel</span>)<span class="op">;</span> }</span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">catch</span> { warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;invalid_effort_level&#39;</span><span class="op">,</span> value<span class="op">:</span> settings<span class="op">.</span><span class="at">effortLevel</span> })<span class="op">;</span> }</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Context token validation</span></span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (settings<span class="op">.</span><span class="at">contextTokens</span> <span class="op">!==</span> <span class="kw">undefined</span>) {</span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (settings<span class="op">.</span><span class="at">contextTokens</span> <span class="op">===</span> <span class="dv">0</span>) warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;zero_context_tokens&#39;</span> })<span class="op">;</span></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (settings<span class="op">.</span><span class="at">contextTokens</span> <span class="op">&gt;</span> <span class="dv">2_000_000</span>) warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;excessive_context_tokens&#39;</span> })<span class="op">;</span></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Hook validation</span></span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [<span class="bu">event</span><span class="op">,</span> hooks] <span class="kw">of</span> <span class="bu">Object</span><span class="op">.</span><span class="fu">entries</span>(settings<span class="op">.</span><span class="at">hooks</span>)) {</span>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>KNOWN_HOOK_EVENTS<span class="op">.</span><span class="fu">includes</span>(<span class="bu">event</span>)) {</span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>      warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;unknown_hook_event&#39;</span><span class="op">,</span> <span class="bu">event</span> })<span class="op">;</span></span>
+<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> hook <span class="kw">of</span> hooks) {</span>
+<span id="cb9-37"><a href="#cb9-37" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="op">!</span>hook<span class="op">.</span><span class="at">command</span>) warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;empty_hook_command&#39;</span><span class="op">,</span> <span class="bu">event</span> })<span class="op">;</span></span>
+<span id="cb9-38"><a href="#cb9-38" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (hook<span class="op">.</span><span class="at">timeout</span> <span class="op">===</span> <span class="dv">0</span>) warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;zero_hook_timeout&#39;</span><span class="op">,</span> <span class="bu">event</span> })<span class="op">;</span></span>
+<span id="cb9-39"><a href="#cb9-39" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="op">!</span>[<span class="st">&#39;command&#39;</span><span class="op">,</span> <span class="st">&#39;script&#39;</span><span class="op">,</span> <span class="st">&#39;function&#39;</span>]<span class="op">.</span><span class="fu">includes</span>(hook<span class="op">.</span><span class="at">type</span>)) {</span>
+<span id="cb9-40"><a href="#cb9-40" aria-hidden="true" tabindex="-1"></a>        warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;unknown_hook_type&#39;</span><span class="op">,</span> type<span class="op">:</span> hook<span class="op">.</span><span class="at">type</span> })<span class="op">;</span></span>
+<span id="cb9-41"><a href="#cb9-41" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb9-42"><a href="#cb9-42" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb9-43"><a href="#cb9-43" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-44"><a href="#cb9-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-45"><a href="#cb9-45" aria-hidden="true" tabindex="-1"></a>  <span class="co">// MCP validation</span></span>
+<span id="cb9-46"><a href="#cb9-46" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> server <span class="kw">of</span> settings<span class="op">.</span><span class="at">mcpServers</span>) {</span>
+<span id="cb9-47"><a href="#cb9-47" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>server<span class="op">.</span><span class="at">name</span>) warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;empty_mcp_server_name&#39;</span> })<span class="op">;</span></span>
+<span id="cb9-48"><a href="#cb9-48" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>server<span class="op">.</span><span class="at">command</span>) warnings<span class="op">.</span><span class="fu">push</span>({ code<span class="op">:</span> <span class="st">&#39;empty_mcp_server_command&#39;</span> })<span class="op">;</span></span>
+<span id="cb9-49"><a href="#cb9-49" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-50"><a href="#cb9-50" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-51"><a href="#cb9-51" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> warnings<span class="op">;</span></span>
+<span id="cb9-52"><a href="#cb9-52" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Validation is deliberately non-blocking. All issues are warnings, not
+errors. The application continues with potentially problematic settings
+because a partially correct configuration is vastly better than a tool
+that refuses to start. Consider the developer experience: you're in the
+middle of debugging a production incident and your CLI tool won't launch
+because someone added an extra comma to settings.json. That's
+unacceptable.</p>
+<hr />
+<h2 id="216-the-deep-settings-engine">21.6 The Deep Settings Engine</h2>
+<p>Above the basic JSON settings sits a more sophisticated engine that
+adds schema-driven validation, version migration, conflict resolution,
+and file watching.</p>
+<h3 id="schema-definition">Schema Definition</h3>
+<p>Every setting is defined by a schema entry with 11 fields:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> FieldSchema {</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  key<span class="op">:</span> <span class="dt">string</span><span class="op">;</span>                    <span class="co">// Dot-notation path: &quot;model.default_model&quot;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  section<span class="op">:</span> SettingsSection<span class="op">;</span>       <span class="co">// One of 8 sections</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  fieldType<span class="op">:</span> FieldType<span class="op">;</span>           <span class="co">// String | Integer | Float | Boolean | StringArray | Object | Enum</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  defaultValue<span class="op">:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>  minValue<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>  maxValue<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>  required<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>  deprecated<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>  deprecatedMessage<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>  sinceVersion<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>           <span class="co">// Which settings version introduced this field</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> FieldType <span class="op">=</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;string&#39;</span> }</span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;integer&#39;</span> }</span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;float&#39;</span> }</span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;boolean&#39;</span> }</span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;stringArray&#39;</span> }</span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;object&#39;</span> }</span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;enum&#39;</span><span class="op">;</span> values<span class="op">:</span> <span class="dt">string</span>[] }<span class="op">;</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> SettingsSection <span class="op">=</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;model&#39;</span> <span class="op">|</span> <span class="st">&#39;permissions&#39;</span> <span class="op">|</span> <span class="st">&#39;appearance&#39;</span> <span class="op">|</span> <span class="st">&#39;keybindings&#39;</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;plugins&#39;</span> <span class="op">|</span> <span class="st">&#39;mcp&#39;</span> <span class="op">|</span> <span class="st">&#39;tools&#39;</span> <span class="op">|</span> <span class="st">&#39;behavior&#39;</span><span class="op">;</span></span></code></pre></div>
+<p>The schema registry defines 39+ fields across all 8 sections. Here's
+a representative sample:</p>
+<p><strong>Model section (7 fields):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Default</th>
+<th>Range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>model.default_model</code></td>
+<td>String</td>
+<td><code>"sonnet"</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>model.max_tokens</code></td>
+<td>Integer</td>
+<td>200,000</td>
+<td>1–1,000,000</td>
+</tr>
+<tr>
+<td><code>model.temperature</code></td>
+<td>Float</td>
+<td>0.7</td>
+<td>0.0–2.0</td>
+</tr>
+<tr>
+<td><code>model.top_p</code></td>
+<td>Float</td>
+<td>0.95</td>
+<td>0.0–1.0</td>
+</tr>
+<tr>
+<td><code>model.reasoning_effort</code></td>
+<td>Enum(low/medium/high)</td>
+<td><code>"high"</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>model.stream</code></td>
+<td>Boolean</td>
+<td><code>true</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>model.fallback_models</code></td>
+<td>StringArray</td>
+<td><code>["haiku"]</code></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Behavior section (7 fields):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Default</th>
+<th>Range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>behavior.auto_commit</code></td>
+<td>Boolean</td>
+<td><code>false</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>behavior.auto_lint</code></td>
+<td>Boolean</td>
+<td><code>true</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>behavior.auto_test</code></td>
+<td>Boolean</td>
+<td><code>false</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>behavior.dream_enabled</code></td>
+<td>Boolean</td>
+<td><code>false</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>behavior.context_window_strategy</code></td>
+<td>Enum(truncate/summarize/sliding)</td>
+<td><code>"summarize"</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>behavior.max_turns</code></td>
+<td>Integer</td>
+<td>100</td>
+<td>1–10,000</td>
+</tr>
+<tr>
+<td><code>behavior.verbose_logging</code></td>
+<td>Boolean</td>
+<td><code>false</code></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h3 id="dot-notation-access">Dot-Notation Access</h3>
+<p>Settings are accessed and mutated through dot-notation paths, with
+auto-creation of intermediate objects:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Settings {</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  source<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  data<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  loadedAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">get</span>(key<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">unknown</span> <span class="op">|</span> <span class="dt">undefined</span> {</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parts <span class="op">=</span> key<span class="op">.</span><span class="fu">split</span>(<span class="st">&#39;.&#39;</span>)<span class="op">;</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (parts<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">1</span>) <span class="cf">return</span> <span class="kw">this</span><span class="op">.</span><span class="at">data</span>[key]<span class="op">;</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> current<span class="op">:</span> <span class="dt">unknown</span> <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">data</span>[parts[<span class="dv">0</span>]]<span class="op">;</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> part <span class="kw">of</span> parts<span class="op">.</span><span class="fu">slice</span>(<span class="dv">1</span>)) {</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (current <span class="op">===</span> <span class="kw">undefined</span> <span class="op">||</span> <span class="kw">typeof</span> current <span class="op">!==</span> <span class="st">&#39;object&#39;</span>) <span class="cf">return</span> <span class="kw">undefined</span><span class="op">;</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>      current <span class="op">=</span> (current <span class="im">as</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;</span>)[part]<span class="op">;</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> current<span class="op">;</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">set</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> value<span class="op">:</span> <span class="dt">unknown</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parts <span class="op">=</span> key<span class="op">.</span><span class="fu">split</span>(<span class="st">&#39;.&#39;</span>)<span class="op">;</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> current <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">data</span><span class="op">;</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> part <span class="kw">of</span> parts<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> <span class="op">-</span><span class="dv">1</span>)) {</span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="op">!</span>(part <span class="kw">in</span> current) <span class="op">||</span> <span class="kw">typeof</span> current[part] <span class="op">!==</span> <span class="st">&#39;object&#39;</span>) {</span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>        current[part] <span class="op">=</span> {}<span class="op">;</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>      current <span class="op">=</span> current[part] <span class="im">as</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>    current[parts[parts<span class="op">.</span><span class="at">length</span> <span class="op">-</span> <span class="dv">1</span>]] <span class="op">=</span> value<span class="op">;</span></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>set()</code> method auto-creates intermediate objects.
+Setting <code>"model.fallback.primary"</code> creates
+<code>{ "model": { "fallback": { "primary": value } } }</code> even if
+neither <code>model</code> nor <code>fallback</code> previously existed.
+This eliminates an entire class of "undefined is not an object" errors
+when deeply nested settings are modified.</p>
+<h3 id="version-migration">Version Migration</h3>
+<p>Settings files carry a version number. When the tool loads a file
+with an older version, it runs a migration pipeline:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> CURRENT_SETTINGS_VERSION <span class="op">=</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">migrateSettings</span>(settings<span class="op">:</span> Settings<span class="op">,</span> fromVersion<span class="op">:</span> <span class="dt">number</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (fromVersion <span class="op">&gt;=</span> CURRENT_SETTINGS_VERSION) <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> version <span class="op">=</span> fromVersion<span class="op">;</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// v1 → v2: Rename ai.model → model.default_model; add MCP defaults</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (version <span class="op">===</span> <span class="dv">1</span>) {</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> oldModel <span class="op">=</span> settings<span class="op">.</span><span class="fu">remove</span>(<span class="st">&#39;ai.model&#39;</span>)<span class="op">;</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (oldModel <span class="op">!==</span> <span class="kw">undefined</span>) {</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>      settings<span class="op">.</span><span class="fu">set</span>(<span class="st">&#39;model.default_model&#39;</span><span class="op">,</span> oldModel)<span class="op">;</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (settings<span class="op">.</span><span class="fu">get</span>(<span class="st">&#39;mcp.auto_connect&#39;</span>) <span class="op">===</span> <span class="kw">undefined</span>) {</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>      settings<span class="op">.</span><span class="fu">set</span>(<span class="st">&#39;mcp.auto_connect&#39;</span><span class="op">,</span> <span class="kw">true</span>)<span class="op">;</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>    version <span class="op">=</span> <span class="dv">2</span><span class="op">;</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">// v2 → v3: Rename behavior.auto_dream → behavior.dream_enabled</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (version <span class="op">===</span> <span class="dv">2</span>) {</span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> oldDream <span class="op">=</span> settings<span class="op">.</span><span class="fu">remove</span>(<span class="st">&#39;behavior.auto_dream&#39;</span>)<span class="op">;</span></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (oldDream <span class="op">!==</span> <span class="kw">undefined</span>) {</span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>      settings<span class="op">.</span><span class="fu">set</span>(<span class="st">&#39;behavior.dream_enabled&#39;</span><span class="op">,</span> oldDream)<span class="op">;</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a>    version <span class="op">=</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a>  settings<span class="op">.</span><span class="at">version</span> <span class="op">=</span> CURRENT_SETTINGS_VERSION<span class="op">;</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Migrations are idempotent: <code>remove()</code> returns
+<code>undefined</code> if the old key doesn't exist, and
+<code>set()</code> only fires when <code>get()</code> returns
+<code>undefined</code>. Running the migration pipeline twice produces
+the same result as running it once.</p>
+<h3 id="conflict-resolution">Conflict Resolution</h3>
+<p>When merging settings from multiple sources, conflicts are resolved
+by strategy:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> ConflictStrategy <span class="op">=</span> <span class="st">&#39;lastWriteWins&#39;</span> <span class="op">|</span> <span class="st">&#39;firstWriteWins&#39;</span> <span class="op">|</span> <span class="st">&#39;error&#39;</span><span class="op">;</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">resolveConflicts</span>(</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  base<span class="op">:</span> Settings<span class="op">,</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  overlay<span class="op">:</span> Settings<span class="op">,</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  strategy<span class="op">:</span> ConflictStrategy <span class="op">=</span> <span class="st">&#39;lastWriteWins&#39;</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> Settings {</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> merged <span class="op">=</span> base<span class="op">.</span><span class="fu">clone</span>()<span class="op">;</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [key<span class="op">,</span> newVal] <span class="kw">of</span> overlay<span class="op">.</span><span class="fu">flatten</span>()) {</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> existing <span class="op">=</span> base<span class="op">.</span><span class="fu">get</span>(key)<span class="op">;</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (existing <span class="op">!==</span> <span class="kw">undefined</span> <span class="op">&amp;&amp;</span> existing <span class="op">!==</span> newVal) {</span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">switch</span> (strategy) {</span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="st">&#39;lastWriteWins&#39;</span><span class="op">:</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>          merged<span class="op">.</span><span class="fu">set</span>(key<span class="op">,</span> newVal)<span class="op">;</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>          <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="st">&#39;firstWriteWins&#39;</span><span class="op">:</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>          <span class="co">// Keep existing</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>          <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="st">&#39;error&#39;</span><span class="op">:</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>          <span class="cf">throw</span> <span class="kw">new</span> <span class="fu">MergeConflictError</span>(key)<span class="op">;</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>      merged<span class="op">.</span><span class="fu">set</span>(key<span class="op">,</span> newVal)<span class="op">;</span></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> merged<span class="op">;</span></span>
+<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The default strategy is <code>lastWriteWins</code>, meaning later
+files in the cascade override earlier ones. This matches developer
+intuition: the more specific setting wins.</p>
+<h3 id="file-watching-and-hot-reload">File Watching and Hot-Reload</h3>
+<p>The settings engine watches for file changes and notifies
+consumers:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">watchSettingsFile</span>(</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  filePath<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  callback<span class="op">:</span> (event<span class="op">:</span> SettingsChanged) <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> DEBOUNCE_MS <span class="op">=</span> <span class="dv">500</span><span class="op">;</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> debounceTimer<span class="op">:</span> NodeJS<span class="op">.</span><span class="at">Timer</span> <span class="op">|</span> <span class="dt">null</span> <span class="op">=</span> <span class="kw">null</span><span class="op">;</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> lastContent <span class="op">=</span> fs<span class="op">.</span><span class="fu">readFileSync</span>(filePath<span class="op">,</span> <span class="st">&#39;utf-8&#39;</span>)<span class="op">;</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>  fs<span class="op">.</span><span class="fu">watch</span>(filePath<span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (debounceTimer) <span class="pp">clearTimeout</span>(debounceTimer)<span class="op">;</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    debounceTimer <span class="op">=</span> <span class="pp">setTimeout</span>(() <span class="kw">=&gt;</span> {</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> newContent <span class="op">=</span> fs<span class="op">.</span><span class="fu">readFileSync</span>(filePath<span class="op">,</span> <span class="st">&#39;utf-8&#39;</span>)<span class="op">;</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (newContent <span class="op">===</span> lastContent) <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> oldSettings <span class="op">=</span> <span class="fu">parseSettings</span>(lastContent)<span class="op">;</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> newSettings <span class="op">=</span> <span class="fu">parseSettings</span>(newContent)<span class="op">;</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> changedKeys <span class="op">=</span> <span class="fu">diffSettings</span>(oldSettings<span class="op">,</span> newSettings)<span class="op">;</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>      lastContent <span class="op">=</span> newContent<span class="op">;</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>      <span class="fu">callback</span>({</span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>        path<span class="op">:</span> filePath<span class="op">,</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>        changedKeys<span class="op">:</span> changedKeys<span class="op">.</span><span class="fu">map</span>(d <span class="kw">=&gt;</span> d<span class="op">.</span><span class="at">key</span>)<span class="op">,</span></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>        timestamp<span class="op">:</span> <span class="kw">new</span> <span class="bu">Date</span>()<span class="op">,</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>      })<span class="op">;</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span> DEBOUNCE_MS)<span class="op">;</span></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Changes are debounced at 500ms to prevent rapid re-reads. When a
+change is detected, the old and new contents are diffed, and a
+<code>SettingsChanged</code> event with the specific changed keys is
+emitted. Consumers can then selectively react — for example, a model
+change triggers reconnection, while a theme change triggers a re-render,
+but neither needs to restart the full application.</p>
+<hr />
+<h2 id="217-enterprise-policy-enforcement">21.7 Enterprise Policy
+Enforcement</h2>
+<p>For organizations deploying Claude Code across teams, the managed
+settings engine provides cryptographically verified policies that
+individual developers cannot override.</p>
+<h3 id="the-policy-data-model">The Policy Data Model</h3>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ManagedPolicy {</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  orgId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  policyVersion<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  lockedFields<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span>              <span class="co">// Fields users cannot change</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  requiredFields<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span>            <span class="co">// Fields that must have values</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  modelAllowlist<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span>            <span class="co">// Only these models can be used</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  featureFlags<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">boolean</span><span class="op">&gt;;</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  maxTokenBudget<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>              <span class="co">// Default: 1,000,000</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  signature<span class="op">:</span> <span class="dt">string</span><span class="op">;</span>                   <span class="co">// HMAC-SHA256 hex digest</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>  schema<span class="op">?:</span> SettingsSchema<span class="op">;</span>             <span class="co">// Optional custom schema</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>  fetchedAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> POLICY_CACHE_FILENAME <span class="op">=</span> <span class="st">&#39;managed_policy.json&#39;</span><span class="op">;</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> POLICY_MAX_AGE_SECS <span class="op">=</span> <span class="dv">86_400</span><span class="op">;</span>   <span class="co">// 24 hours</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_MAX_TOKEN_BUDGET <span class="op">=</span> <span class="dv">1_000_000</span><span class="op">;</span></span></code></pre></div>
+<h3 id="override-priority">Override Priority</h3>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> OverrideSource {</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  OrgPolicy <span class="op">=</span> <span class="dv">0</span><span class="op">,</span>       <span class="co">// Highest priority</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  TeamPolicy <span class="op">=</span> <span class="dv">1</span><span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  ProjectConfig <span class="op">=</span> <span class="dv">2</span><span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>  UserPreference <span class="op">=</span> <span class="dv">3</span><span class="op">,</span>  <span class="co">// Lowest priority</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="policy-enforcement">Policy Enforcement</h3>
+<p>The managed settings engine provides 12 methods that form a complete
+policy lifecycle:</p>
+<p><strong>Locked field enforcement:</strong></p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">checkLocked</span>(policy<span class="op">:</span> ManagedPolicy<span class="op">,</span> field<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Check explicit locked_fields list</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (policy<span class="op">.</span><span class="at">lockedFields</span><span class="op">.</span><span class="fu">includes</span>(field)) {</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">throw</span> <span class="kw">new</span> <span class="fu">OverrideNotAllowedError</span>(field)<span class="op">;</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Check schema-level locked flag</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (policy<span class="op">.</span><span class="at">schema</span>) {</span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> fieldSchema <span class="op">=</span> policy<span class="op">.</span><span class="at">schema</span><span class="op">.</span><span class="fu">getField</span>(field)<span class="op">;</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (fieldSchema<span class="op">?.</span><span class="at">locked</span>) {</span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>      <span class="cf">throw</span> <span class="kw">new</span> <span class="fu">OverrideNotAllowedError</span>(field)<span class="op">;</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><strong>Model allowlist enforcement:</strong></p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">enforceModelAllowlist</span>(</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span> ManagedPolicy<span class="op">,</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  settings<span class="op">:</span> Settings</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (policy<span class="op">.</span><span class="at">modelAllowlist</span><span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span>) <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> currentModel <span class="op">=</span> settings<span class="op">.</span><span class="fu">get</span>(<span class="st">&#39;model.default_model&#39;</span>) <span class="im">as</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (currentModel <span class="op">&amp;&amp;</span> <span class="op">!</span>policy<span class="op">.</span><span class="at">modelAllowlist</span><span class="op">.</span><span class="fu">includes</span>(currentModel)) {</span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Force the first allowed model</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>    settings<span class="op">.</span><span class="fu">set</span>(<span class="st">&#39;model.default_model&#39;</span><span class="op">,</span> policy<span class="op">.</span><span class="at">modelAllowlist</span>[<span class="dv">0</span>])<span class="op">;</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><strong>Override application with priority sorting:</strong></p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SettingsOverride {</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  field<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  value<span class="op">:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  source<span class="op">:</span> OverrideSource<span class="op">;</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">applyOverrides</span>(</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span> ManagedPolicy<span class="op">,</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>  base<span class="op">:</span> Settings<span class="op">,</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>  overrides<span class="op">:</span> SettingsOverride[]</span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> SettingsWarning[] {</span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> warnings<span class="op">:</span> SettingsWarning[] <span class="op">=</span> []<span class="op">;</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Sort by priority (org first, user last)</span></span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> sorted <span class="op">=</span> [<span class="op">...</span>overrides]<span class="op">.</span><span class="fu">sort</span>((a<span class="op">,</span> b) <span class="kw">=&gt;</span> a<span class="op">.</span><span class="at">source</span> <span class="op">-</span> b<span class="op">.</span><span class="at">source</span>)<span class="op">;</span></span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> override <span class="kw">of</span> sorted) {</span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Only org policy can set locked fields</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (override<span class="op">.</span><span class="at">source</span> <span class="op">!==</span> OverrideSource<span class="op">.</span><span class="at">OrgPolicy</span>) {</span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>      <span class="cf">try</span> {</span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>        <span class="fu">checkLocked</span>(policy<span class="op">,</span> override<span class="op">.</span><span class="at">field</span>)<span class="op">;</span></span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>      } <span class="cf">catch</span> (e) {</span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>        warnings<span class="op">.</span><span class="fu">push</span>({ type<span class="op">:</span> <span class="st">&#39;locked_override_rejected&#39;</span><span class="op">,</span> field<span class="op">:</span> override<span class="op">.</span><span class="at">field</span> })<span class="op">;</span></span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>        <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>    base<span class="op">.</span><span class="fu">set</span>(override<span class="op">.</span><span class="at">field</span><span class="op">,</span> override<span class="op">.</span><span class="at">value</span>)<span class="op">;</span></span>
+<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> warnings<span class="op">;</span></span>
+<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="cryptographic-verification">Cryptographic Verification</h3>
+<p>Policies are signed with HMAC-SHA256 to prevent tampering:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">verifyPolicySignature</span>(</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span> ManagedPolicy<span class="op">,</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  signingKey<span class="op">:</span> <span class="bu">Buffer</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Build canonical payload (strips signature and fetchedAt)</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> canonical <span class="op">=</span> <span class="fu">buildCanonicalPayload</span>(policy)<span class="op">;</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> mac <span class="op">=</span> <span class="fu">createHmac</span>(<span class="st">&#39;sha256&#39;</span><span class="op">,</span> signingKey)<span class="op">;</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>  mac<span class="op">.</span><span class="fu">update</span>(canonical)<span class="op">;</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> expectedHex <span class="op">=</span> mac<span class="op">.</span><span class="fu">digest</span>(<span class="st">&#39;hex&#39;</span>)<span class="op">;</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (expectedHex <span class="op">!==</span> policy<span class="op">.</span><span class="at">signature</span>) {</span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">throw</span> <span class="kw">new</span> <span class="fu">SignatureInvalidError</span>(expectedHex<span class="op">,</span> policy<span class="op">.</span><span class="at">signature</span>)<span class="op">;</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">buildCanonicalPayload</span>(policy<span class="op">:</span> ManagedPolicy)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Remove transport-dependent fields before signing</span></span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> { signature<span class="op">,</span> fetchedAt<span class="op">,</span> <span class="op">...</span>rest } <span class="op">=</span> policy<span class="op">;</span></span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Deterministic JSON serialization (sorted keys)</span></span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">stringify</span>(rest<span class="op">,</span> <span class="bu">Object</span><span class="op">.</span><span class="fu">keys</span>(rest)<span class="op">.</span><span class="fu">sort</span>())<span class="op">;</span></span>
+<span id="cb20-22"><a href="#cb20-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>HMAC-SHA256 was chosen over RSA/ECDSA because both the policy server
+and the client installation share the same key (provisioned during
+organization enrollment). This avoids the complexity of distributing and
+rotating public keys. The canonical payload strips
+<code>signature</code> and <code>fetchedAt</code> because these are
+transport metadata — the signature shouldn't depend on when the policy
+was fetched.</p>
+<h3 id="policy-caching-and-expiry">Policy Caching and Expiry</h3>
+<p>Policies are cached locally with a 24-hour TTL:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">loadPolicy</span>(</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  orgId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  cacheDir<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ManagedPolicy<span class="op">&gt;</span> {</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> cachePath <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(cacheDir<span class="op">,</span> POLICY_CACHE_FILENAME)<span class="op">;</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Try cache first</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (fs<span class="op">.</span><span class="fu">existsSync</span>(cachePath)) {</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> cached <span class="op">=</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">parse</span>(fs<span class="op">.</span><span class="fu">readFileSync</span>(cachePath<span class="op">,</span> <span class="st">&#39;utf-8&#39;</span>))<span class="op">;</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> ageSecs <span class="op">=</span> (<span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> <span class="kw">new</span> <span class="bu">Date</span>(cached<span class="op">.</span><span class="at">fetchedAt</span>)<span class="op">.</span><span class="fu">getTime</span>()) <span class="op">/</span> <span class="dv">1000</span><span class="op">;</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (ageSecs <span class="op">&lt;=</span> POLICY_MAX_AGE_SECS) {</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> cached<span class="op">;</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Cache expired — fetch fresh</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Fetch from endpoint</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> response <span class="op">=</span> <span class="cf">await</span> <span class="fu">fetch</span>(<span class="vs">`</span><span class="sc">${</span>POLICY_ENDPOINT<span class="sc">}</span><span class="vs">/</span><span class="sc">${</span>orgId<span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> policy<span class="op">:</span> ManagedPolicy <span class="op">=</span> <span class="cf">await</span> response<span class="op">.</span><span class="fu">json</span>()<span class="op">;</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Cache for next time</span></span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>  fs<span class="op">.</span><span class="fu">writeFileSync</span>(cachePath<span class="op">,</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">stringify</span>(policy))<span class="op">;</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> policy<span class="op">;</span></span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="compliance-reporting">Compliance Reporting</h3>
+<p>The managed engine can generate compliance reports showing how user
+settings align with organizational policy:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ComplianceReport {</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  orgId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  policyVersion<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  generatedAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  totalFields<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  compliant<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>  nonCompliant<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>  missing<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>  entries<span class="op">:</span> ComplianceEntry[]<span class="op">;</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ComplianceEntry {</span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>  field<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>  status<span class="op">:</span> <span class="st">&#39;compliant&#39;</span> <span class="op">|</span> <span class="st">&#39;non_compliant&#39;</span> <span class="op">|</span> <span class="st">&#39;missing&#39;</span> <span class="op">|</span> <span class="st">&#39;overridden&#39;</span><span class="op">;</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>  expectedValue<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>  actualValue<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This is invaluable for enterprise security teams doing audits — they
+can verify that every developer's installation meets policy requirements
+without accessing individual machines.</p>
+<hr />
+<h2 id="218-the-feature-flag-system">21.8 The Feature Flag System</h2>
+<p>The feature flag registry manages 55+ runtime gates across 15
+categories, enabling progressive rollout and A/B testing.</p>
+<h3 id="gate-types">Gate Types</h3>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> FlagGate <span class="op">=</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;alwaysOn&#39;</span> }</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;alwaysOff&#39;</span> }</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;envVar&#39;</span><span class="op">;</span> variable<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;userType&#39;</span><span class="op">;</span> expected<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;percentage&#39;</span><span class="op">;</span> threshold<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;custom&#39;</span><span class="op">;</span> predicate<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">boolean</span> }<span class="op">;</span></span></code></pre></div>
+<p>Six gate types cover every rollout scenario:</p>
+<ul>
+<li><strong>AlwaysOn/AlwaysOff</strong>: Feature is universally enabled
+or disabled</li>
+<li><strong>EnvVar</strong>: Enabled when a specific environment
+variable is non-empty</li>
+<li><strong>UserType</strong>: Enabled for specific user categories
+(e.g., "internal", "beta")</li>
+<li><strong>Percentage</strong>: Probabilistic rollout (e.g., 50% of
+users)</li>
+<li><strong>Custom</strong>: Arbitrary runtime predicate via
+closure</li>
+</ul>
+<h3 id="evaluation-precedence">Evaluation Precedence</h3>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> FeatureFlagRegistry {</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> flags<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> FeatureFlag<span class="op">&gt;;</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> overrides<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">boolean</span><span class="op">&gt;;</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> userType<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">feature</span>(name<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 1. Runtime override (highest priority)</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> override <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">overrides</span><span class="op">.</span><span class="fu">get</span>(name)<span class="op">;</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (override <span class="op">!==</span> <span class="kw">undefined</span>) <span class="cf">return</span> override<span class="op">;</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 2. Gate evaluation</span></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> flag <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">flags</span><span class="op">.</span><span class="fu">get</span>(name)<span class="op">;</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>flag) {</span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>      <span class="bu">console</span><span class="op">.</span><span class="fu">warn</span>(<span class="vs">`Unknown feature flag queried: </span><span class="sc">${</span>name<span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> gateResult <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="fu">evaluateGate</span>(flag<span class="op">.</span><span class="at">gate</span><span class="op">,</span> <span class="kw">this</span><span class="op">.</span><span class="at">userType</span>)<span class="op">;</span></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>    <span class="co">// For AlwaysOn/AlwaysOff, use gate result directly</span></span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (flag<span class="op">.</span><span class="at">gate</span><span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;alwaysOn&#39;</span> <span class="op">||</span> flag<span class="op">.</span><span class="at">gate</span><span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;alwaysOff&#39;</span>) {</span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> gateResult<span class="op">;</span></span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>    <span class="co">// For other gates: gate OR default (default=true means on unless gate disables)</span></span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> gateResult <span class="op">||</span> flag<span class="op">.</span><span class="at">defaultValue</span><span class="op">;</span></span>
+<span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb24-28"><a href="#cb24-28" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The evaluation order is: <strong>override &gt; gate &gt;
+default</strong>. For <code>AlwaysOn</code>/<code>AlwaysOff</code>, the
+gate result is authoritative. For other gates, the gate result is OR'd
+with the default value — meaning a flag with
+<code>defaultValue: true</code> stays on unless the gate explicitly
+returns false. Unknown flags return false with a warning, following the
+principle of least surprise for disabled-by-default behavior.</p>
+<h3 id="environment-based-flag-overrides">Environment-Based Flag
+Overrides</h3>
+<p>Developers can override flags via the <code>CLAUDE_FLAGS</code>
+environment variable:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">loadFlagsFromEnv</span>()<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">boolean</span><span class="op">&gt;</span> {</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> raw <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">CLAUDE_FLAGS</span> <span class="op">??</span> <span class="st">&#39;&#39;</span><span class="op">;</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> overrides <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">boolean</span><span class="op">&gt;</span>()<span class="op">;</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> token <span class="kw">of</span> raw<span class="op">.</span><span class="fu">split</span>(<span class="st">&#39;,&#39;</span>)<span class="op">.</span><span class="fu">filter</span>(<span class="bu">Boolean</span>)) {</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (token<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;!&#39;</span>)) {</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>      overrides<span class="op">.</span><span class="fu">set</span>(token<span class="op">.</span><span class="fu">slice</span>(<span class="dv">1</span>)<span class="op">,</span> <span class="kw">false</span>)<span class="op">;</span>  <span class="co">// !flag disables</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>      overrides<span class="op">.</span><span class="fu">set</span>(token<span class="op">,</span> <span class="kw">true</span>)<span class="op">;</span>             <span class="co">// flag enables</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> overrides<span class="op">;</span></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a><span class="co">// Usage: CLAUDE_FLAGS=&quot;voice_mode,!telemetry,experimental_search&quot;</span></span></code></pre></div>
+<p>The <code>!</code> prefix disables a flag. This provides a quick
+escape hatch for debugging without modifying settings files.</p>
+<h3 id="flag-categories">Flag Categories</h3>
+<p>55+ flags organized into 15 categories:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Count</th>
+<th>Notable Flags</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Core Agent Modes</td>
+<td>7</td>
+<td><code>kairos</code>=ON, <code>daemon</code>=OFF,
+<code>coordinator_mode</code>=OFF, <code>voice_mode</code>=OFF</td>
+</tr>
+<tr>
+<td>Planning &amp; Execution</td>
+<td>3</td>
+<td><code>ultraplan</code>=ON, <code>fork_subagent</code>=OFF</td>
+</tr>
+<tr>
+<td>Proactive Features</td>
+<td>4</td>
+<td><code>auto_dream</code>=ON, <code>auto_memory</code>=ON,
+<code>skill_improvement</code>=ON</td>
+</tr>
+<tr>
+<td>Search &amp; Retrieval</td>
+<td>3</td>
+<td><code>treesitter_indexing</code>=ON,
+<code>vector_search</code>=OFF</td>
+</tr>
+<tr>
+<td>UI &amp; Display</td>
+<td>5</td>
+<td><code>tui_mode</code>=ON, <code>syntax_highlighting</code>=ON,
+<code>diff_preview</code>=ON</td>
+</tr>
+<tr>
+<td>Security</td>
+<td>3</td>
+<td><code>permission_system</code>=ON, <code>sandbox_mode</code>=OFF,
+<code>secret_scanning</code>=ON</td>
+</tr>
+<tr>
+<td>LLM &amp; Inference</td>
+<td>4</td>
+<td><code>prompt_cache</code>=ON, <code>streaming</code>=ON,
+<code>local_model</code>=OFF</td>
+</tr>
+<tr>
+<td>Integrations</td>
+<td>4</td>
+<td><code>git_integration</code>=ON, <code>mcp_support</code>=ON</td>
+</tr>
+<tr>
+<td>Experimental</td>
+<td>4</td>
+<td><code>a_b_test_new_planner</code>=50% (percentage rollout)</td>
+</tr>
+<tr>
+<td>Memory &amp; Knowledge</td>
+<td>4</td>
+<td><code>memory_indexing</code>=ON,
+<code>knowledge_graph</code>=ON</td>
+</tr>
+<tr>
+<td>Agent Capabilities</td>
+<td>4</td>
+<td><code>agent_reflection</code>=ON,
+<code>agent_delegation</code>=OFF</td>
+</tr>
+</tbody>
+</table>
+<h3 id="global-singleton">Global Singleton</h3>
+<p>The registry is accessed through a thread-safe global singleton:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> globalRegistry <span class="op">=</span> <span class="kw">new</span> <span class="fu">FeatureFlagRegistry</span>()<span class="op">;</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="co">// Initialize with default flags on first import</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>globalRegistry<span class="op">.</span><span class="fu">registerDefaults</span>()<span class="op">;</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>globalRegistry<span class="op">.</span><span class="fu">loadFromEnv</span>()<span class="op">;</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="co">// Convenience functions</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">feature</span>(name<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> globalRegistry<span class="op">.</span><span class="fu">feature</span>(name)<span class="op">;</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">setFlag</span>(name<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> value<span class="op">:</span> <span class="dt">boolean</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>  globalRegistry<span class="op">.</span><span class="fu">setOverride</span>(name<span class="op">,</span> value)<span class="op">;</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>LazyLock</code> pattern (or equivalent in TypeScript, a
+module-level singleton) ensures the registry is initialized exactly once
+across the entire application, regardless of import order.</p>
+<hr />
+<h2 id="219-the-layered-config-engine">21.9 The Layered Config
+Engine</h2>
+<p>Alongside project settings, a second configuration system provides
+multi-format support with a five-layer priority cascade. This system
+uses the Figment pattern — a layered configuration combinator that
+merges values from multiple providers.</p>
+<h3 id="the-unified-config">The Unified Config</h3>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> LayeredConfig {</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  model<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>  apiBaseUrl<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  token<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  maxOutputTokens<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>          <span class="co">// default: 16,384</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  thinkingBudget<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>           <span class="co">// default: 10,000</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  contextWindowTokens<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>      <span class="co">// default: 180,000</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  effortLevel<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>  autoCompact<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>  attribution<span class="op">?:</span> AttributionConfig<span class="op">;</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>  logging<span class="op">:</span> LoggingConfig<span class="op">;</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>  mcp<span class="op">:</span> McpConfig<span class="op">;</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>  models<span class="op">:</span> ModelConfig<span class="op">;</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  context<span class="op">:</span> ContextConfig<span class="op">;</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>  permissions<span class="op">:</span> PermissionConfig<span class="op">;</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ContextConfig {</span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>  windowSize<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>               <span class="co">// default: 180,000</span></span>
+<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a>  compactionThreshold<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>      <span class="co">// default: 0.8</span></span>
+<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a>  compactionKeepTail<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>       <span class="co">// default: 4 turns</span></span>
+<span id="cb27-22"><a href="#cb27-22" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb27-23"><a href="#cb27-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-24"><a href="#cb27-24" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PermissionConfig {</span>
+<span id="cb27-25"><a href="#cb27-25" aria-hidden="true" tabindex="-1"></a>  mode<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span>                    <span class="co">// &quot;allow-all&quot; | &quot;default&quot; | &quot;deny-all&quot;</span></span>
+<span id="cb27-26"><a href="#cb27-26" aria-hidden="true" tabindex="-1"></a>  allowedTools<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb27-27"><a href="#cb27-27" aria-hidden="true" tabindex="-1"></a>  deniedTools<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb27-28"><a href="#cb27-28" aria-hidden="true" tabindex="-1"></a>  bashAllowPatterns<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb27-29"><a href="#cb27-29" aria-hidden="true" tabindex="-1"></a>  bashDenyPatterns<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb27-30"><a href="#cb27-30" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The five layers merge in priority order:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">buildLayeredConfig</span>(projectRoot<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> LayeredConfig {</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> providers <span class="op">=</span> [</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Layer 5: Built-in defaults (lowest)</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">defaultConfig</span>()<span class="op">,</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Layer 4: User config (~/.config/claude/config.toml)</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">loadUserConfig</span>()<span class="op">,</span></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Layer 3: Project config (.claude/config.toml)</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>    <span class="fu">loadProjectConfig</span>(projectRoot)<span class="op">,</span></span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Layer 2: Local config (.claude/config.local.toml, gitignored)</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">loadLocalConfig</span>(projectRoot)<span class="op">,</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Layer 1: Environment variables (highest)</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">loadEnvConfig</span>()<span class="op">,</span></span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>  ]<span class="op">;</span></span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">mergeProviders</span>(providers)<span class="op">;</span></span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Each provider returns a partial config. The merge function overlays
+them in order, with later providers winning on conflict. Environment
+variables use a <code>CLAUDE_</code> prefix and underscore-separated
+paths: <code>CLAUDE_MODEL=opus</code>,
+<code>CLAUDE_MAX_OUTPUT_TOKENS=32768</code>.</p>
+<h3 id="settings-diff">Settings Diff</h3>
+<p>The diff engine compares two settings instances using flattened
+key-value pairs:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SettingsDiff {</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  key<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="st">&#39;added&#39;</span> <span class="op">|</span> <span class="st">&#39;removed&#39;</span> <span class="op">|</span> <span class="st">&#39;modified&#39;</span><span class="op">;</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>  oldValue<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>  newValue<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">diffSettings</span>(a<span class="op">:</span> Settings<span class="op">,</span> b<span class="op">:</span> Settings)<span class="op">:</span> SettingsDiff[] {</span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> flatA <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span>(a<span class="op">.</span><span class="fu">flatten</span>())<span class="op">;</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> flatB <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span>(b<span class="op">.</span><span class="fu">flatten</span>())<span class="op">;</span></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> diffs<span class="op">:</span> SettingsDiff[] <span class="op">=</span> []<span class="op">;</span></span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Keys in B but not A → Added</span></span>
+<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [key<span class="op">,</span> val] <span class="kw">of</span> flatB) {</span>
+<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>flatA<span class="op">.</span><span class="fu">has</span>(key)) {</span>
+<span id="cb29-16"><a href="#cb29-16" aria-hidden="true" tabindex="-1"></a>      diffs<span class="op">.</span><span class="fu">push</span>({ key<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;added&#39;</span><span class="op">,</span> newValue<span class="op">:</span> val })<span class="op">;</span></span>
+<span id="cb29-17"><a href="#cb29-17" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb29-18"><a href="#cb29-18" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb29-19"><a href="#cb29-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-20"><a href="#cb29-20" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Keys in A but not B → Removed</span></span>
+<span id="cb29-21"><a href="#cb29-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [key<span class="op">,</span> val] <span class="kw">of</span> flatA) {</span>
+<span id="cb29-22"><a href="#cb29-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>flatB<span class="op">.</span><span class="fu">has</span>(key)) {</span>
+<span id="cb29-23"><a href="#cb29-23" aria-hidden="true" tabindex="-1"></a>      diffs<span class="op">.</span><span class="fu">push</span>({ key<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;removed&#39;</span><span class="op">,</span> oldValue<span class="op">:</span> val })<span class="op">;</span></span>
+<span id="cb29-24"><a href="#cb29-24" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb29-25"><a href="#cb29-25" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb29-26"><a href="#cb29-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-27"><a href="#cb29-27" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Keys in both with different values → Modified</span></span>
+<span id="cb29-28"><a href="#cb29-28" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [key<span class="op">,</span> newVal] <span class="kw">of</span> flatB) {</span>
+<span id="cb29-29"><a href="#cb29-29" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> oldVal <span class="op">=</span> flatA<span class="op">.</span><span class="fu">get</span>(key)<span class="op">;</span></span>
+<span id="cb29-30"><a href="#cb29-30" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (oldVal <span class="op">!==</span> <span class="kw">undefined</span> <span class="op">&amp;&amp;</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">stringify</span>(oldVal) <span class="op">!==</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">stringify</span>(newVal)) {</span>
+<span id="cb29-31"><a href="#cb29-31" aria-hidden="true" tabindex="-1"></a>      diffs<span class="op">.</span><span class="fu">push</span>({ key<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;modified&#39;</span><span class="op">,</span> oldValue<span class="op">:</span> oldVal<span class="op">,</span> newValue<span class="op">:</span> newVal })<span class="op">;</span></span>
+<span id="cb29-32"><a href="#cb29-32" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb29-33"><a href="#cb29-33" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb29-34"><a href="#cb29-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-35"><a href="#cb29-35" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> diffs<span class="op">.</span><span class="fu">sort</span>((a<span class="op">,</span> b) <span class="kw">=&gt;</span> a<span class="op">.</span><span class="at">key</span><span class="op">.</span><span class="fu">localeCompare</span>(b<span class="op">.</span><span class="at">key</span>))<span class="op">;</span></span>
+<span id="cb29-36"><a href="#cb29-36" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This powers the hot-reload mechanism: when a settings file changes,
+only the specific changed keys are emitted, allowing consumers to react
+precisely rather than reloading everything.</p>
+<hr />
+<h2 id="2110-cross-module-integration">21.10 Cross-Module
+Integration</h2>
+<p>The configuration system touches every major subsystem:</p>
+<table>
+<thead>
+<tr>
+<th>Consumer</th>
+<th>Configuration Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Permission system (Ch. 15)</td>
+<td><code>ProjectSettings.permissions</code> + glob matcher</td>
+</tr>
+<tr>
+<td>Hook execution (Ch. 18-19)</td>
+<td><code>ProjectSettings.hooks</code> + HookConfig</td>
+</tr>
+<tr>
+<td>Model selection (Ch. 5)</td>
+<td>LayeredConfig.models + ProjectSettings.model + feature flags</td>
+</tr>
+<tr>
+<td>Skill loading (Ch. 20)</td>
+<td>Feature flag <code>skill_improvement</code> gates
+auto-improvement</td>
+</tr>
+<tr>
+<td>Sub-agent spawning (Ch. 13)</td>
+<td>Feature flag <code>fork_subagent</code></td>
+</tr>
+<tr>
+<td>Context compaction (Ch. 6)</td>
+<td>ContextConfig.compaction_threshold + window_size</td>
+</tr>
+<tr>
+<td>MCP server startup (Ch. 15)</td>
+<td>McpServerEntry from both settings and layered config</td>
+</tr>
+<tr>
+<td>Compliance reporting</td>
+<td>ManagedSettingsEngine + org policy</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2111-architecture-decisions">21.11 Architecture Decisions</h2>
+<h3 id="why-two-separate-settings-systems">Why Two Separate Settings
+Systems?</h3>
+<p>The project settings (simple JSON) and layered config (multi-format)
+coexist for historical and practical reasons:</p>
+<ol type="1">
+<li><strong>History</strong>: The project started with JSON settings;
+TOML/YAML support was added later for richer configuration</li>
+<li><strong>Different audiences</strong>: JSON settings are for
+per-project overrides (committed to git); the layered config is for user
+preferences (personal)</li>
+<li><strong>Different merge semantics</strong>: JSON uses custom merge
+logic with field-type-specific strategies; the layered config uses a
+standard priority cascade</li>
+</ol>
+<p>Merging them would require either dropping one format or implementing
+a complex adapter layer — neither simplifies the system.</p>
+<h3 id="why-custom-glob-matching">Why Custom Glob Matching?</h3>
+<p>The 64-line glob matcher avoids the <code>glob</code> library because
+permission patterns aren't file paths. <code>Bash(git diff *)</code>
+isn't a path — it's a tool call signature. The standard glob library
+assumes path separators and directory structure. The custom matcher
+correctly handles <code>*</code> vs <code>**</code> semantics for both
+path-style and command-style patterns while running in the hot path of
+every tool invocation.</p>
+<h3 id="why-hmac-sha256-for-policy-signing">Why HMAC-SHA256 for Policy
+Signing?</h3>
+<ul>
+<li><strong>RSA/ECDSA</strong> would require distributing public keys to
+every installation and implementing key rotation</li>
+<li><strong>JWTs</strong> add overhead for what is essentially a single
+signed JSON blob</li>
+<li><strong>No signing</strong> would allow local modification of org
+policies, defeating the purpose</li>
+</ul>
+<p>HMAC is symmetric — both the policy server and the installation share
+the same key, provisioned during organization enrollment. The tradeoff
+is that the shared key means any installation can forge policies for the
+same org, but the threat model assumes installations are trusted (they
+run on developer machines that already have access to source code).</p>
+<hr />
+<h2 id="2112-key-takeaways">21.12 Key Takeaways</h2>
+<ol type="1">
+<li><p><strong>Layer by specificity</strong>: The seven-tier cascade
+ensures that the most specific configuration always wins — org policy at
+the top, built-in defaults at the bottom.</p></li>
+<li><p><strong>Merge semantics must vary by field type</strong>:
+Permissions are extended (appended), hooks are replaced per event,
+scalars are overridden only when present. Getting merge semantics wrong
+creates the subtlest configuration bugs.</p></li>
+<li><p><strong>Validation should be non-blocking</strong>: Warnings, not
+errors. A partially correct configuration that lets the tool start is
+infinitely better than a tool that refuses to launch during a production
+incident.</p></li>
+<li><p><strong>Migration must be idempotent</strong>: Running the
+migration pipeline twice produces the same result as running it once.
+Use remove-then-set patterns that gracefully handle missing
+keys.</p></li>
+<li><p><strong>Hot-reload needs debouncing</strong>: File watchers fire
+multiple events for a single save. Debounce at 500ms and diff the
+before/after to emit meaningful change events.</p></li>
+<li><p><strong>Enterprise policy needs cryptographic
+verification</strong>: HMAC-SHA256 with a shared key prevents local
+tampering while avoiding the complexity of public-key
+infrastructure.</p></li>
+<li><p><strong>Feature flags enable progressive rollout</strong>: The
+six gate types (always on/off, env var, user type, percentage, custom
+predicate) cover every rollout scenario from hard-coded to A/B
+testing.</p></li>
+<li><p><strong>Unknown values should warn, not error</strong>: Forward
+compatibility means older versions of the tool must accept settings they
+don't recognize. The HTTP model — ignore what you don't understand —
+applies to configuration files too.</p></li>
+</ol>
+<p>In the next chapter, we'll explore the command system that provides
+70+ slash commands, each routing through the configuration system to
+determine available functionality and behavior.</p>
+</div>
+</body>
+</html>

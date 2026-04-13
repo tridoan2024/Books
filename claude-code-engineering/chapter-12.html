@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 12: The UI Renderer — React for the Terminal — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-12-the-ui-renderer--react-for-the-terminal">Chapter 12:
+The UI Renderer — React for the Terminal</h1>
+<p>Most CLI tools write lines to stdout and call it a day. Claude Code
+builds an entire graphical application inside the terminal — with
+flexbox layout, double-buffered rendering, text selection, smooth
+scrolling, focus management, a theme system with 80+ color tokens, and a
+React reconciler that targets a custom virtual DOM instead of the
+browser. The UI layer spans ~15,000 lines across ~90 files in the
+<code>ink/</code> directory alone, with another several thousand in
+components and screens.</p>
+<p>This is not a wrapper around ncurses or blessed. Anthropic forked the
+Ink library, rewrote its rendering pipeline, and added capabilities that
+the open-source version lacks: cell-based screen buffers with interned
+identifiers, DECSTBM hardware scrolling, adaptive scroll drain rates, a
+full DOM-like event system with capture/bubble phases, and React 19
+reconciler integration with the React Compiler runtime.</p>
+<p>In this chapter, we'll trace the rendering pipeline from React
+component tree to terminal pixels, examining the engineering decisions
+that make a 60fps terminal UI possible.</p>
+<hr />
+<h2 id="121-the-rendering-stack">12.1 The Rendering Stack</h2>
+<p>The UI architecture forms a clear bottom-to-top stack:</p>
+<pre><code>Terminal (stdout/stdin)
+    ↑
+ink/terminal.ts          — Raw terminal I/O
+ink/log-update.ts        — Frame diff engine (773 lines)
+ink/screen.ts            — Cell-based screen buffer (1,486 lines)
+ink/output.ts            — Operation collector (797 lines)
+ink/render-node-to-output.ts  — DOM tree → screen ops (1,462 lines)
+ink/renderer.ts          — Render pipeline factory (178 lines)
+ink/reconciler.ts        — React 19 reconciler (512 lines)
+ink/ink.tsx              — Ink instance manager (1,722 lines)
+ink/dom.ts               — Virtual DOM model (484 lines)
+ink/styles.ts            — Yoga style application (771 lines)
+    ↑
+ink/components/          — Base primitives (Box, Text, ScrollBox)
+components/design-system — Themed wrappers (ThemedText, ThemedBox)
+components/              — App-level (Messages, Spinner, Permissions)
+screens/REPL.tsx         — Main screen orchestrator (5,005 lines)</code></pre>
+<p>Every layer has a distinct responsibility, and the flow is strictly
+unidirectional: React state changes flow down through the reconciler,
+through layout computation, through screen buffer generation, through
+frame diffing, and finally to terminal escape sequences. No layer
+reaches back up.</p>
+<hr />
+<h2 id="122-the-custom-react-reconciler">12.2 The Custom React
+Reconciler</h2>
+<p>Claude Code uses <code>react-reconciler</code> to create a custom
+React renderer — the same mechanism React Native uses to target mobile
+platforms instead of the browser DOM.</p>
+<h3 id="seven-element-types">Seven Element Types</h3>
+<p>The virtual DOM has seven element types, defined at
+<code>ink/dom.ts:19-27</code>:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> ElementNames <span class="op">=</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;ink-root&#39;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;ink-box&#39;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;ink-text&#39;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;ink-virtual-text&#39;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;ink-link&#39;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;ink-progress&#39;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;ink-raw-ansi&#39;</span></span></code></pre></div>
+<p><code>ink-box</code> is the flexbox container (analogous to
+<code>&lt;div&gt;</code>). <code>ink-text</code> renders text with a
+Yoga measure function. <code>ink-virtual-text</code> is an optimization
+for text nested inside other text — it avoids creating a separate Yoga
+node for inline styling. <code>ink-raw-ansi</code> passes pre-formatted
+ANSI escape sequences through the rendering pipeline unmodified.</p>
+<h3 id="reconciler-configuration">Reconciler Configuration</h3>
+<p>The reconciler bridges React's tree-diffing algorithm with the custom
+DOM model at <code>ink/reconciler.ts:224-506</code>:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> reconciler <span class="op">=</span> createReconciler<span class="op">&lt;</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  ElementNames<span class="op">,</span>     <span class="co">// Type</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  Props<span class="op">,</span>            <span class="co">// Props</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  DOMElement<span class="op">,</span>       <span class="co">// Container</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  DOMElement<span class="op">,</span>       <span class="co">// Instance</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  TextNode<span class="op">,</span>         <span class="co">// TextInstance</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  DOMElement<span class="op">,</span>       <span class="co">// SuspenseInstance</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;</span>({</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">createInstance</span>(originalType<span class="op">,</span> props<span class="op">,</span> rootNode<span class="op">,</span> hostContext) {</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Validate: &lt;Box&gt; cannot be nested inside &lt;Text&gt;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (hostContext<span class="op">.</span><span class="at">isInsideText</span> <span class="op">&amp;&amp;</span> originalType <span class="op">===</span> <span class="st">&#39;ink-box&#39;</span>) {</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">Error</span>(<span class="vs">`&lt;Box&gt; can&#39;t be nested inside &lt;Text&gt; component`</span>)</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Promote ink-text to ink-virtual-text inside text context</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> <span class="kw">type</span> <span class="op">=</span> originalType <span class="op">===</span> <span class="st">&#39;ink-text&#39;</span> <span class="op">&amp;&amp;</span> hostContext<span class="op">.</span><span class="at">isInsideText</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>      <span class="op">?</span> <span class="st">&#39;ink-virtual-text&#39;</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>      <span class="op">:</span> originalType</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...create DOM node with Yoga layout node</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>  <span class="fu">commitUpdate</span>(node<span class="op">,</span> _type<span class="op">,</span> oldProps<span class="op">,</span> newProps) {</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    <span class="co">// React 19 style: receives old and new props directly</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> props <span class="op">=</span> <span class="fu">diff</span>(oldProps<span class="op">,</span> newProps)</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> style <span class="op">=</span> <span class="fu">diff</span>(oldProps[<span class="st">&#39;style&#39;</span>]<span class="op">,</span> newProps[<span class="st">&#39;style&#39;</span>])</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Apply changed props and styles to Yoga node</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>  <span class="fu">resetAfterCommit</span>(rootNode) {</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Phase 1: Yoga layout computation</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>    rootNode<span class="op">.</span><span class="at">onComputeLayout</span><span class="op">?.</span>()</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Phase 2: Render pipeline</span></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>    rootNode<span class="op">.</span><span class="at">onRender</span><span class="op">?.</span>()</span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>})</span></code></pre></div>
+<p>The critical callback is <code>resetAfterCommit</code> — it fires
+after React finishes committing all DOM mutations. This is where layout
+computation and rendering happen, ensuring they always see a consistent
+tree.</p>
+<h3 id="performance-instrumentation">Performance Instrumentation</h3>
+<p>The reconciler has built-in profiling gated on the
+<code>CLAUDE_CODE_COMMIT_LOG</code> environment variable:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> COMMIT_LOG <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">CLAUDE_CODE_COMMIT_LOG</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _commits <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _lastLog <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _lastCommitAt <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _maxGapMs <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _createCount <span class="op">=</span> <span class="dv">0</span></span></code></pre></div>
+<p>When enabled, it logs slow Yoga layouts (&gt;20ms), slow paints
+(&gt;10ms), and commit frequency to a file. This instrumentation is how
+the team identifies rendering bottlenecks in real user sessions.</p>
+<hr />
+<h2 id="123-the-virtual-dom-model">12.3 The Virtual DOM Model</h2>
+<p>The <code>DOMElement</code> type at <code>ink/dom.ts:31-91</code>
+reveals the full scope of the virtual DOM:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> DOMElement <span class="op">=</span> {</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  nodeName<span class="op">:</span> ElementNames</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  attributes<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> DOMNodeAttribute<span class="op">&gt;</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  childNodes<span class="op">:</span> DOMNode[]</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  textStyles<span class="op">?:</span> TextStyles</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Layout</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>  onComputeLayout<span class="op">?:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  onRender<span class="op">?:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  dirty<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  isHidden<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Scroll state (lives on DOM, not React state)</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>  scrollTop<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>  pendingScrollDelta<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>  scrollHeight<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>  scrollViewportHeight<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>  stickyScroll<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>  scrollAnchor<span class="op">?:</span> { el<span class="op">:</span> DOMElement<span class="op">;</span> offset<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Focus management</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>  focusManager<span class="op">?:</span> FocusManager</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Event handlers</span></span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>  _eventHandlers<span class="op">?:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;</span></span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>} <span class="op">&amp;</span> InkNode <span class="co">// Yoga node, parent, style</span></span></code></pre></div>
+<p>A critical design decision: <strong>scroll state lives on DOM nodes,
+not React state</strong>. Scroll events bypass React reconciliation
+entirely — they mutate the DOM node directly and trigger Ink's render
+pipeline. This is why terminal scrolling feels instant even with complex
+component trees.</p>
+<h3 id="node-creation">Node Creation</h3>
+<p>At <code>ink/dom.ts:110-132</code>, node creation determines which
+element types get Yoga layout nodes:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> createNode <span class="op">=</span> (nodeName<span class="op">:</span> ElementNames)<span class="op">:</span> DOMElement <span class="kw">=&gt;</span> {</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> needsYogaNode <span class="op">=</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    nodeName <span class="op">!==</span> <span class="st">&#39;ink-virtual-text&#39;</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    nodeName <span class="op">!==</span> <span class="st">&#39;ink-link&#39;</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    nodeName <span class="op">!==</span> <span class="st">&#39;ink-progress&#39;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> node<span class="op">:</span> DOMElement <span class="op">=</span> {</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    nodeName<span class="op">,</span> style<span class="op">:</span> {}<span class="op">,</span> attributes<span class="op">:</span> {}<span class="op">,</span> childNodes<span class="op">:</span> []<span class="op">,</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    parentNode<span class="op">:</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    yogaNode<span class="op">:</span> needsYogaNode <span class="op">?</span> <span class="fu">createLayoutNode</span>() <span class="op">:</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    dirty<span class="op">:</span> <span class="kw">false</span><span class="op">,</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (nodeName <span class="op">===</span> <span class="st">&#39;ink-text&#39;</span>) {</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    node<span class="op">.</span><span class="at">yogaNode</span><span class="op">?.</span><span class="fu">setMeasureFunc</span>(measureTextNode<span class="op">.</span><span class="fu">bind</span>(<span class="kw">null</span><span class="op">,</span> node))</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> node</span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Three element types skip Yoga nodes entirely:
+<code>ink-virtual-text</code>, <code>ink-link</code>, and
+<code>ink-progress</code>. These are inline elements that don't
+participate in flexbox layout, saving the overhead of Yoga node
+allocation and layout computation.</p>
+<h3 id="dirty-tracking">Dirty Tracking</h3>
+<p>The <code>markDirty</code> function propagates dirtiness from any
+modified node up to the root. This is how the renderer knows which
+subtrees need re-rendering. Combined with the blit optimization (copying
+unchanged regions from the previous screen buffer), this enables
+incremental rendering that only touches what changed.</p>
+<hr />
+<h2 id="124-the-screen-buffer-system">12.4 The Screen Buffer System</h2>
+<p>The screen buffer at <code>ink/screen.ts</code> (1,486 lines) is a
+cell-based grid where each cell stores interned integer identifiers
+rather than string data.</p>
+<h3 id="string-interning-pools">String Interning Pools</h3>
+<p>Three interning pools eliminate string allocation on the rendering
+hot path:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">class</span> CharPool {</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> strings<span class="op">:</span> <span class="dt">string</span>[] <span class="op">=</span> [<span class="st">&#39; &#39;</span><span class="op">,</span> <span class="st">&#39;&#39;</span>]  <span class="co">// Index 0 = space, 1 = empty</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> stringMap <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">number</span><span class="op">&gt;</span>()</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> ascii<span class="op">:</span> <span class="bu">Int32Array</span> <span class="op">=</span> <span class="fu">initCharAscii</span>()</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">intern</span>(char<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ASCII fast-path: direct array lookup instead of Map.get</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (char<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">1</span>) {</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> code <span class="op">=</span> char<span class="op">.</span><span class="fu">charCodeAt</span>(<span class="dv">0</span>)</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (code <span class="op">&lt;</span> <span class="dv">128</span>) {</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">const</span> cached <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">ascii</span>[code]<span class="op">!</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> (cached <span class="op">!==</span> <span class="op">-</span><span class="dv">1</span>) <span class="cf">return</span> cached</span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ... intern new ASCII char ...</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Map lookup for non-ASCII (emoji, CJK, etc.)</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>CharPool</code> has a fast path for ASCII characters
+(direct array lookup via char code) and falls back to
+<code>Map.get</code> for non-ASCII. The <code>StylePool</code> interns
+ANSI style code sequences. The <code>HyperlinkPool</code> interns OSC 8
+URLs. All three pools are shared across screens, so interning happens
+once per unique value for the entire session.</p>
+<h3 id="style-id-bit-encoding">Style ID Bit Encoding</h3>
+<p>The <code>StylePool</code> packs a rendering hint into the style ID
+itself:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">intern</span>(styles<span class="op">:</span> AnsiCode[])<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> key <span class="op">=</span> styles<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">?</span> <span class="st">&#39;&#39;</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">:</span> styles<span class="op">.</span><span class="fu">map</span>(s <span class="kw">=&gt;</span> s<span class="op">.</span><span class="at">code</span>)<span class="op">.</span><span class="fu">join</span>(<span class="st">&#39;</span><span class="sc">\0</span><span class="st">&#39;</span>)</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> id <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">ids</span><span class="op">.</span><span class="fu">get</span>(key)</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (id <span class="op">===</span> <span class="kw">undefined</span>) {</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> rawId <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">styles</span><span class="op">.</span><span class="at">length</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">styles</span><span class="op">.</span><span class="fu">push</span>(styles<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span> <span class="op">?</span> [] <span class="op">:</span> styles)</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    id <span class="op">=</span> (rawId <span class="op">&lt;&lt;</span> <span class="dv">1</span>) <span class="op">|</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>      (styles<span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span> <span class="op">&amp;&amp;</span> <span class="fu">hasVisibleSpaceEffect</span>(styles) <span class="op">?</span> <span class="dv">1</span> <span class="op">:</span> <span class="dv">0</span>)</span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">ids</span><span class="op">.</span><span class="fu">set</span>(key<span class="op">,</span> id)</span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> id</span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Bit 0 of the style ID encodes whether the style is visible on space
+characters (background color, inverse video, underline). The diff engine
+uses this bit as a mask to skip invisible trailing spaces — a single
+integer AND operation that saves potentially thousands of string
+comparisons per frame.</p>
+<hr />
+<h2 id="125-the-rendering-pipeline">12.5 The Rendering Pipeline</h2>
+<h3 id="phase-1-yoga-layout">Phase 1: Yoga Layout</h3>
+<p>After React commits DOM changes, <code>onComputeLayout</code> runs
+Yoga's <code>calculateLayout()</code> on the root node. This computes
+flexbox positions and sizes for the entire tree. Performance is tracked
+via <code>recordYogaMs()</code> — Yoga layouts exceeding 20ms trigger a
+warning in the commit log.</p>
+<h3 id="phase-2-dom-to-screen-buffer">Phase 2: DOM to Screen Buffer</h3>
+<p>The renderer at <code>ink/renderer.ts:31-178</code> creates the
+pipeline that converts the DOM tree into a screen buffer:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="im">default</span> <span class="kw">function</span> <span class="fu">createRenderer</span>(</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  node<span class="op">:</span> DOMElement<span class="op">,</span> stylePool<span class="op">:</span> StylePool</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> Renderer {</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> output<span class="op">:</span> Output <span class="op">|</span> <span class="dt">undefined</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> options <span class="kw">=&gt;</span> {</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> width <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">floor</span>(node<span class="op">.</span><span class="at">yogaNode</span><span class="op">.</span><span class="fu">getComputedWidth</span>())</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> height <span class="op">=</span> options<span class="op">.</span><span class="at">altScreen</span> <span class="op">?</span> terminalRows <span class="op">:</span> yogaHeight</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Reuse Output across frames for cache persistence</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (output) {</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>      output<span class="op">.</span><span class="fu">reset</span>(width<span class="op">,</span> height<span class="op">,</span> <span class="bu">screen</span>)</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>      output <span class="op">=</span> <span class="kw">new</span> <span class="fu">Output</span>({ width<span class="op">,</span> height<span class="op">,</span> stylePool<span class="op">,</span> <span class="bu">screen</span> })</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="fu">renderNodeToOutput</span>(node<span class="op">,</span> output<span class="op">,</span> {</span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>      prevScreen<span class="op">:</span> options<span class="op">.</span><span class="at">prevFrameContaminated</span> <span class="op">?</span> <span class="dt">undefined</span> <span class="op">:</span> prevScreen<span class="op">,</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { screen<span class="op">:</span> output<span class="op">.</span><span class="fu">get</span>()<span class="op">,</span> viewport<span class="op">:</span> {<span class="op">...</span>}<span class="op">,</span> cursor<span class="op">:</span> {<span class="op">...</span>} }</span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Key engineering decisions:</p>
+<ul>
+<li><strong>Output object reuse</strong>: The <code>Output</code>
+instance persists across frames, so the <code>charCache</code>
+(grapheme-clustered lines) persists. Most lines don't change between
+renders — the cache avoids re-tokenizing them.</li>
+<li><strong>Double buffering</strong>: <code>frontFrame</code> and
+<code>backFrame</code> alternate. The renderer writes to the back buffer
+while the front buffer represents what the terminal currently
+shows.</li>
+<li><strong>Previous screen blitting</strong>: Unchanged regions are
+copied from the previous screen buffer rather than re-rendered, a
+critical optimization for large displays.</li>
+</ul>
+<h3 id="phase-3-frame-diffing">Phase 3: Frame Diffing</h3>
+<p>The <code>LogUpdate</code> class at <code>ink/log-update.ts</code>
+(773 lines) diffs the previous frame's screen buffer against the new
+one, producing a <code>Diff</code> — an array of <code>Patch</code>
+operations:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> Patch <span class="op">=</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;stdout&#39;</span><span class="op">;</span> content<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;clear&#39;</span><span class="op">;</span> count<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;clearTerminal&#39;</span><span class="op">;</span> reason<span class="op">:</span> FlickerReason }</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;cursorHide&#39;</span> }</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;cursorShow&#39;</span> }</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;cursorMove&#39;</span><span class="op">;</span> x<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> y<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;cursorTo&#39;</span><span class="op">;</span> col<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;carriageReturn&#39;</span> }</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;hyperlink&#39;</span><span class="op">;</span> uri<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;styleStr&#39;</span><span class="op">;</span> str<span class="op">:</span> <span class="dt">string</span> }</span></code></pre></div>
+<p>The diff engine uses the <code>StylePool</code> for zero-allocation
+style transitions: <code>StylePool.transition(fromId, toId)</code>
+returns a pre-serialized ANSI string cached by the (from, to) pair. This
+means switching from blue text to red text always produces the same
+escape sequence bytes, avoiding repeated string concatenation.</p>
+<h3 id="frame-rate-control">Frame Rate Control</h3>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// ink/constants.ts</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> FRAME_INTERVAL_MS <span class="op">=</span> <span class="dv">16</span>  <span class="co">// ~60fps</span></span></code></pre></div>
+<p>Renders are throttled to 60fps via <code>lodash.throttle</code> in
+the <code>scheduleRender</code> function. Rapid state changes within a
+single 16ms window are coalesced into one frame. This prevents React
+re-renders from overwhelming the terminal with escape sequences.</p>
+<hr />
+<h2 id="126-the-ink-instance">12.6 The Ink Instance</h2>
+<p>The <code>Ink</code> class at <code>ink/ink.tsx</code> (1,722 lines)
+coordinates the entire rendering lifecycle. One instance per stdout
+stream.</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="im">default</span> <span class="kw">class</span> Ink {</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> <span class="kw">readonly</span> log<span class="op">:</span> LogUpdate</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> <span class="kw">readonly</span> terminal<span class="op">:</span> Terminal</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> scheduleRender<span class="op">:</span> (() <span class="kw">=&gt;</span> <span class="dt">void</span>) <span class="op">&amp;</span> { cancel<span class="op">?:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span> }</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> <span class="kw">readonly</span> container<span class="op">:</span> FiberRoot</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> rootNode<span class="op">:</span> DOMElement</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> focusManager<span class="op">:</span> FocusManager</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> renderer<span class="op">:</span> Renderer</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> <span class="kw">readonly</span> stylePool<span class="op">:</span> StylePool</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> charPool<span class="op">:</span> CharPool</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> hyperlinkPool<span class="op">:</span> HyperlinkPool</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> frontFrame<span class="op">:</span> Frame</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> backFrame<span class="op">:</span> Frame</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> selection<span class="op">:</span> SelectionState</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> altScreenActive <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> prevFrameContaminated <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="double-buffering">Double Buffering</h3>
+<p>The frame swap cycle:</p>
+<ol type="1">
+<li>Renderer writes to <code>backFrame.screen</code></li>
+<li><code>LogUpdate</code> diffs <code>frontFrame.screen</code> vs
+<code>backFrame.screen</code></li>
+<li>Patches are written to the terminal</li>
+<li>Frames swap: <code>backFrame</code> becomes the new
+<code>frontFrame</code></li>
+</ol>
+<h3 id="selection-overlay-and-contamination">Selection Overlay and
+Contamination</h3>
+<p>Text selection (mouse drag in alternate screen mode) is an overlay
+pass that runs <em>after</em> the render pipeline. It inverts cell
+styles in the selected range directly on the screen buffer. This is why
+<code>prevFrameContaminated</code> exists — the selection overlay
+mutates the screen buffer, so the next frame can't trust it for blitting
+and must do a full render.</p>
+<hr />
+<h2 id="127-scrolling-architecture">12.7 Scrolling Architecture</h2>
+<p>The scroll system at <code>ink/render-node-to-output.ts</code> (1,462
+lines) represents some of the most performance-sensitive code in the
+entire codebase.</p>
+<h3 id="hardware-scroll-via-decstbm">Hardware Scroll via DECSTBM</h3>
+<p>When a <code>ScrollBox</code>'s <code>scrollTop</code> changes
+between frames and nothing else in the viewport moved, the renderer can
+emit a hardware scroll instruction (DECSTBM — DEC Set Top and Bottom
+Margins) instead of rewriting every character:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> ScrollHint <span class="op">=</span> { top<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> bottom<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> delta<span class="op">:</span> <span class="dt">number</span> }</span></code></pre></div>
+<p>This tells the terminal to scroll a region of the screen by
+<code>delta</code> rows using its own buffer — no data transfer needed
+for the shifted content. Only the newly revealed rows need to be
+transmitted.</p>
+<h3 id="adaptive-scroll-drain">Adaptive Scroll Drain</h3>
+<p>Different drain strategies for different terminal environments:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SCROLL_INSTANT_THRESHOLD <span class="op">=</span> <span class="dv">5</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SCROLL_HIGH_PENDING <span class="op">=</span> <span class="dv">12</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SCROLL_STEP_MED <span class="op">=</span> <span class="dv">2</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SCROLL_STEP_HIGH <span class="op">=</span> <span class="dv">3</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SCROLL_MAX_PENDING <span class="op">=</span> <span class="dv">30</span></span></code></pre></div>
+<p>For xterm.js (VS Code terminals): low pending (≤5 rows) drains all at
+once for instant response. Higher pending uses small fixed steps for
+smooth animation. For native terminals: proportional drain (~3/4 of
+remaining) for logarithmic catch-up. Excess beyond 30 rows snaps
+immediately — smooth animation of 50 rows of scroll would feel
+sluggish.</p>
+<h3 id="layout-shift-detection">Layout Shift Detection</h3>
+<p>A global flag tracks whether any node's Yoga position or size
+changed:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> layoutShifted <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">resetLayoutShifted</span>()<span class="op">:</span> <span class="dt">void</span> { layoutShifted <span class="op">=</span> <span class="kw">false</span> }</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">didLayoutShift</span>()<span class="op">:</span> <span class="dt">boolean</span> { <span class="cf">return</span> layoutShifted }</span></code></pre></div>
+<p>When no layout shift occurred, the Ink instance can use narrow damage
+bounds — only re-rendering the cells that actually changed content. When
+layout shifts <em>did</em> occur, the full-damage code path is needed
+because nodes may have moved to entirely different screen positions.</p>
+<hr />
+<h2 id="128-core-components">12.8 Core Components</h2>
+<h3 id="box--the-layout-primitive">Box — The Layout Primitive</h3>
+<p>At <code>ink/components/Box.tsx</code> (213 lines), Box renders as
+<code>&lt;ink-box&gt;</code> with flexbox styles. Defaults:
+<code>flexDirection="row"</code>, <code>flexGrow=0</code>,
+<code>flexShrink=1</code>, <code>flexWrap="nowrap"</code>. It supports
+the full DOM-like event model: <code>onClick</code>,
+<code>onFocus</code>/<code>onBlur</code>, <code>onKeyDown</code>
+(capture + bubble), <code>onMouseEnter</code>/<code>onMouseLeave</code>,
+and <code>tabIndex</code> for focus management.</p>
+<h3 id="text--styled-content">Text — Styled Content</h3>
+<p>At <code>ink/components/Text.tsx</code> (253 lines), Text renders as
+<code>&lt;ink-text&gt;</code> with text styles. A noteworthy type-level
+constraint: <strong>bold and dim are mutually exclusive</strong> in
+terminals, enforced statically:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> WeightProps <span class="op">=</span> {</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  bold<span class="op">?:</span> <span class="dt">never</span><span class="op">;</span> dim<span class="op">?:</span> <span class="dt">never</span><span class="op">;</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>} <span class="op">|</span> {</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  bold<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> dim<span class="op">?:</span> <span class="dt">never</span><span class="op">;</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>} <span class="op">|</span> {</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  dim<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> bold<span class="op">?:</span> <span class="dt">never</span><span class="op">;</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This prevents runtime surprises where setting both would produce
+terminal-dependent rendering. Text also pre-memoizes style objects for
+each of 8 text wrapping modes (wrap, truncate-end, truncate-middle,
+etc.).</p>
+<h3 id="scrollbox--scrollable-containers">ScrollBox — Scrollable
+Containers</h3>
+<p>At <code>ink/components/ScrollBox.tsx</code> (236 lines), ScrollBox
+provides an imperative scroll API:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> ScrollBoxHandle <span class="op">=</span> {</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  scrollTo<span class="op">:</span> (y<span class="op">:</span> <span class="dt">number</span>) <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  scrollBy<span class="op">:</span> (dy<span class="op">:</span> <span class="dt">number</span>) <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  scrollToElement<span class="op">:</span> (el<span class="op">:</span> DOMElement<span class="op">,</span> offset<span class="op">?:</span> <span class="dt">number</span>) <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  scrollToBottom<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  getScrollTop<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">number</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  getScrollHeight<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">number</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  getViewportHeight<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">number</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>  isSticky<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">boolean</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>  subscribe<span class="op">:</span> (listener<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span>) <span class="kw">=&gt;</span> () <span class="kw">=&gt;</span> <span class="dt">void</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>As noted earlier, scrolling bypasses React entirely.
+<code>scrollTo</code>/<code>scrollBy</code> mutate
+<code>scrollTop</code> directly on the DOM node, mark it dirty, and call
+<code>scheduleRender</code>. No reconciler overhead per wheel event.</p>
+<h3 id="alternatescreen--fullscreen-mode">AlternateScreen — Fullscreen
+Mode</h3>
+<p>At <code>ink/components/AlternateScreen.tsx</code> (79 lines), this
+component switches to the terminal's alternate screen buffer (DEC 1049).
+It uses <code>useInsertionEffect</code> (not
+<code>useLayoutEffect</code>) for a subtle timing reason: the insertion
+effect fires during React's mutation phase, <em>before</em>
+<code>resetAfterCommit</code>. With <code>useLayoutEffect</code>, the
+first <code>onRender</code> would fire before the alt-screen enter —
+writing a frame to the main screen that gets preserved and revealed when
+the user exits.</p>
+<hr />
+<h2 id="129-the-theme-system">12.9 The Theme System</h2>
+<h3 id="theme-definition">Theme Definition</h3>
+<p>The theme type at <code>utils/theme.ts</code> (639 lines) contains
+80+ color tokens covering every UI element:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> Theme <span class="op">=</span> {</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  autoAccept<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  bashBorder<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>  claude<span class="op">:</span> <span class="dt">string</span>              <span class="co">// Claude orange</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>  claudeShimmer<span class="op">:</span> <span class="dt">string</span>       <span class="co">// Lighter for shimmer animation</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>  permission<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>  planMode<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>  text<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>  inverseText<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>  inactive<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>  success<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>  error<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>  warning<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>  diffAdded<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a>  diffRemoved<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>  diffAddedWord<span class="op">:</span> <span class="dt">string</span>       <span class="co">// Word-level diff highlighting</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>  diffRemovedWord<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>  selectionBg<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... 60+ more tokens</span></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Six built-in themes: <code>dark</code>, <code>light</code>,
+<code>light-daltonized</code>, <code>dark-daltonized</code>,
+<code>light-ansi</code>, <code>dark-ansi</code>. The daltonized variants
+remap red/green indicators that are indistinguishable to colorblind
+users. The ANSI variants use only the 8 basic terminal colors for
+maximum compatibility with constrained environments (SSH into legacy
+systems, unusual terminal emulators). The <code>'auto'</code> setting
+resolves at runtime by probing the terminal's background color via the
+OSC 11 terminal query.</p>
+<h3 id="the-export-layer">The Export Layer</h3>
+<p>The public API at <code>ink.ts</code> (85 lines) wraps every render
+call with <code>ThemeProvider</code> and exports themed versions of base
+components by default:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">withTheme</span>(node<span class="op">:</span> ReactNode)<span class="op">:</span> ReactNode {</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">createElement</span>(ThemeProvider<span class="op">,</span> <span class="kw">null</span><span class="op">,</span> node)</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Public exports use themed wrappers</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> { <span class="im">default</span> <span class="im">as</span> Box } <span class="im">from</span> <span class="st">&#39;./components/design-system/ThemedBox.js&#39;</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> { <span class="im">default</span> <span class="im">as</span> <span class="bu">Text</span> } <span class="im">from</span> <span class="st">&#39;./components/design-system/ThemedText.js&#39;</span></span></code></pre></div>
+<p>The base Ink primitives (<code>BaseBox</code>, <code>BaseText</code>)
+remain available for performance-critical code that doesn't need theme
+resolution. This two-tier export pattern ensures that all application
+code gets theming by default while hot-path rendering code can opt
+out.</p>
+<h3 id="themedtext-color-resolution">ThemedText Color Resolution</h3>
+<p><code>ThemedText</code> at
+<code>components/design-system/ThemedText.tsx</code> (123 lines)
+resolves colors from either theme tokens or raw color values:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">resolveColor</span>(</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  color<span class="op">:</span> <span class="kw">keyof</span> Theme <span class="op">|</span> Color <span class="op">|</span> <span class="dt">undefined</span><span class="op">,</span> theme<span class="op">:</span> Theme</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> Color <span class="op">|</span> <span class="dt">undefined</span> {</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>color) <span class="cf">return</span> <span class="kw">undefined</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (color<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;rgb(&#39;</span>) <span class="op">||</span> color<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;#&#39;</span>) <span class="op">||</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>      color<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;ansi256(&#39;</span>) <span class="op">||</span> color<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;ansi:&#39;</span>)) {</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> color <span class="im">as</span> Color</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> theme[color <span class="im">as</span> <span class="kw">keyof</span> Theme] <span class="im">as</span> Color</span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>It also supports <code>TextHoverColorContext</code> — a context that
+colors uncolored text in a subtree, crossing <code>Box</code>
+boundaries. This is different from Ink's native style cascade, which
+stops at <code>Box</code> boundaries.</p>
+<h3 id="color-level-management">Color Level Management</h3>
+<p>At <code>ink/colorize.ts</code> (231 lines), two startup adjustments
+handle terminal color capability misdetection:</p>
+<p><strong>xterm.js boost</strong>: VS Code's integrated terminal
+supports truecolor (24-bit), but chalk's detection identifies it as
+256-color. The code checks <code>TERM_PROGRAM === 'vscode'</code> and
+boosts <code>chalk.level</code> from 2 to 3.</p>
+<p><strong>tmux clamp</strong>: tmux doesn't reliably pass truecolor
+unless specifically configured. Without the
+<code>CLAUDE_CODE_TMUX_TRUECOLOR</code> env var, color level is clamped
+to 2 (256 colors) inside tmux sessions.</p>
+<h3 id="theme-provider-and-live-preview">Theme Provider and Live
+Preview</h3>
+<p>The <code>ThemeProvider</code> at
+<code>components/design-system/ThemeProvider.tsx</code> (169 lines)
+supports live theme preview during the theme picker — switching themes
+instantly without a restart. It also watches for terminal theme changes
+(dark mode toggle) when <code>'auto'</code> is active.</p>
+<hr />
+<h2 id="1210-state-management">12.10 State Management</h2>
+<h3 id="the-minimal-store">The Minimal Store</h3>
+<p>Rather than reaching for Redux or Zustand, the UI uses a hand-rolled
+pub/sub store at <code>state/store.ts</code> (35 lines):</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">createStore</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(initialState<span class="op">:</span> T<span class="op">,</span> onChange<span class="op">?:</span> OnChange<span class="op">&lt;</span>T<span class="op">&gt;</span>)<span class="op">:</span> Store<span class="op">&lt;</span>T<span class="op">&gt;</span> {</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> state <span class="op">=</span> initialState</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> listeners <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span><span class="op">&lt;</span>Listener<span class="op">&gt;</span>()</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    getState<span class="op">:</span> () <span class="kw">=&gt;</span> state<span class="op">,</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    setState<span class="op">:</span> (updater) <span class="kw">=&gt;</span> {</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> prev <span class="op">=</span> state</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> next <span class="op">=</span> <span class="fu">updater</span>(prev)</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="bu">Object</span><span class="op">.</span><span class="fu">is</span>(next<span class="op">,</span> prev)) <span class="cf">return</span>  <span class="co">// Skip if unchanged</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>      state <span class="op">=</span> next</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>      onChange<span class="op">?.</span>({ newState<span class="op">:</span> next<span class="op">,</span> oldState<span class="op">:</span> prev })</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> (<span class="kw">const</span> listener <span class="kw">of</span> listeners) <span class="fu">listener</span>()</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    subscribe<span class="op">:</span> (listener) <span class="kw">=&gt;</span> {</span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>      listeners<span class="op">.</span><span class="fu">add</span>(listener)</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> () <span class="kw">=&gt;</span> listeners<span class="op">.</span><span class="fu">delete</span>(listener)</span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>AppState</code> type is deeply immutable (via
+<code>DeepImmutable&lt;&gt;</code>) and contains everything the UI
+needs. React integration uses <code>useSyncExternalStore</code> (React
+18+) to subscribe components to the store with tear-free reads.</p>
+<h3 id="context-architecture">Context Architecture</h3>
+<p>Nine React contexts separate cross-cutting concerns:</p>
+<table>
+<thead>
+<tr>
+<th>Context</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fpsMetrics</code></td>
+<td>Frame performance tracking</td>
+</tr>
+<tr>
+<td><code>mailbox</code></td>
+<td>Inter-agent messaging</td>
+</tr>
+<tr>
+<td><code>modalContext</code></td>
+<td>Modal dialog management</td>
+</tr>
+<tr>
+<td><code>notifications</code></td>
+<td>User notification system</td>
+</tr>
+<tr>
+<td><code>overlayContext</code></td>
+<td>Overlay/popover state</td>
+</tr>
+<tr>
+<td><code>promptOverlayContext</code></td>
+<td>Prompt overlay UI</td>
+</tr>
+<tr>
+<td><code>QueuedMessageContext</code></td>
+<td>Message queue</td>
+</tr>
+<tr>
+<td><code>stats</code></td>
+<td>Usage statistics</td>
+</tr>
+<tr>
+<td><code>voice</code></td>
+<td>Voice input state</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1211-input-handling">12.11 Input Handling</h2>
+<h3 id="key-parsing">Key Parsing</h3>
+<p>At <code>ink/parse-keypress.ts</code> (801 lines), raw terminal input
+bytes are parsed into structured <code>ParsedKey</code> objects. This
+handles the full complexity of terminal input: single characters, escape
+sequences, arrow keys, function keys, modifier combinations, Kitty
+keyboard protocol extended events, SGR mouse events (position, button,
+drag, wheel), bracketed paste mode, and terminal query responses
+(XTVERSION, OSC 11).</p>
+<p>The <code>App</code> component at <code>ink/components/App.tsx</code>
+(657 lines) receives all stdin data and dispatches through the event
+system. Multi-click detection (double-click for word selection,
+triple-click for line selection) uses a 500ms timeout and 1-cell
+distance threshold:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MULTI_CLICK_TIMEOUT_MS <span class="op">=</span> <span class="dv">500</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MULTI_CLICK_DISTANCE <span class="op">=</span> <span class="dv">1</span></span></code></pre></div>
+<h3 id="terminal-resume-detection">Terminal Resume Detection</h3>
+<p>After a &gt;5 second stdin silence (tmux detach, SSH reconnect,
+laptop wake from sleep), the next input triggers terminal mode
+re-assertion:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> STDIN_RESUME_GAP_MS <span class="op">=</span> <span class="dv">5000</span></span></code></pre></div>
+<p>This re-enables mouse tracking, extended key reporting, and other DEC
+private modes that terminals reset on reconnect. Without this, users
+returning from a lunch break would find mouse scrolling broken until
+they restarted the session.</p>
+<h3 id="the-text-input-hook">The Text Input Hook</h3>
+<p>At <code>hooks/useTextInput.ts</code> (529 lines), a full text editor
+lives inside a React hook. It supports:</p>
+<ul>
+<li><strong>Cursor movement</strong>: arrow keys, Home/End, Ctrl+A/E
+(Emacs bindings)</li>
+<li><strong>Kill ring</strong>: Ctrl+K (kill to end), Ctrl+U (kill to
+start), Ctrl+Y (yank), Alt+Y (yank-pop)</li>
+<li><strong>History navigation</strong>: Up/Down arrows cycle through
+previous inputs</li>
+<li><strong>Multiline editing</strong>: Enter for newline, special
+submit handling</li>
+<li><strong>Inline ghost text</strong>: typeahead suggestions rendered
+in a dimmed style</li>
+<li><strong>Image paste detection</strong>: recognizes base64-encoded
+image data from clipboard</li>
+<li><strong>Input filtering</strong>: configurable character
+filtering</li>
+</ul>
+<p>The kill ring implementation is particularly noteworthy — it
+implements the Emacs-style ring buffer where Ctrl+Y pastes the most
+recent kill and Alt+Y cycles through previous kills. This is a detail
+that experienced terminal users expect but few CLI tools implement.</p>
+<h3 id="the-event-system">The Event System</h3>
+<p>A DOM-like event system at <code>ink/events/</code> (8 files)
+provides capture and bubble phases:</p>
+<ul>
+<li><code>dispatcher.ts</code> — Event dispatch with React priority
+integration</li>
+<li><code>keyboard-event.ts</code> — Keyboard events with modifier
+tracking</li>
+<li><code>click-event.ts</code> — Mouse click events with
+coordinates</li>
+<li><code>focus-event.ts</code> — Focus/blur events for
+<code>tabIndex</code> navigation</li>
+<li><code>input-event.ts</code> — Text input events (legacy
+compatibility)</li>
+</ul>
+<p>Hit testing at <code>ink/hit-test.ts</code> walks the DOM tree and
+checks if mouse coordinates fall within computed Yoga bounds. Events
+bubble from the deepest hit Box upward, with
+<code>stopPropagation()</code> and
+<code>stopImmediatePropagation()</code> support.</p>
+<h3 id="focus-management">Focus Management</h3>
+<p>The <code>FocusManager</code> at <code>ink/focus.ts</code> (145
+lines) implements <code>tabIndex</code>-based focus navigation for the
+terminal:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> FocusableElement {</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  node<span class="op">:</span> DOMElement</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  tabIndex<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  autoFocus<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Focus cycles through elements in <code>tabIndex</code> order: 0 → 1 →
+2 → ... → back to 0. Elements with <code>tabIndex={-1}</code> are
+focusable programmatically but skip Tab navigation. This mirrors the
+browser's focus model, making the terminal UI feel familiar to web
+developers.</p>
+<p>The focus system integrates with the permission dialog — when a tool
+requires approval, focus automatically moves to the permission prompt,
+and after the user responds, focus returns to the input prompt. This
+focus restoration is managed through a stack that tracks the focus chain
+across modal transitions.</p>
+<h3 id="native-typescript-bindings">Native TypeScript Bindings</h3>
+<p>The rendering stack uses native Bun bindings for performance-critical
+operations:</p>
+<ul>
+<li><strong>Yoga layout</strong>: The flexbox engine runs as a compiled
+native module, not a JavaScript port. Layout computation for complex
+component trees (100+ nodes) completes in under 20ms — the performance
+target enforced by the commit log profiling.</li>
+<li><strong>File indexer</strong>: The file suggestion system uses a
+native Rust-based file indexer for sub-millisecond glob matching, used
+by the typeahead/autocomplete system.</li>
+<li><strong>Color diff</strong>: A native color differencing algorithm
+powers the auto-theme detection, comparing the terminal's reported
+background color against theme luminance thresholds to select light vs.
+dark themes.</li>
+</ul>
+<p>These native bindings are conditionally loaded — if the native module
+isn't available (unusual platform, missing binary), the system falls
+back to pure-JavaScript implementations. This graceful degradation
+ensures Claude Code works on any platform that supports Bun, even if the
+native modules can't be loaded.</p>
+<hr />
+<h2 id="1212-permission-dialog-ui">12.12 Permission Dialog UI</h2>
+<p>Each tool type has a specialized permission dialog that knows how to
+display that tool's inputs in a human-readable way. The routing happens
+at <code>components/permissions/PermissionRequest.tsx</code> (216
+lines):</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">permissionComponentForTool</span>(tool<span class="op">:</span> Tool) {</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> (tool) {</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> FileEditTool<span class="op">:</span>     <span class="cf">return</span> FileEditPermissionRequest</span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> FileWriteTool<span class="op">:</span>    <span class="cf">return</span> FileWritePermissionRequest</span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> BashTool<span class="op">:</span>         <span class="cf">return</span> BashPermissionRequest</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> PowerShellTool<span class="op">:</span>   <span class="cf">return</span> PowerShellPermissionRequest</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> WebFetchTool<span class="op">:</span>     <span class="cf">return</span> WebFetchPermissionRequest</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> NotebookEditTool<span class="op">:</span> <span class="cf">return</span> NotebookEditPermissionRequest</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> SkillTool<span class="op">:</span>        <span class="cf">return</span> SkillPermissionRequest</span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span>               <span class="cf">return</span> FallbackPermissionRequest</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><code>BashPermissionRequest</code> shows the command with syntax
+highlighting. <code>FileEditPermissionRequest</code> renders a diff view
+showing the exact string replacement.
+<code>FileWritePermissionRequest</code> shows the target path and file
+contents. Each dialog provides contextual information that lets the user
+make an informed allow/deny decision without needing to read raw
+JSON.</p>
+<hr />
+<h2 id="1213-tool-use-visualization">12.13 Tool Use Visualization</h2>
+<p>Each tool has a <code>UI.tsx</code> file that provides rendering
+during and after execution:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Visualization</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BashTool</td>
+<td>Command being executed, stdout/stderr streaming, background hint
+(Ctrl+B)</td>
+</tr>
+<tr>
+<td>FileEditTool</td>
+<td>Diff view with added/removed highlighting</td>
+</tr>
+<tr>
+<td>FileWriteTool</td>
+<td>File path and content preview</td>
+</tr>
+<tr>
+<td>FileReadTool</td>
+<td>File path with line range</td>
+</tr>
+<tr>
+<td>GrepTool</td>
+<td>Match count and file list</td>
+</tr>
+<tr>
+<td>GlobTool</td>
+<td>Matched file paths</td>
+</tr>
+<tr>
+<td>WebSearchTool</td>
+<td>Search query and result summaries</td>
+</tr>
+<tr>
+<td>AgentTool</td>
+<td>Agent status, model, and progress</td>
+</tr>
+<tr>
+<td>MCPTool</td>
+<td>MCP server name and tool call details</td>
+</tr>
+</tbody>
+</table>
+<p>The tool UI components use the design system's themed primitives —
+<code>ThemedText</code> for consistent color tokens,
+<code>ThemedBox</code> for borders and layout. This means tool output
+automatically adapts to the user's chosen theme (dark, light,
+daltonized).</p>
+<hr />
+<h2 id="1214-spinner-and-animation">12.14 Spinner and Animation</h2>
+<p>The spinner at <code>components/Spinner.tsx</code> (561 lines) is
+more sophisticated than a simple character rotation:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_CHARACTERS <span class="op">=</span> <span class="fu">getDefaultCharacters</span>()</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SPINNER_FRAMES <span class="op">=</span> [</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>DEFAULT_CHARACTERS<span class="op">,</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>[<span class="op">...</span>DEFAULT_CHARACTERS]<span class="op">.</span><span class="fu">reverse</span>()  <span class="co">// Ping-pong animation</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>]</span></code></pre></div>
+<p>The ping-pong animation creates a smoother visual effect than a
+cyclic loop — the eye perceives the reversal as continuous motion rather
+than a jarring jump from the last frame back to the first.</p>
+<p>The shimmer effect uses <code>computeShimmerSegments()</code> to
+animate color gradients across text — the Claude logo "shimmers" during
+processing, using the <code>claudeShimmer</code> theme token (a lighter
+variant of <code>claude</code> orange). The <code>SpinnerWithVerb</code>
+component branches on <code>isBriefOnly</code> to show a minimal spinner
+in brief/assistant mode versus a full status message in interactive
+mode.</p>
+<p>Animation timing is driven by <code>useAnimationFrame</code> from
+Ink, which provides frame-synced updates at 60fps. This is the same
+animation infrastructure that powers smooth scroll animations and
+progress bar updates.</p>
+<hr />
+<h2 id="1215-the-app-root-component">12.15 The App Root Component</h2>
+<p>The <code>App</code> component at <code>ink/components/App.tsx</code>
+(657 lines) is notably a <strong>class component</strong>, not a
+functional one. This is deliberate — class components have
+<code>componentDidCatch</code> for error boundaries, and the
+<code>App</code> root must catch rendering errors gracefully rather than
+crashing the terminal.</p>
+<p>Its render method reveals the context provider hierarchy:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="fu">render</span>() {</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> (</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">&lt;</span>TerminalSizeContext<span class="op">.</span><span class="at">Provider</span> value<span class="op">=</span>{{ columns<span class="op">,</span> rows }}<span class="op">&gt;</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>      <span class="op">&lt;</span>AppContext<span class="op">.</span><span class="at">Provider</span> value<span class="op">=</span>{{ exit<span class="op">:</span> <span class="kw">this</span><span class="op">.</span><span class="at">handleExit</span> }}<span class="op">&gt;</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">&lt;</span>StdinContext<span class="op">.</span><span class="at">Provider</span> value<span class="op">=</span>{{ stdin<span class="op">,</span> setRawMode }}<span class="op">&gt;</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>          <span class="op">&lt;</span>TerminalFocusProvider<span class="op">&gt;</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>            <span class="op">&lt;</span>ClockProvider<span class="op">&gt;</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>              <span class="op">&lt;</span>CursorDeclarationContext<span class="op">.</span><span class="at">Provider</span> value<span class="op">=</span>{<span class="op">...</span>}<span class="op">&gt;</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>                {<span class="kw">this</span><span class="op">.</span><span class="at">state</span><span class="op">.</span><span class="at">error</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>                  <span class="op">?</span> <span class="op">&lt;</span>ErrorOverview error<span class="op">=</span>{<span class="kw">this</span><span class="op">.</span><span class="at">state</span><span class="op">.</span><span class="at">error</span>} <span class="op">/&gt;</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>                  <span class="op">:</span> <span class="kw">this</span><span class="op">.</span><span class="at">props</span><span class="op">.</span><span class="at">children</span>}</span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>              <span class="op">&lt;/</span>CursorDeclarationContext<span class="op">.</span><span class="at">Provider</span><span class="op">&gt;</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>            <span class="op">&lt;/</span>ClockProvider<span class="op">&gt;</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>          <span class="op">&lt;/</span>TerminalFocusProvider<span class="op">&gt;</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">&lt;/</span>StdinContext<span class="op">.</span><span class="at">Provider</span><span class="op">&gt;</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>      <span class="op">&lt;/</span>AppContext<span class="op">.</span><span class="at">Provider</span><span class="op">&gt;</span></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">&lt;/</span>TerminalSizeContext<span class="op">.</span><span class="at">Provider</span><span class="op">&gt;</span></span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Six contexts wrap the entire application tree:</p>
+<ol type="1">
+<li><strong>TerminalSizeContext</strong> — columns and rows, updated on
+terminal resize</li>
+<li><strong>AppContext</strong> — the exit handler for graceful
+shutdown</li>
+<li><strong>StdinContext</strong> — stdin stream, raw mode control,
+event emitter, terminal querier</li>
+<li><strong>TerminalFocusProvider</strong> — focus-in/focus-out events
+(terminal gaining/losing OS focus)</li>
+<li><strong>ClockProvider</strong> — shared animation timer for
+synchronized 60fps updates</li>
+<li><strong>CursorDeclarationContext</strong> — IME cursor positioning
+for international text input</li>
+</ol>
+<hr />
+<h2 id="1216-the-repl-screen">12.16 The REPL Screen</h2>
+<p>At <code>screens/REPL.tsx</code> (5,005 lines), the largest file in
+the codebase, the REPL screen orchestrates the entire interactive
+experience. Its first 200 lines are imports — 180+ import statements.
+This is the convergence point of the application: message display,
+prompt input, API query management, permission request routing, tool use
+visualization, session management, cost tracking, background task
+navigation, and teammate/agent view switching all meet here.</p>
+<p>The <code>Messages</code> component at
+<code>components/Messages.tsx</code> (833 lines) handles the core
+message rendering — transforming the API message array into a scrollable
+list of formatted message blocks with tool use visualization, markdown
+rendering, and diff display.</p>
+<p>The REPL is where the theoretical architecture becomes a living
+application. Every abstraction described in this chapter — the
+reconciler, the screen buffer, the scroll system, the theme engine —
+exists to serve this 5,000-line React component that makes Claude Code
+feel like a native terminal application rather than a chatbot wrapped in
+<code>readline</code>.</p>
+<hr />
+<h2 id="1217-react-compiler-integration">12.17 React Compiler
+Integration</h2>
+<p>Every component in the codebase uses the React Compiler runtime:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { c <span class="im">as</span> _c } <span class="im">from</span> <span class="st">&quot;react/compiler-runtime&quot;</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="im">default</span> <span class="kw">function</span> <span class="fu">Text</span>(t0) {</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> $ <span class="op">=</span> <span class="fu">_c</span>(<span class="dv">29</span>)  <span class="co">// 29-slot memo cache</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... destructure props, check each slot against cache ...</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The compiler transforms components into an optimized form with a
+slot-based memo cache. Each slot tracks a dependency expression; if deps
+haven't changed, the cached value is returned. This eliminates manual
+<code>useMemo</code>/<code>useCallback</code> wrapping entirely — the
+compiler handles it automatically with fine-grained dependency tracking
+at the expression level.</p>
+<hr />
+<h2 id="1218-engineering-patterns-worth-stealing">12.18 Engineering
+Patterns Worth Stealing</h2>
+<p>Seven patterns from the UI renderer that apply to any terminal
+application:</p>
+<p><strong>1. Bypass React for performance-critical paths.</strong>
+Scrolling, selection, and cursor positioning mutate DOM nodes directly
+and trigger the render pipeline without going through React
+reconciliation. React handles structural changes; hot-path state
+mutations go direct.</p>
+<p><strong>2. Intern everything on the hot path.</strong> Characters,
+styles, and hyperlinks are interned into integer IDs. The screen buffer
+stores only integers. Comparisons are integer equality checks, not
+string comparisons. Style transitions are pre-serialized and cached by
+(from, to) pair.</p>
+<p><strong>3. Pack hints into identifiers.</strong> Bit 0 of the style
+ID encodes whether the style has visible effect on spaces. One bitmask
+operation saves thousands of string comparisons per frame.</p>
+<p><strong>4. Double buffer with contamination tracking.</strong> Front
+and back frames alternate. Overlay passes (selection highlighting) that
+mutate the screen buffer set a contamination flag so the next frame
+knows it can't trust the buffer for incremental updates.</p>
+<p><strong>5. Adapt to the terminal environment.</strong> Different
+scroll drain rates for xterm.js vs native terminals. Color level
+boosting for VS Code, clamping for tmux. Hardware scroll (DECSTBM) when
+available, full repaint when not.</p>
+<p><strong>6. Let the React Compiler handle memoization.</strong> No
+manual <code>useMemo</code>/<code>useCallback</code>. The compiler
+generates expression-level dependency tracking that's both more granular
+and more correct than hand-written memoization.</p>
+<p><strong>7. Keep the store minimal.</strong> 35 lines of pub/sub with
+<code>useSyncExternalStore</code> beats any state management library for
+this use case. <code>Object.is</code> equality check with deeply
+immutable state prevents unnecessary re-renders.</p>
+<hr />
+<h2 id="summary">Summary</h2>
+<p>The UI renderer is where Claude Code's engineering ambition is most
+visible. Building a React application inside a terminal — complete with
+flexbox layout, smooth scrolling, text selection, theming, and 60fps
+rendering — required solving problems that few CLI tools ever attempt.
+The custom reconciler bridges React's programming model to terminal
+rendering. The interned screen buffer makes cell-by-cell diffing cheap.
+The adaptive scroll system handles both VS Code's xterm.js and native
+terminals. And the React Compiler eliminates an entire category of
+performance bugs.</p>
+<p>For engineers building CLI tools: the investment in a proper
+rendering architecture pays for itself the moment your UI has more than
+one moving part. The patterns here — double buffering, dirty tracking,
+frame coalescing, hardware scroll, style interning — are not novel, but
+their combination in a TypeScript terminal application proves that
+terminal UIs can be as sophisticated as their graphical
+counterparts.</p>
+<p>In Chapter 13, we move from the presentation layer to the
+coordination layer — examining how Claude Code spawns, manages, and
+communicates with subagents to parallelize complex tasks across multiple
+model instances.</p>
+</div>
+</body>
+</html>

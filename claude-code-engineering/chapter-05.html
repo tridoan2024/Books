@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 5: API Client & Model Communication — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-5-api-client--model-communication">Chapter 5: API Client
+&amp; Model Communication</h1>
+<p>In Chapter 4, we dissected the query loop — the
+<code>while(true)</code> async generator that orchestrates the agent's
+think-act cycle. But we treated the model call as a black box:
+<code>deps.callModel()</code> goes in, messages come out. This chapter
+opens that box.</p>
+<p>The API client lives in <code>services/api/claude.ts</code> — 3,419
+lines that handle every aspect of communicating with the Anthropic API.
+It manages beta headers that affect server-side cache keys, implements
+three prompt caching strategies with different TTLs, runs a retry engine
+that doubles as an async generator, detects cache breaks with two-phase
+forensics, and operates a fast mode state machine with cooldown timers.
+Supporting it are seven more files totaling another 3,577 lines: the
+retry engine (<code>withRetry.ts</code>, 822 lines), cache break
+detection (<code>promptCacheBreakDetection.ts</code>, 727 lines), fast
+mode (<code>fastMode.ts</code>, 532 lines), token estimation
+(<code>tokenEstimation.ts</code>, 495 lines), client factory
+(<code>client.ts</code>, 389 lines), effort resolution
+(<code>effort.ts</code>, 329 lines), and cost calculation
+(<code>modelCost.ts</code>, 231 lines).</p>
+<p>Together, these ~7,000 lines form the communication layer between the
+agent loop and the model. Every design decision here is shaped by one
+constraint: <strong>prompt caching economics</strong>. A cache hit costs
+1/10th of a cache miss. A single misplaced header can bust 50-70K tokens
+of cached prompt. The entire API client architecture exists to keep
+cache keys stable while behavior stays dynamic.</p>
+<hr />
+<h2 id="architecture-two-entry-points-one-generator">Architecture: Two
+Entry Points, One Generator</h2>
+<p>The API client exposes two entry points — streaming and non-streaming
+— but both wrap the same internal generator:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:752-780 — Streaming (async generator)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span><span class="op">*</span> <span class="fu">queryModelWithStreaming</span>({</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">,</span> systemPrompt<span class="op">,</span> thinkingConfig<span class="op">,</span> tools<span class="op">,</span> signal<span class="op">,</span> options<span class="op">,</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>}<span class="op">:</span> { <span class="op">...</span> })<span class="op">:</span> AsyncGenerator<span class="op">&lt;</span>StreamEvent <span class="op">|</span> AssistantMessage <span class="op">|</span> SystemAPIErrorMessage<span class="op">,</span> <span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">yield</span><span class="op">*</span> <span class="fu">withStreamingVCR</span>(messages<span class="op">,</span> <span class="kw">async</span> <span class="kw">function</span><span class="op">*</span> () {</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">yield</span><span class="op">*</span> <span class="fu">queryModel</span>(messages<span class="op">,</span> systemPrompt<span class="op">,</span> thinkingConfig<span class="op">,</span> tools<span class="op">,</span> signal<span class="op">,</span> options)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  })</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:709-750 — Non-streaming (wraps the generator)</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">queryModelWithoutStreaming</span>({</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">,</span> systemPrompt<span class="op">,</span> thinkingConfig<span class="op">,</span> tools<span class="op">,</span> signal<span class="op">,</span> options<span class="op">,</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>}<span class="op">:</span> { <span class="op">...</span> })<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>AssistantMessage<span class="op">&gt;</span> {</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> assistantMessage<span class="op">:</span> AssistantMessage <span class="op">|</span> <span class="dt">undefined</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="cf">await</span> (<span class="kw">const</span> message <span class="kw">of</span> <span class="fu">withStreamingVCR</span>(messages<span class="op">,</span> <span class="kw">async</span> <span class="kw">function</span><span class="op">*</span> () {</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">yield</span><span class="op">*</span> <span class="fu">queryModel</span>(messages<span class="op">,</span> systemPrompt<span class="op">,</span> thinkingConfig<span class="op">,</span> tools<span class="op">,</span> signal<span class="op">,</span> options)</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>  })) {</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (message<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;assistant&#39;</span>) {</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>      assistantMessage <span class="op">=</span> message</span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The non-streaming version simply consumes the entire generator and
+returns the last assistant message. Both wrap in
+<code>withStreamingVCR</code> — a record/replay layer for testing that
+we'll cover in Chapter 21 on testing infrastructure. This is the same
+generator-as-protocol pattern from Chapter 4's query loop, applied one
+layer down: the caller drives the pace, the producer yields when
+ready.</p>
+<p>The <code>Options</code> type captures the full request configuration
+— 25+ fields:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:676-707</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> Options <span class="op">=</span> {</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  getToolPermissionContext<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="bu">Promise</span><span class="op">&lt;</span>ToolPermissionContext<span class="op">&gt;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  model<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  toolChoice<span class="op">?:</span> BetaToolChoiceTool <span class="op">|</span> BetaToolChoiceAuto <span class="op">|</span> <span class="dt">undefined</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  isNonInteractiveSession<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  maxOutputTokensOverride<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  fallbackModel<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  querySource<span class="op">:</span> QuerySource</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>  agents<span class="op">:</span> AgentDefinition[]</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>  enablePromptCaching<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>  skipCacheWrite<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>  effortValue<span class="op">?:</span> EffortValue</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>  mcpTools<span class="op">:</span> Tools</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>  fastMode<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>  taskBudget<span class="op">?:</span> { total<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> remaining<span class="op">?:</span> <span class="dt">number</span> }</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... 10 more fields</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>A single configuration object avoids the "parameter explosion"
+problem. When a function needs 25 inputs, positional arguments become
+unreadable. Named fields with a type make every call site
+self-documenting. This mirrors the <code>QueryParams</code> pattern from
+Chapter 4 — a single typed bag replaces 25 positional arguments.</p>
+<hr />
+<h2 id="the-querymodel-generator--1800-lines-of-orchestration">The
+queryModel Generator — 1,800 Lines of Orchestration</h2>
+<p>The internal <code>queryModel</code> function (starting ~line 1030)
+is where the real work happens. Its flow:</p>
+<pre><code>1. Resolve tool schemas → filter, add defer_loading for tool search
+2. Normalize messages → strip tool-search fields, repair pairing, limit media
+3. Build system prompt blocks → with cache_control markers
+4. Compute latched beta headers → sticky-on for cache stability
+5. Create paramsFromContext → closure that builds API params per retry
+6. Initiate streaming → anthropic.beta.messages.create({stream: true})
+7. Process stream events → accumulate content blocks, tool use, thinking
+8. Handle failures → fall back to non-streaming on stream errors
+9. Log results → usage, cost, cache metrics</code></pre>
+<p>Step 5 deserves a closer look. The <code>paramsFromContext</code>
+closure captures the message context but rebuilds API parameters fresh
+on each retry attempt. This is necessary because the retry engine
+(detailed later in this chapter) may change the model, the fast mode
+state, or the effort level between attempts. A static parameter object
+would carry stale values across retries. The closure pattern ensures
+every retry gets current parameters while keeping the expensive context
+preparation (steps 1-4) as a one-time cost.</p>
+<p>We'll examine each of the non-obvious steps in detail.</p>
+<hr />
+<h2 id="the-client-factory--four-api-providers">The Client Factory —
+Four API Providers</h2>
+<p>Before any request can be sent, the API client needs an SDK client
+instance. The factory at <code>client.ts</code> (389 lines) builds
+provider-specific clients:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// client.ts — Simplified factory pattern</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">createAnthropicClient</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>Anthropic<span class="op">&gt;</span> {</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> provider <span class="op">=</span> <span class="fu">getAPIProvider</span>()  <span class="co">// &#39;1p&#39; | &#39;bedrock&#39; | &#39;vertex&#39; | &#39;foundry&#39;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> (provider) {</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;bedrock&#39;</span><span class="op">:</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">new</span> <span class="fu">AnthropicBedrock</span>({ <span class="co">/* AWS credentials, region */</span> })</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;vertex&#39;</span><span class="op">:</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">new</span> <span class="fu">AnthropicVertex</span>({ <span class="co">/* GCP project, location */</span> })</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;foundry&#39;</span><span class="op">:</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">new</span> <span class="fu">Anthropic</span>({ baseURL<span class="op">:</span> <span class="fu">getFoundryBaseURL</span>()<span class="op">,</span> <span class="co">/* ... */</span> })</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span>  <span class="co">// &#39;1p&#39; — First-party Anthropic API</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">new</span> <span class="fu">Anthropic</span>({ apiKey<span class="op">,</span> <span class="co">/* ... */</span> })</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The factory is important because provider differences ripple through
+the entire API client. Bedrock puts beta headers in the request body
+instead of HTTP headers. Vertex filters certain betas from
+<code>countTokens</code> calls. Foundry uses a custom base URL. The 1P
+(first-party) Anthropic API gets all betas in headers. By isolating
+these differences in the factory, the rest of the ~7,000 lines of API
+client code remains provider-agnostic.</p>
+<p>The retry engine (covered below) calls <code>getClient()</code> to
+obtain fresh client instances when connections go stale or auth tokens
+expire. The factory is the single point where credential refresh, region
+selection, and SDK configuration happen.</p>
+<hr />
+<h2 id="beta-header-management--cache-key-engineering">Beta Header
+Management — Cache Key Engineering</h2>
+<p>Beta headers are string identifiers that enable experimental API
+features. They seem simple — just strings in a header — but they have a
+profound architectural impact: <strong>beta headers are part of the
+server-side cache key.</strong> Adding, removing, or reordering a beta
+header mid-session invalidates the entire prompt cache, wasting 50-70K
+tokens of cached context.</p>
+<h3 id="the-constants">The Constants</h3>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// constants/betas.ts:1-31</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> EFFORT_BETA_HEADER <span class="op">=</span> <span class="st">&#39;effort-2025-11-24&#39;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> TASK_BUDGETS_BETA_HEADER <span class="op">=</span> <span class="st">&#39;task-budgets-2026-03-13&#39;</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> PROMPT_CACHING_SCOPE_BETA_HEADER <span class="op">=</span> <span class="st">&#39;prompt-caching-scope-2026-01-05&#39;</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> FAST_MODE_BETA_HEADER <span class="op">=</span> <span class="st">&#39;fast-mode-2026-02-01&#39;</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> REDACT_THINKING_BETA_HEADER <span class="op">=</span> <span class="st">&#39;redact-thinking-2026-02-12&#39;</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> CONTEXT_MANAGEMENT_BETA_HEADER <span class="op">=</span> <span class="st">&#39;context-management-2025-06-27&#39;</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> STRUCTURED_OUTPUTS_BETA_HEADER <span class="op">=</span> <span class="st">&#39;structured-outputs-2025-12-15&#39;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> AFK_MODE_BETA_HEADER <span class="op">=</span> <span class="fu">feature</span>(<span class="st">&#39;TRANSCRIPT_CLASSIFIER&#39;</span>)</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  <span class="op">?</span> <span class="st">&#39;afk-mode-2026-01-31&#39;</span> <span class="op">:</span> <span class="st">&#39;&#39;</span>  <span class="co">// Feature-gated, tree-shakes out of external builds</span></span></code></pre></div>
+<p>Note the last line: the AFK mode header is feature-gated at compile
+time. If <code>TRANSCRIPT_CLASSIFIER</code> is disabled, the string
+literal is empty and the bundler can tree-shake it out entirely. This is
+a pattern for beta headers that should only exist in internal
+builds.</p>
+<h3 id="the-latch-pattern">The Latch Pattern</h3>
+<p>The most important engineering pattern in the API client is
+<strong>beta header latching</strong>: once a beta header is sent in a
+session, it keeps being sent for every subsequent request, even if the
+feature that triggered it is no longer active.</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1405-1456</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Sticky-on latches for dynamic beta headers. Each header, once first</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="co">// sent, keeps being sent for the rest of the session so mid-session</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="co">// toggles don&#39;t change the server-side cache key and bust ~50-70K tokens.</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Latches are cleared on /clear and /compact via clearBetaHeaderLatches().</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> fastModeHeaderLatched <span class="op">=</span> <span class="fu">getFastModeHeaderLatched</span>() <span class="op">===</span> <span class="kw">true</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="op">!</span>fastModeHeaderLatched <span class="op">&amp;&amp;</span> isFastMode) {</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>  fastModeHeaderLatched <span class="op">=</span> <span class="kw">true</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">setFastModeHeaderLatched</span>(<span class="kw">true</span>)</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> cacheEditingHeaderLatched <span class="op">=</span> <span class="fu">getCacheEditingHeaderLatched</span>() <span class="op">===</span> <span class="kw">true</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> thinkingClearLatched <span class="op">=</span> <span class="fu">getThinkingClearLatched</span>() <span class="op">===</span> <span class="kw">true</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="op">!</span>thinkingClearLatched <span class="op">&amp;&amp;</span> isAgenticQuery) {</span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> lastCompletion <span class="op">=</span> <span class="fu">getLastApiCompletionTimestamp</span>()</span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (lastCompletion <span class="op">!==</span> <span class="kw">null</span> <span class="op">&amp;&amp;</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> lastCompletion <span class="op">&gt;</span> CACHE_TTL_1HOUR_MS) {</span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>    thinkingClearLatched <span class="op">=</span> <span class="kw">true</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>    <span class="fu">setThinkingClearLatched</span>(<span class="kw">true</span>)</span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The thinking-clear latch has an additional time guard: it only
+activates when the last API call was more than 1 hour ago (the cache
+TTL). If the cache has already expired due to inactivity, the latch is
+safe to set because there's nothing to bust.</p>
+<p>The latches are stored in the global <code>STATE</code> from Chapter
+3 and cleared on <code>/clear</code> and <code>/compact</code> — the two
+commands that reset the conversation context. This is correct because
+those commands also reset the prompt content, so the cache key changes
+regardless.</p>
+<h3 id="why-latching-matters--the-cost-math">Why Latching Matters — The
+Cost Math</h3>
+<p>Consider a session with 50K tokens of cached system prompt. Without
+latching:</p>
+<table>
+<thead>
+<tr>
+<th>Turn</th>
+<th>Fast Mode</th>
+<th>Header Sent</th>
+<th>Cache</th>
+<th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Off</td>
+<td>No fast-mode header</td>
+<td>Miss (first turn)</td>
+<td>50K write tokens</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Off</td>
+<td>No fast-mode header</td>
+<td><strong>Hit</strong></td>
+<td>50K read tokens (1/10 cost)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>On</td>
+<td>fast-mode header added</td>
+<td><strong>Miss</strong> (key changed)</td>
+<td>50K write tokens</td>
+</tr>
+<tr>
+<td>4</td>
+<td>On</td>
+<td>fast-mode header</td>
+<td>Hit</td>
+<td>50K read tokens</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Off</td>
+<td>header removed</td>
+<td><strong>Miss</strong> (key changed)</td>
+<td>50K write tokens</td>
+</tr>
+</tbody>
+</table>
+<p>Toggling fast mode twice costs two full cache misses — 100K tokens at
+write pricing. With latching, once the header appears in turn 3, it
+stays forever. Turns 4 and 5 both hit the cache.</p>
+<h3 id="provider-specific-beta-handling">Provider-Specific Beta
+Handling</h3>
+<p>Not all API providers handle betas the same way:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1549-1556</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> bedrockBetas <span class="op">=</span> <span class="fu">getAPIProvider</span>() <span class="op">===</span> <span class="st">&#39;bedrock&#39;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">?</span> [</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>      <span class="op">...</span><span class="fu">getBedrockExtraBodyParamsBetas</span>(retryContext<span class="op">.</span><span class="at">model</span>)<span class="op">,</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>      <span class="op">...</span>(toolSearchHeader <span class="op">?</span> [toolSearchHeader] <span class="op">:</span> [])<span class="op">,</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    ]</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">:</span> []</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> extraBodyParams <span class="op">=</span> <span class="fu">getExtraBodyParams</span>(bedrockBetas)</span></code></pre></div>
+<p>Bedrock puts betas in the request body, not HTTP headers. Vertex
+filters certain betas from <code>countTokens</code> calls. The 1P API
+gets all betas in headers. This provider abstraction happens at the beta
+layer — the rest of the API client doesn't know which provider is
+active. The client factory (described above) and the beta handling are
+the only two places where provider identity matters.</p>
+<hr />
+<h2 id="prompt-caching--three-strategies">Prompt Caching — Three
+Strategies</h2>
+<p>Prompt caching is the single most impactful cost optimization in
+Claude Code. The system prompt, tool definitions, and early conversation
+messages are largely identical across turns. Caching them avoids
+re-processing on every request.</p>
+<h3 id="strategy-1-ephemeral-5-minute-cache-default">Strategy 1:
+Ephemeral 5-Minute Cache (Default)</h3>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:358-374</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getCacheControl</span>({</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  scope<span class="op">,</span> querySource<span class="op">,</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>}<span class="op">:</span> { scope<span class="op">?:</span> CacheScope<span class="op">;</span> querySource<span class="op">?:</span> QuerySource } <span class="op">=</span> {})<span class="op">:</span> {</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="st">&#39;ephemeral&#39;</span><span class="op">;</span> ttl<span class="op">?:</span> <span class="st">&#39;1h&#39;</span><span class="op">;</span> scope<span class="op">?:</span> CacheScope</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>} {</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    type<span class="op">:</span> <span class="st">&#39;ephemeral&#39;</span><span class="op">,</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span>(<span class="fu">should1hCacheTTL</span>(querySource) <span class="op">&amp;&amp;</span> { ttl<span class="op">:</span> <span class="st">&#39;1h&#39;</span> })<span class="op">,</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span>(scope <span class="op">===</span> <span class="st">&#39;global&#39;</span> <span class="op">&amp;&amp;</span> { scope })<span class="op">,</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>When <code>should1hCacheTTL()</code> returns false, the cache control
+is <code>{ type: 'ephemeral' }</code> — the API's default 5-minute TTL.
+This is the baseline: every request gets at least 5 minutes of
+caching.</p>
+<h3 id="strategy-2-extended-1-hour-ttl">Strategy 2: Extended 1-Hour
+TTL</h3>
+<p>For eligible users, the TTL extends to 1 hour:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:377-434</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">should1hCacheTTL</span>(querySource<span class="op">?:</span> QuerySource)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">// 3P Bedrock users get 1h TTL when opted in via env var</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">getAPIProvider</span>() <span class="op">===</span> <span class="st">&#39;bedrock&#39;</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>      <span class="fu">isEnvTruthy</span>(<span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">ENABLE_PROMPT_CACHING_1H_BEDROCK</span>)) {</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">true</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Latch eligibility in bootstrap state for session stability</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> userEligible <span class="op">=</span> <span class="fu">getPromptCache1hEligible</span>()</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (userEligible <span class="op">===</span> <span class="kw">null</span>) {</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    userEligible <span class="op">=</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>      <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">USER_TYPE</span> <span class="op">===</span> <span class="st">&#39;ant&#39;</span> <span class="op">||</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>      (<span class="fu">isClaudeAISubscriber</span>() <span class="op">&amp;&amp;</span> <span class="op">!</span>currentLimits<span class="op">.</span><span class="at">isUsingOverage</span>)</span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    <span class="fu">setPromptCache1hEligible</span>(userEligible)</span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>userEligible) <span class="cf">return</span> <span class="kw">false</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Cache allowlist from GrowthBook — pattern matching with trailing &#39;*&#39;</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> allowlist <span class="op">=</span> <span class="fu">getPromptCache1hAllowlist</span>()</span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (allowlist <span class="op">===</span> <span class="kw">null</span>) {</span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> config <span class="op">=</span> getFeatureValue_CACHED_MAY_BE_STALE<span class="op">&lt;</span>{</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>      allowlist<span class="op">?:</span> <span class="dt">string</span>[]</span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>    }<span class="op">&gt;</span>(<span class="st">&#39;tengu_prompt_cache_1h_config&#39;</span><span class="op">,</span> {})</span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>    allowlist <span class="op">=</span> config<span class="op">.</span><span class="at">allowlist</span> <span class="op">??</span> []</span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    <span class="fu">setPromptCache1hAllowlist</span>(allowlist)</span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> querySource <span class="op">!==</span> <span class="kw">undefined</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>    allowlist<span class="op">.</span><span class="fu">some</span>(pattern <span class="kw">=&gt;</span></span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a>      pattern<span class="op">.</span><span class="fu">endsWith</span>(<span class="st">&#39;*&#39;</span>)</span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>        <span class="op">?</span> querySource<span class="op">.</span><span class="fu">startsWith</span>(pattern<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> <span class="op">-</span><span class="dv">1</span>))</span>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>        <span class="op">:</span> querySource <span class="op">===</span> pattern<span class="op">,</span></span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Two latching decisions here:</p>
+<ol type="1">
+<li><p><strong>Eligibility is latched.</strong> The first time
+<code>should1hCacheTTL</code> runs, it checks subscriber status and
+overage. The result is stored in bootstrap state. If the user hits their
+rate limit mid-session and enters overage, the TTL doesn't flip —
+because flipping it would bust the cache, costing more than the overage
+savings.</p></li>
+<li><p><strong>Allowlist is latched.</strong> The GrowthBook feature
+flag (Chapter 2's feature flag system) that controls which query sources
+get 1h TTL is read once and cached. A remote flag update mid-session
+won't change the TTL. This is the same "snapshot at entry" philosophy as
+<code>QueryConfig</code> from Chapter 4.</p></li>
+</ol>
+<h3 id="strategy-3-global-cache-scope">Strategy 3: Global Cache
+Scope</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1207-1229</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> useGlobalCacheFeature <span class="op">=</span> <span class="fu">shouldUseGlobalCacheScope</span>()</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> needsToolBasedCacheMarker <span class="op">=</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  useGlobalCacheFeature <span class="op">&amp;&amp;</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  filteredTools<span class="op">.</span><span class="fu">some</span>(t <span class="kw">=&gt;</span> t<span class="op">.</span><span class="at">isMcp</span> <span class="op">===</span> <span class="kw">true</span> <span class="op">&amp;&amp;</span> <span class="op">!</span><span class="fu">willDefer</span>(t))</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> globalCacheStrategy<span class="op">:</span> GlobalCacheStrategy <span class="op">=</span> useGlobalCacheFeature</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">?</span> needsToolBasedCacheMarker <span class="op">?</span> <span class="st">&#39;none&#39;</span> <span class="op">:</span> <span class="st">&#39;system_prompt&#39;</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">:</span> <span class="st">&#39;none&#39;</span></span></code></pre></div>
+<p>Global cache scope (<code>scope: 'global'</code>) lets system prompts
+be cached <strong>across users</strong>. Since all Claude Code users
+share the same system prompt, this is a massive efficiency gain. But
+there's a constraint: MCP tools are per-user dynamic content. If the
+tool list includes non-deferred MCP tools, global caching is disabled
+because the tool definitions would differ between users.</p>
+<h3 id="cache-breakpoint-placement">Cache Breakpoint Placement</h3>
+<p>Where you place the <code>cache_control</code> marker in the message
+array determines what gets cached:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:3063-3106</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">addCacheBreakpoints</span>(</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">,</span> enablePromptCaching<span class="op">,</span> querySource<span class="op">,</span> useCachedMC<span class="op">,</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  newCacheEdits<span class="op">,</span> pinnedEdits<span class="op">,</span> skipCacheWrite<span class="op">,</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> MessageParam[] {</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Exactly one message-level cache_control marker per request.</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// With two markers the second-to-last position is protected and its</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// locals survive an extra turn.</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> markerIndex <span class="op">=</span> skipCacheWrite <span class="op">?</span> messages<span class="op">.</span><span class="at">length</span> <span class="op">-</span> <span class="dv">2</span> <span class="op">:</span> messages<span class="op">.</span><span class="at">length</span> <span class="op">-</span> <span class="dv">1</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The comment reveals a deep understanding of the server-side cache
+internals: the KV cache eviction system frees pages at cached prefix
+positions <strong>not</strong> in the store boundaries. Multiple markers
+protect multiple positions, which wastes memory. The rule: exactly one
+marker per request.</p>
+<p>For fork queries (subagents using <code>skipCacheWrite</code>), the
+marker shifts to the second-to-last message — the shared prefix point.
+This way the parent conversation's cache is preserved while the
+subagent's unique messages don't create a separate cache entry.</p>
+<h3 id="cache-break-detection--two-phase-forensics">Cache Break
+Detection — Two-Phase Forensics</h3>
+<p>When something goes wrong with caching, you need to know what
+changed. The <code>promptCacheBreakDetection.ts</code> (727 lines)
+implements a two-phase detection system:</p>
+<p><strong>Phase 1: Pre-call snapshot.</strong> Before each API call,
+record hashes of everything that affects the cache key:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// promptCacheBreakDetection.ts:247-430</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">recordPromptState</span>(snapshot<span class="op">:</span> PromptStateSnapshot)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Records hashes of: system prompt, tools, model, betas, fast mode,</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">// global cache strategy, effort, extra body params, cache_control</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Detects what changed since last call and stores as pendingChanges</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><strong>Phase 2: Post-call verification.</strong> After the response,
+compare cache metrics:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">// promptCacheBreakDetection.ts:437-666</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">checkResponseForCacheBreak</span>(</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  querySource<span class="op">,</span> cacheReadTokens<span class="op">,</span> cacheCreationTokens<span class="op">,</span> messages<span class="op">,</span> agentId<span class="op">,</span> requestId<span class="op">,</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// If cache_read_input_tokens dropped &gt;5% AND &gt;2,000 tokens absolute,</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// correlate with pending changes to explain WHY</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Write diff file for debugging</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The detection thresholds are carefully tuned:</p>
+<ul>
+<li><strong>Relative drop &gt; 5%</strong> — prevents false positives
+from natural variance</li>
+<li><strong>Absolute drop &gt; 2,000 tokens</strong>
+(<code>MIN_CACHE_MISS_TOKENS</code>) — small drops aren't worth
+investigating</li>
+<li><strong>Time gap exclusion</strong> — gaps &gt;5min (ephemeral TTL)
+or &gt;1h (extended TTL) suggest natural expiry, not a client bug</li>
+</ul>
+<p>When a break is detected, the system writes a diff file showing
+exactly which component changed — system prompt, tools, betas, or model.
+This turns "why did my costs spike?" from a guessing game into a
+forensic report.</p>
+<hr />
+<h2 id="the-retry-engine">The Retry Engine</h2>
+<p>The retry engine at <code>withRetry.ts</code> (822 lines) is itself
+an async generator — it yields status messages while sleeping between
+retries. This is the same generator-as-protocol pattern that drives the
+query loop in Chapter 4 and the streaming entry points above.</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// withRetry.ts:170-517</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span><span class="op">*</span> <span class="fu">withRetry</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  getClient<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="bu">Promise</span><span class="op">&lt;</span>Anthropic<span class="op">&gt;,</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  operation<span class="op">:</span> (client<span class="op">:</span> Anthropic<span class="op">,</span> attempt<span class="op">:</span> <span class="dt">number</span><span class="op">,</span> context<span class="op">:</span> RetryContext) <span class="kw">=&gt;</span> <span class="bu">Promise</span><span class="op">&lt;</span>T<span class="op">&gt;,</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  options<span class="op">:</span> RetryOptions<span class="op">,</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> AsyncGenerator<span class="op">&lt;</span>SystemAPIErrorMessage<span class="op">,</span> T<span class="op">&gt;</span> {</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> maxRetries <span class="op">=</span> <span class="fu">getMaxRetries</span>(options)  <span class="co">// DEFAULT_MAX_RETRIES = 10</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> consecutive529Errors <span class="op">=</span> options<span class="op">.</span><span class="at">initialConsecutive529Errors</span> <span class="op">??</span> <span class="dv">0</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">let</span> attempt <span class="op">=</span> <span class="dv">1</span><span class="op">;</span> attempt <span class="op">&lt;=</span> maxRetries <span class="op">+</span> <span class="dv">1</span><span class="op">;</span> attempt<span class="op">++</span>) {</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (options<span class="op">.</span><span class="at">signal</span><span class="op">?.</span><span class="at">aborted</span>) <span class="cf">throw</span> <span class="kw">new</span> <span class="fu">APIUserAbortError</span>()</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span> {</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (client <span class="op">===</span> <span class="kw">null</span> <span class="op">||</span> isAuthError <span class="op">||</span> isStaleConnection) {</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>        client <span class="op">=</span> <span class="cf">await</span> <span class="fu">getClient</span>()</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="cf">await</span> <span class="fu">operation</span>(client<span class="op">,</span> attempt<span class="op">,</span> retryContext)</span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">catch</span> (error) {</span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>      <span class="co">// ... error handling ladder</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Making the retry engine a generator is a key design choice. While the
+engine sleeps during exponential backoff, it yields
+<code>SystemAPIErrorMessage</code> events that the UI renders as
+"Retrying in X seconds..." The caller doesn't block — it processes the
+status message and continues rendering. Compare this with a traditional
+retry that returns a <code>Promise&lt;T&gt;</code>: the caller would see
+nothing for 32 seconds during the maximum backoff interval.</p>
+<p>The <code>getClient</code> callback is the connection to the client
+factory described earlier. On auth errors or stale connections
+(<code>ECONNRESET</code>, <code>EPIPE</code>), the engine discards the
+old client and requests a fresh one. This transparent credential refresh
+is invisible to the caller.</p>
+<h3 id="exponential-backoff-with-jitter">Exponential Backoff with
+Jitter</h3>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// withRetry.ts:530-548</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getRetryDelay</span>(</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  attempt<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  retryAfterHeader<span class="op">?:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  maxDelayMs <span class="op">=</span> <span class="dv">32000</span><span class="op">,</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (retryAfterHeader) {</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> seconds <span class="op">=</span> <span class="pp">parseInt</span>(retryAfterHeader<span class="op">,</span> <span class="dv">10</span>)</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="pp">isNaN</span>(seconds)) <span class="cf">return</span> seconds <span class="op">*</span> <span class="dv">1000</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> baseDelay <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">min</span>(BASE_DELAY_MS <span class="op">*</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">pow</span>(<span class="dv">2</span><span class="op">,</span> attempt <span class="op">-</span> <span class="dv">1</span>)<span class="op">,</span> maxDelayMs)</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> jitter <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">random</span>() <span class="op">*</span> <span class="fl">0.25</span> <span class="op">*</span> baseDelay</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> baseDelay <span class="op">+</span> jitter</span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="co">// BASE_DELAY_MS = 500</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="co">// Sequence: 500ms, 1s, 2s, 4s, 8s, 16s, 32s (cap)</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a><span class="co">// With 25% jitter: e.g., 500-625ms, 1000-1250ms, ...</span></span></code></pre></div>
+<p>The server's <code>retry-after</code> header takes precedence — the
+server knows its load better than the client. When absent, exponential
+backoff with 25% jitter prevents thundering herd. The 32-second cap
+prevents unreasonably long waits that would frustrate users.</p>
+<h3 id="the-error-handling-ladder">The Error Handling Ladder</h3>
+<p>Errors are handled in priority order, each with distinct recovery
+strategies:</p>
+<p><strong>1. Fast mode 429/529.</strong> Short retry-after (&lt;20s):
+wait and retry with fast mode still active. Long or unknown: enter
+cooldown, retry at standard speed. This preserves fast mode when the
+delay is brief enough that the user won't notice.</p>
+<p><strong>2. Fast mode rejection.</strong> If the API returns a 400
+with "Fast mode is not enabled," the client permanently disables fast
+mode for the session and retries at standard speed. This handles
+org-level fast mode revocation mid-session.</p>
+<p><strong>3. Background query 529.</strong> Non-foreground queries
+(summaries, title generation, suggestions) bail immediately on 529. The
+comment explains: "each retry is 3-10x gateway amplification, and the
+user never sees those fail anyway."</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// withRetry.ts:62-89</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> FOREGROUND_529_RETRY_SOURCES <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span><span class="op">&lt;</span>QuerySource<span class="op">&gt;</span>([</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;repl_main_thread&#39;</span><span class="op">,</span> <span class="st">&#39;sdk&#39;</span><span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;agent:custom&#39;</span><span class="op">,</span> <span class="st">&#39;agent:default&#39;</span><span class="op">,</span> <span class="st">&#39;agent:builtin&#39;</span><span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;compact&#39;</span><span class="op">,</span> <span class="st">&#39;hook_agent&#39;</span><span class="op">,</span> <span class="st">&#39;hook_prompt&#39;</span><span class="op">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;verification_agent&#39;</span><span class="op">,</span> <span class="st">&#39;side_question&#39;</span><span class="op">,</span> <span class="st">&#39;auto_mode&#39;</span><span class="op">,</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>])</span></code></pre></div>
+<p>Only sources in this set retry 529 errors. Everything else —
+<code>'suggestion'</code>, <code>'title'</code>, <code>'summary'</code>,
+<code>'classifier'</code> — fails silently.</p>
+<p><strong>4. Consecutive 529 escalation.</strong> After 3 consecutive
+529 errors, trigger model fallback:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// withRetry.ts:326-365</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (consecutive529Errors <span class="op">&gt;=</span> MAX_529_RETRIES) {  <span class="co">// 3 consecutive</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (options<span class="op">.</span><span class="at">fallbackModel</span>) {</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">throw</span> <span class="kw">new</span> <span class="fu">FallbackTriggeredError</span>(options<span class="op">.</span><span class="at">model</span><span class="op">,</span> options<span class="op">.</span><span class="at">fallbackModel</span>)</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>FallbackTriggeredError</code> is caught by the query loop
+(Chapter 4), which switches from Opus to Sonnet and retries. Three
+strikes on the primary model means the service is genuinely overloaded —
+switching models is better than making the user wait.</p>
+<p><strong>5. Context overflow 400.</strong> When the prompt exceeds the
+model's context window, the engine parses the error, reduces
+<code>max_tokens</code> by <code>FLOOR_OUTPUT_TOKENS</code> (3,000), and
+retries. This handles edge cases where the token estimation (covered
+later in this chapter) was slightly off.</p>
+<p><strong>6. Auth errors.</strong> Clear cached credentials, get a
+fresh client from the factory, and retry. OAuth tokens expire; this
+handles transparent renewal.</p>
+<p><strong>7. Stale connections.</strong> <code>ECONNRESET</code> and
+<code>EPIPE</code> errors indicate the underlying TCP connection died.
+Disable keep-alive and reconnect. This is common in long-running CLI
+sessions where the machine sleeps and wakes.</p>
+<h3 id="persistent-retry-mode">Persistent Retry Mode</h3>
+<p>For CI/CD and unattended sessions, the retry engine has a special
+mode:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">// withRetry.ts:96-104</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> PERSISTENT_MAX_BACKOFF_MS <span class="op">=</span> <span class="dv">5</span> <span class="op">*</span> <span class="dv">60</span> <span class="op">*</span> <span class="dv">1000</span>       <span class="co">// 5 min max backoff</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> PERSISTENT_RESET_CAP_MS <span class="op">=</span> <span class="dv">6</span> <span class="op">*</span> <span class="dv">60</span> <span class="op">*</span> <span class="dv">60</span> <span class="op">*</span> <span class="dv">1000</span>    <span class="co">// 6 hour cap</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> HEARTBEAT_INTERVAL_MS <span class="op">=</span> <span class="dv">30_000</span>                    <span class="co">// 30s heartbeat</span></span></code></pre></div>
+<p>When <code>CLAUDE_CODE_UNATTENDED_RETRY</code> is set, 429/529 errors
+retry indefinitely (up to 6 hours) with chunked sleeps. The 30-second
+heartbeat prevents host idle-kill — cloud CI systems terminate processes
+that don't produce output. The heartbeat writes a dot to stdout every 30
+seconds, keeping the process alive. The 5-minute max backoff is higher
+than interactive mode's 32 seconds because unattended sessions tolerate
+longer waits.</p>
+<hr />
+<h2 id="streaming-implementation--raw-stream-over-sdk-wrapper">Streaming
+Implementation — Raw Stream over SDK Wrapper</h2>
+<p>The API client deliberately avoids the SDK's
+<code>BetaMessageStream</code> helper:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1818-1836</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Use raw stream instead of BetaMessageStream to avoid O(n^2) partial JSON parsing</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="co">// BetaMessageStream calls partialParse() on every input_json_delta, which we don&#39;t need</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> result <span class="op">=</span> <span class="cf">await</span> anthropic<span class="op">.</span><span class="at">beta</span><span class="op">.</span><span class="at">messages</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span><span class="fu">create</span>(</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>    { <span class="op">...</span>params<span class="op">,</span> stream<span class="op">:</span> <span class="kw">true</span> }<span class="op">,</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    {</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>      signal<span class="op">,</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>      <span class="op">...</span>(clientRequestId <span class="op">&amp;&amp;</span> {</span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>        headers<span class="op">:</span> { [CLIENT_REQUEST_ID_HEADER]<span class="op">:</span> clientRequestId }<span class="op">,</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>      })<span class="op">,</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span><span class="fu">withResponse</span>()</span></code></pre></div>
+<p>The comment is precise about the problem:
+<code>BetaMessageStream</code> calls <code>partialParse()</code> on
+every <code>input_json_delta</code> event to provide incremental JSON
+parsing of tool inputs. This is O(n^2) because each parse re-scans the
+accumulated string from the beginning. For a tool call with 10KB of JSON
+input (common for large file edits), this means thousands of
+re-parses.</p>
+<p>Claude Code doesn't need incremental JSON — it accumulates the raw
+string and parses once at <code>content_block_stop</code>. The raw
+stream avoids the quadratic overhead entirely.</p>
+<h3 id="stream-event-processing">Stream Event Processing</h3>
+<p>The stream processing is a <code>for await</code> loop over raw SSE
+events:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1940-2052</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> <span class="cf">await</span> (<span class="kw">const</span> part <span class="kw">of</span> stream) {</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">resetStreamIdleTimer</span>()</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> (part<span class="op">.</span><span class="at">type</span>) {</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;message_start&#39;</span><span class="op">:</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>      partialMessage <span class="op">=</span> part<span class="op">.</span><span class="at">message</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>      ttftMs <span class="op">=</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> start</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>      usage <span class="op">=</span> <span class="fu">updateUsage</span>(usage<span class="op">,</span> part<span class="op">.</span><span class="at">message</span><span class="op">?.</span><span class="at">usage</span>)</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;content_block_start&#39;</span><span class="op">:</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Initialize by type: tool_use, text, thinking, server_tool_use</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;content_block_delta&#39;</span><span class="op">:</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Accumulate deltas into the appropriate content block</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;content_block_stop&#39;</span><span class="op">:</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Finalize: parse tool input JSON, build assistant message</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span></span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;message_delta&#39;</span><span class="op">:</span></span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Update stop_reason, usage</span></span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span></span>
+<span id="cb20-22"><a href="#cb20-22" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb20-23"><a href="#cb20-23" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Each event type maps to a specific accumulation action. The
+<code>content_block_start</code> initializes a new block with its type,
+<code>content_block_delta</code> appends string deltas, and
+<code>content_block_stop</code> finalizes — parsing the accumulated JSON
+for tool use blocks. This manual accumulation replaces what
+<code>BetaMessageStream</code> does automatically but without the O(n^2)
+parsing.</p>
+<p>The <code>message_start</code> event captures time-to-first-token
+(<code>ttftMs = Date.now() - start</code>). This metric is logged for
+every request and used by the telemetry system to track inference
+latency trends — an important signal for both the infrastructure team
+and for fast mode's cost/speed tradeoff decisions.</p>
+<h3 id="stream-idle-watchdog">Stream Idle Watchdog</h3>
+<p>The SDK's request timeout only covers the initial HTTP connection,
+not the streaming body. A hung stream with a dropped connection can hang
+the session indefinitely:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1868-1928</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> STREAM_IDLE_TIMEOUT_MS <span class="op">=</span> <span class="pp">parseInt</span>(</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">CLAUDE_STREAM_IDLE_TIMEOUT_MS</span> <span class="op">||</span> <span class="st">&#39;&#39;</span><span class="op">,</span> <span class="dv">10</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">||</span> <span class="dv">90_000</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> STREAM_IDLE_WARNING_MS <span class="op">=</span> STREAM_IDLE_TIMEOUT_MS <span class="op">/</span> <span class="dv">2</span>  <span class="co">// 45s warning</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>streamIdleTimer <span class="op">=</span> <span class="pp">setTimeout</span>(() <span class="kw">=&gt;</span> {</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  streamIdleAborted <span class="op">=</span> <span class="kw">true</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>  streamWatchdogFiredAt <span class="op">=</span> <span class="bu">performance</span><span class="op">.</span><span class="fu">now</span>()</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">releaseStreamResources</span>()</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>}<span class="op">,</span> STREAM_IDLE_TIMEOUT_MS)</span></code></pre></div>
+<p>The watchdog fires after 90 seconds of no events. At 45 seconds
+(halfway), a warning is emitted. Each incoming event resets the timer
+via <code>resetStreamIdleTimer()</code>. This catches the scenario where
+the TCP connection stays open but no data flows — invisible to the SDK's
+timeout mechanism.</p>
+<h3 id="stall-detection">Stall Detection</h3>
+<p>Beyond the hard timeout, the client also tracks stalls — periods
+where events arrive but with unusual gaps:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1936-1966</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> STALL_THRESHOLD_MS <span class="op">=</span> <span class="dv">30_000</span>  <span class="co">// 30 seconds</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> <span class="cf">await</span> (<span class="kw">const</span> part <span class="kw">of</span> stream) {</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (lastEventTime <span class="op">!==</span> <span class="kw">null</span>) {</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> timeSinceLastEvent <span class="op">=</span> now <span class="op">-</span> lastEventTime</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (timeSinceLastEvent <span class="op">&gt;</span> STALL_THRESHOLD_MS) {</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>      stallCount<span class="op">++</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>      totalStallTime <span class="op">+=</span> timeSinceLastEvent</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>      <span class="fu">logEvent</span>(<span class="st">&#39;tengu_streaming_stall&#39;</span><span class="op">,</span> { <span class="op">...</span> })</span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Stalls are logged but don't kill the stream — the data is eventually
+arriving. The telemetry helps the infrastructure team identify network
+paths with high latency variance.</p>
+<h3 id="non-streaming-fallback">Non-Streaming Fallback</h3>
+<p>When streaming fails mid-response, the client falls back to a
+non-streaming request:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:2504-2569</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>didFallBackToNonStreaming <span class="op">=</span> <span class="kw">true</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> result <span class="op">=</span> <span class="kw">yield</span><span class="op">*</span> <span class="fu">executeNonStreamingRequest</span>(</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  { model<span class="op">:</span> options<span class="op">.</span><span class="at">model</span><span class="op">,</span> source<span class="op">:</span> options<span class="op">.</span><span class="at">querySource</span> }<span class="op">,</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  {</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    model<span class="op">:</span> options<span class="op">.</span><span class="at">model</span><span class="op">,</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    fallbackModel<span class="op">:</span> options<span class="op">.</span><span class="at">fallbackModel</span><span class="op">,</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>    thinkingConfig<span class="op">,</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    signal<span class="op">,</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>    initialConsecutive529Errors<span class="op">:</span> <span class="fu">is529Error</span>(streamingError) <span class="op">?</span> <span class="dv">1</span> <span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>  paramsFromContext<span class="op">,</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>The fallback counts streaming 529 errors toward the non-streaming
+retry budget via <code>initialConsecutive529Errors</code>. This prevents
+the scenario where the client exhausts 10 streaming retries, then
+exhausts 10 non-streaming retries, creating 20 total retries for a
+single request.</p>
+<p>Non-streaming requests have their own token limit:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:3354</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> MAX_NON_STREAMING_TOKENS <span class="op">=</span> <span class="dv">64_000</span></span></code></pre></div>
+<p>The API documentation states a 10-minute maximum for non-streaming
+requests. The SDK's default 21,333-token cap derives from 10min at 128K
+tokens/hour, but Claude Code bypasses it by setting a client-level
+timeout and raising the cap to 64K. This gives the fallback path enough
+room to produce useful output while staying within the time limit.</p>
+<h3 id="memory-leak-prevention">Memory Leak Prevention</h3>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1515-1526</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">releaseStreamResources</span>()<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cleanupStream</span>(stream)</span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  stream <span class="op">=</span> <span class="kw">undefined</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (streamResponse) {</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    streamResponse<span class="op">.</span><span class="at">body</span><span class="op">?.</span><span class="fu">cancel</span>()<span class="op">.</span><span class="fu">catch</span>(() <span class="kw">=&gt;</span> {})</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    streamResponse <span class="op">=</span> <span class="kw">undefined</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The comment explains: "The Response object holds native TLS/socket
+buffers that live outside the V8 heap (observed on the Node.js/npm path;
+see GH #32920), so we must explicitly cancel and release it regardless
+of how the generator exits."</p>
+<p>This is a real memory leak that was discovered in production. The
+<code>Response.body</code> is a <code>ReadableStream</code> backed by
+native TLS buffers. If the generator exits without canceling the body
+(via <code>.return()</code>, exception, or just going out of scope), the
+native buffers leak. The <code>releaseStreamResources</code> function is
+called on every exit path — normal completion, error, abort, and idle
+timeout.</p>
+<hr />
+<h2 id="extended-thinking-modes">Extended Thinking Modes</h2>
+<p>Extended thinking gives the model a "scratchpad" for reasoning before
+responding. The API client configures it based on model capabilities and
+user settings:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1596-1630</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (hasThinking <span class="op">&amp;&amp;</span> <span class="fu">modelSupportsThinking</span>(options<span class="op">.</span><span class="at">model</span>)) {</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span><span class="fu">isEnvTruthy</span>(<span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING</span>) <span class="op">&amp;&amp;</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>      <span class="fu">modelSupportsAdaptiveThinking</span>(options<span class="op">.</span><span class="at">model</span>)) {</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Adaptive thinking — no budget, model decides</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>    thinking <span class="op">=</span> { type<span class="op">:</span> <span class="st">&#39;adaptive&#39;</span> }</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">else</span> {</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Budget thinking — explicit token budget</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> thinkingBudget <span class="op">=</span> <span class="fu">getMaxThinkingTokensForModel</span>(options<span class="op">.</span><span class="at">model</span>)</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (thinkingConfig<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;enabled&#39;</span> <span class="op">&amp;&amp;</span> thinkingConfig<span class="op">.</span><span class="at">budgetTokens</span> <span class="op">!==</span> <span class="kw">undefined</span>) {</span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>      thinkingBudget <span class="op">=</span> thinkingConfig<span class="op">.</span><span class="at">budgetTokens</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>    thinkingBudget <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">min</span>(maxOutputTokens <span class="op">-</span> <span class="dv">1</span><span class="op">,</span> thinkingBudget)</span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>    thinking <span class="op">=</span> { budget_tokens<span class="op">:</span> thinkingBudget<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;enabled&#39;</span> }</span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Two modes:</p>
+<p><strong>Adaptive thinking</strong> — the model decides how much
+thinking to do. No token budget. This is the preferred mode for models
+that support it, because the model can allocate thinking proportional to
+task complexity.</p>
+<p><strong>Budget thinking</strong> — an explicit token budget caps
+thinking. The budget is
+<code>Math.min(maxOutputTokens - 1, modelMaxThinking)</code> — always at
+least 1 token less than the output limit, so the model can produce at
+least one token of visible output after thinking.</p>
+<p>The source comment is worth noting: "Do not change the
+adaptive-vs-budget thinking selection below without notifying the model
+launch DRI and research. This is a sensitive setting that can greatly
+affect model quality and bashing." This code is treated as critical
+infrastructure — changes require cross-team coordination.</p>
+<h3 id="temperature-constraint">Temperature Constraint</h3>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1693-1695</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> temperature <span class="op">=</span> <span class="op">!</span>hasThinking <span class="op">?</span> (options<span class="op">.</span><span class="at">temperatureOverride</span> <span class="op">??</span> <span class="dv">1</span>) <span class="op">:</span> <span class="dt">undefined</span></span></code></pre></div>
+<p>When thinking is enabled, temperature must be 1 (the API default).
+Sending any explicit temperature — even <code>temperature: 1</code> —
+when thinking is active returns an error. The client omits the field
+entirely, letting the API use its default.</p>
+<hr />
+<h2 id="effort-level-system">Effort Level System</h2>
+<p>Effort levels control how deeply the model reasons about a request.
+Four named levels plus a numeric override:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">// effort.ts:13-20</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> EFFORT_LEVELS <span class="op">=</span> [<span class="st">&#39;low&#39;</span><span class="op">,</span> <span class="st">&#39;medium&#39;</span><span class="op">,</span> <span class="st">&#39;high&#39;</span><span class="op">,</span> <span class="st">&#39;max&#39;</span>] <span class="im">as</span> <span class="kw">const</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> EffortValue <span class="op">=</span> EffortLevel <span class="op">|</span> number  <span class="co">// number is internal-only</span></span></code></pre></div>
+<h3 id="resolution-chain">Resolution Chain</h3>
+<p>The effort level for a request is resolved through a priority
+chain:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">// effort.ts:152-167</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">resolveAppliedEffort</span>(</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>  model<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>  appStateEffortValue<span class="op">:</span> EffortValue <span class="op">|</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> EffortValue <span class="op">|</span> <span class="dt">undefined</span> {</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Priority: env CLAUDE_CODE_EFFORT_LEVEL → appState → model default</span></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> envOverride <span class="op">=</span> <span class="fu">getEffortEnvOverride</span>()</span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (envOverride <span class="op">===</span> <span class="kw">null</span>) <span class="cf">return</span> <span class="kw">undefined</span>  <span class="co">// &#39;unset&#39; = no effort param</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> resolved <span class="op">=</span> envOverride <span class="op">??</span> appStateEffortValue <span class="op">??</span> <span class="fu">getDefaultEffortForModel</span>(model)</span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>  <span class="co">// API rejects &#39;max&#39; on non-Opus-4.6 — downgrade to &#39;high&#39;</span></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (resolved <span class="op">===</span> <span class="st">&#39;max&#39;</span> <span class="op">&amp;&amp;</span> <span class="op">!</span><span class="fu">modelSupportsMaxEffort</span>(model)) <span class="cf">return</span> <span class="st">&#39;high&#39;</span></span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> resolved</span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The fallback for <code>max</code> on non-Opus models is a practical
+guard: the API returns a 400 error for <code>effort: 'max'</code> on
+models that don't support it. Rather than surfacing an obscure API
+error, the client silently downgrades to <code>high</code>.</p>
+<h3 id="how-effort-reaches-the-api">How Effort Reaches the API</h3>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:440-466</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">configureEffortParams</span>(</span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  effortValue<span class="op">,</span> outputConfig<span class="op">,</span> extraBodyParams<span class="op">,</span> betas<span class="op">,</span> model<span class="op">,</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span><span class="fu">modelSupportsEffort</span>(model) <span class="op">||</span> <span class="st">&#39;effort&#39;</span> <span class="kw">in</span> outputConfig) <span class="cf">return</span></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (effortValue <span class="op">===</span> <span class="kw">undefined</span>) {</span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    betas<span class="op">.</span><span class="fu">push</span>(EFFORT_BETA_HEADER)  <span class="co">// Send beta without explicit level</span></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">else</span> <span class="cf">if</span> (<span class="kw">typeof</span> effortValue <span class="op">===</span> <span class="st">&#39;string&#39;</span>) {</span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>    outputConfig<span class="op">.</span><span class="at">effort</span> <span class="op">=</span> effortValue</span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>    betas<span class="op">.</span><span class="fu">push</span>(EFFORT_BETA_HEADER)</span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">else</span> <span class="cf">if</span> (<span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">USER_TYPE</span> <span class="op">===</span> <span class="st">&#39;ant&#39;</span>) {</span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Numeric override — internal-only, uses anthropic_internal</span></span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>    extraBodyParams<span class="op">.</span><span class="at">anthropic_internal</span> <span class="op">=</span> {</span>
+<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>      <span class="op">...</span>(extraBodyParams<span class="op">.</span><span class="at">anthropic_internal</span> <span class="im">as</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;</span>) <span class="op">||</span> {}<span class="op">,</span></span>
+<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a>      effort_override<span class="op">:</span> effortValue<span class="op">,</span></span>
+<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb30-17"><a href="#cb30-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb30-18"><a href="#cb30-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Three paths: named effort goes in <code>outputConfig.effort</code>,
+numeric override goes in <code>anthropic_internal</code>
+(internal-only), and <code>undefined</code> sends only the beta header
+with no explicit level (letting the server choose). The beta header is
+always included when the model supports effort — this is another latch
+for cache key stability.</p>
+<h3 id="default-effort-by-subscription-tier">Default Effort by
+Subscription Tier</h3>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">// effort.ts:279-329</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getDefaultEffortForModel</span>(model<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> EffortValue <span class="op">|</span> <span class="dt">undefined</span> {</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (model<span class="op">.</span><span class="fu">toLowerCase</span>()<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;opus-4-6&#39;</span>)) {</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">isProSubscriber</span>()) <span class="cf">return</span> <span class="st">&#39;medium&#39;</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">getOpusDefaultEffortConfig</span>()<span class="op">.</span><span class="at">enabled</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>        (<span class="fu">isMaxSubscriber</span>() <span class="op">||</span> <span class="fu">isTeamSubscriber</span>())) <span class="cf">return</span> <span class="st">&#39;medium&#39;</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">isUltrathinkEnabled</span>() <span class="op">&amp;&amp;</span> <span class="fu">modelSupportsEffort</span>(model)) <span class="cf">return</span> <span class="st">&#39;medium&#39;</span></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">undefined</span>  <span class="co">// resolves to &#39;high&#39; in API</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Pro subscribers default to <code>medium</code> effort on Opus 4.6 — a
+cost optimization. The <code>/effort high</code> command overrides this.
+When ultrathink is enabled, the default drops to <code>medium</code>
+because ultrathink bumps it to <code>high</code> per-query (the
+per-query bump is additive with the default).</p>
+<hr />
+<h2 id="task-budget--api-side-pacing">Task Budget — API-Side Pacing</h2>
+<p>Distinct from the client-side token budget continuation in Chapter 4,
+the task budget is an <strong>API-side</strong> feature:</p>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:468-501</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> TaskBudgetParam <span class="op">=</span> { type<span class="op">:</span> <span class="st">&#39;tokens&#39;</span><span class="op">;</span> total<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> remaining<span class="op">?:</span> <span class="dt">number</span> }</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">configureTaskBudgetParams</span>(</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>  taskBudget<span class="op">:</span> Options[<span class="st">&#39;taskBudget&#39;</span>]<span class="op">,</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  outputConfig<span class="op">:</span> BetaOutputConfig <span class="op">&amp;</span> { task_budget<span class="op">?:</span> TaskBudgetParam }<span class="op">,</span></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>  betas<span class="op">:</span> <span class="dt">string</span>[]<span class="op">,</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>taskBudget <span class="op">||</span> <span class="st">&#39;task_budget&#39;</span> <span class="kw">in</span> outputConfig <span class="op">||</span></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>      <span class="op">!</span><span class="fu">shouldIncludeFirstPartyOnlyBetas</span>()) <span class="cf">return</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>  outputConfig<span class="op">.</span><span class="at">task_budget</span> <span class="op">=</span> {</span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>    type<span class="op">:</span> <span class="st">&#39;tokens&#39;</span><span class="op">,</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>    total<span class="op">:</span> taskBudget<span class="op">.</span><span class="at">total</span><span class="op">,</span></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span>(taskBudget<span class="op">.</span><span class="at">remaining</span> <span class="op">!==</span> <span class="kw">undefined</span> <span class="op">&amp;&amp;</span> { remaining<span class="op">:</span> taskBudget<span class="op">.</span><span class="at">remaining</span> })<span class="op">,</span></span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>betas<span class="op">.</span><span class="fu">includes</span>(TASK_BUDGETS_BETA_HEADER)) {</span>
+<span id="cb32-17"><a href="#cb32-17" aria-hidden="true" tabindex="-1"></a>    betas<span class="op">.</span><span class="fu">push</span>(TASK_BUDGETS_BETA_HEADER)</span>
+<span id="cb32-18"><a href="#cb32-18" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb32-19"><a href="#cb32-19" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The task budget tells the model "you have X tokens total for this
+entire task." The <code>remaining</code> field is decremented by the
+query loop across iterations. This lets the model self-pace — producing
+shorter responses when budget is low rather than being cut off
+mid-sentence. The relationship between the two budget systems: the
+client-side token budget continuation (Chapter 4's
+<code>checkTokenBudget</code>) handles the <em>decision</em> to continue
+or stop the loop; the API-side task budget handles the model's
+<em>awareness</em> of the budget so it can plan its output
+accordingly.</p>
+<hr />
+<h2 id="fast-mode--the-speedcost-trade-off">Fast Mode — The Speed/Cost
+Trade-off</h2>
+<p>Fast mode is Claude Code's option for faster inference at 2x cost.
+The implementation is more complex than a simple flag because of the
+interaction with caching and capacity management.</p>
+<h3 id="the-state-machine">The State Machine</h3>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co">// fastMode.ts:183-237</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> FastModeRuntimeState <span class="op">=</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { status<span class="op">:</span> <span class="st">&#39;active&#39;</span> }</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { status<span class="op">:</span> <span class="st">&#39;cooldown&#39;</span><span class="op">;</span> resetAt<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> reason<span class="op">:</span> CooldownReason }</span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> CooldownReason <span class="op">=</span> <span class="st">&#39;rate_limit&#39;</span> <span class="op">|</span> <span class="st">&#39;overloaded&#39;</span></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getFastModeRuntimeState</span>()<span class="op">:</span> FastModeRuntimeState {</span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (runtimeState<span class="op">.</span><span class="at">status</span> <span class="op">===</span> <span class="st">&#39;cooldown&#39;</span> <span class="op">&amp;&amp;</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">&gt;=</span> runtimeState<span class="op">.</span><span class="at">resetAt</span>) {</span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>    runtimeState <span class="op">=</span> { status<span class="op">:</span> <span class="st">&#39;active&#39;</span> }</span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>    cooldownExpired<span class="op">.</span><span class="fu">emit</span>()</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> runtimeState</span>
+<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The state machine has two states: <code>active</code> and
+<code>cooldown</code>. The <code>getFastModeRuntimeState()</code> getter
+includes a side effect — if the cooldown timer has expired, it
+transitions back to <code>active</code>. This is a "lazy evaluation"
+pattern: the state only advances when queried.</p>
+<h3 id="five-check-eligibility-gate">Five-Check Eligibility Gate</h3>
+<p>Before fast mode activates for any request, five conditions must all
+pass:</p>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1398-1403</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> isFastMode <span class="op">=</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">isFastModeEnabled</span>() <span class="op">&amp;&amp;</span>              <span class="co">// Not disabled by env var</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">isFastModeAvailable</span>() <span class="op">&amp;&amp;</span>            <span class="co">// Org allows it, correct provider</span></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">!</span><span class="fu">isFastModeCooldown</span>() <span class="op">&amp;&amp;</span>            <span class="co">// Not in rate-limit cooldown</span></span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">isFastModeSupportedByModel</span>(options<span class="op">.</span><span class="at">model</span>) <span class="op">&amp;&amp;</span>  <span class="co">// Opus 4.6 only</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">!!</span>options<span class="op">.</span><span class="at">fastMode</span>                   <span class="co">// User has it toggled on</span></span></code></pre></div>
+<p>The org-level check (<code>isFastModeAvailable</code>) is backed by a
+prefetch system:</p>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="co">// fastMode.ts:367-532</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">fetchFastModeStatus</span>(auth)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>FastModeResponse<span class="op">&gt;</span> {</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> endpoint <span class="op">=</span> <span class="vs">`</span><span class="sc">${</span><span class="fu">getOauthConfig</span>()<span class="op">.</span><span class="at">BASE_API_URL</span><span class="sc">}</span><span class="vs">/api/claude_code_penguin_mode`</span></span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> FastModeOrgStatus <span class="op">=</span></span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { status<span class="op">:</span> <span class="st">&#39;pending&#39;</span> }</span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { status<span class="op">:</span> <span class="st">&#39;enabled&#39;</span> }</span>
+<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { status<span class="op">:</span> <span class="st">&#39;disabled&#39;</span><span class="op">;</span> reason<span class="op">:</span> FastModeDisabledReason }</span></code></pre></div>
+<p>The org status is prefetched at startup with a 30-second debounce.
+Results are cached globally. On failure: internal users default to
+enabled; external users fall back to the cached
+<code>penguinModeOrgEnabled</code> state. This prefetch prevents the
+first fast-mode request from blocking on a network call.</p>
+<h3 id="the-key-separation-header-vs-parameter">The Key Separation:
+Header vs Parameter</h3>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:1642-1657</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> speed<span class="op">:</span> BetaMessageStreamParams[<span class="st">&#39;speed&#39;</span>]</span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> isFastModeForRetry <span class="op">=</span> <span class="fu">isFastModeEnabled</span>() <span class="op">&amp;&amp;</span> <span class="fu">isFastModeAvailable</span>() <span class="op">&amp;&amp;</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">!</span><span class="fu">isFastModeCooldown</span>() <span class="op">&amp;&amp;</span> <span class="fu">isFastModeSupportedByModel</span>(options<span class="op">.</span><span class="at">model</span>) <span class="op">&amp;&amp;</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">!!</span>retryContext<span class="op">.</span><span class="at">fastMode</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (isFastModeForRetry) {</span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>  speed <span class="op">=</span> <span class="st">&#39;fast&#39;</span></span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (fastModeHeaderLatched <span class="op">&amp;&amp;</span> <span class="op">!</span>betasParams<span class="op">.</span><span class="fu">includes</span>(FAST_MODE_BETA_HEADER)) {</span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>  betasParams<span class="op">.</span><span class="fu">push</span>(FAST_MODE_BETA_HEADER)</span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This is the most subtle pattern in the API client: the beta
+<strong>header</strong> (<code>fast-mode-2026-02-01</code>) is latched —
+once sent, always sent. The <code>speed: 'fast'</code>
+<strong>parameter</strong> is dynamic — suppressed during cooldown. The
+header affects the cache key; the parameter affects behavior. By keeping
+the header stable and varying the parameter, fast mode can enter
+cooldown without busting the cache.</p>
+<h3 id="cooldown-thresholds">Cooldown Thresholds</h3>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="co">// withRetry.ts:799-801</span></span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_FAST_MODE_FALLBACK_HOLD_MS <span class="op">=</span> <span class="dv">30</span> <span class="op">*</span> <span class="dv">60</span> <span class="op">*</span> <span class="dv">1000</span>  <span class="co">// 30 min default</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SHORT_RETRY_THRESHOLD_MS <span class="op">=</span> <span class="dv">20</span> <span class="op">*</span> <span class="dv">1000</span>                  <span class="co">// 20 sec threshold</span></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MIN_COOLDOWN_MS <span class="op">=</span> <span class="dv">10</span> <span class="op">*</span> <span class="dv">60</span> <span class="op">*</span> <span class="dv">1000</span>                      <span class="co">// 10 min minimum</span></span></code></pre></div>
+<ul>
+<li><strong>retry-after &lt; 20s</strong> -- Wait and retry with fast
+mode active. Short delays are transient; preserving fast mode preserves
+the cache key.</li>
+<li><strong>retry-after &gt;= 20s or unknown</strong> -- Cooldown for
+max(retry-after, 10 min), default 30 min. Long delays indicate real
+capacity pressure.</li>
+</ul>
+<h3 id="pricing">Pricing</h3>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="co">// modelCost.ts:62-69</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Fast mode Opus 4.6: $30 input / $150 output per Mtok</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> COST_TIER_30_150 <span class="op">=</span> {</span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  inputTokens<span class="op">:</span> <span class="dv">30</span><span class="op">,</span> outputTokens<span class="op">:</span> <span class="dv">150</span><span class="op">,</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>  promptCacheWriteTokens<span class="op">:</span> <span class="fl">37.5</span><span class="op">,</span> promptCacheReadTokens<span class="op">:</span> <span class="dv">3</span><span class="op">,</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a><span class="co">// Standard Opus 4.6: $15 input / $75 output per Mtok</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> COST_TIER_15_75 <span class="op">=</span> { <span class="op">...</span> }</span></code></pre></div>
+<p>Fast mode is exactly 2x standard pricing. The cache read price stays
+at $3/Mtok — caching savings are proportionally even larger in fast
+mode.</p>
+<hr />
+<h2 id="token-estimation--four-tiers">Token Estimation — Four Tiers</h2>
+<p>Token estimation is needed for context management (Chapter 6) and
+cost tracking. Four methods at decreasing accuracy, each handling the
+failure of the tier above:</p>
+<p><strong>Tier 1: API countTokens</strong> — exact count from the API.
+Uses <code>anthropic.beta.messages.countTokens()</code> for the 1P
+provider, and provider-specific equivalents for Bedrock
+(<code>CountTokensCommand</code>) and Vertex. Vertex filters certain
+betas from <code>countTokens</code> calls to avoid errors. Used when
+network is available and the call won't be rate-limited.</p>
+<p><strong>Tier 2: Haiku fallback</strong> — makes a real API call with
+<code>max_tokens: 1</code> to the cheapest model (Haiku) and reads
+<code>usage.input_tokens</code> from the response. Creative: it's a
+"free" token count that piggybacks on the cheapest model. For Vertex
+global and Bedrock configurations that require thinking, the fallback
+uses Sonnet instead of Haiku.</p>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="co">// tokenEstimation.ts — Haiku fallback</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">countTokensViaHaikuFallback</span>(</span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">:</span> MessageParam[]<span class="op">,</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>  tools<span class="op">:</span> BetaToolUnion[]<span class="op">,</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">number</span> <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;</span> {</span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Makes a real API call with max_tokens:1, reads usage from response</span></span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Uses Haiku (cheapest), falls back to Sonnet for Vertex global/Bedrock+thinking</span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><strong>Tier 3: Rough estimation</strong> —
+<code>Math.round(content.length / bytesPerToken)</code> with a default
+of 4 bytes per token. No network needed.</p>
+<p><strong>Tier 4: File-type-aware estimation</strong> — adjusts the
+bytes-per-token ratio based on file extension:</p>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="co">// tokenEstimation.ts:391-435</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">bytesPerTokenForFileType</span>(fileExtension<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> (fileExtension) {</span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;json&#39;</span><span class="op">:</span> <span class="cf">case</span> <span class="st">&#39;jsonl&#39;</span><span class="op">:</span> <span class="cf">case</span> <span class="st">&#39;jsonc&#39;</span><span class="op">:</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="dv">2</span>  <span class="co">// JSON is token-dense</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span></span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="dv">4</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>JSON gets a 2 bytes/token ratio because single-character tokens
+(<code>{</code>, <code>}</code>, <code>:</code>, <code>,</code>,
+<code>"</code>) make the standard 4-byte estimate off by 2x.</p>
+<h3 id="content-block-estimation">Content Block Estimation</h3>
+<p>The rough estimator handles different content block types with
+type-specific logic:</p>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="co">// tokenEstimation.ts:391-435</span></span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">roughTokenCountEstimationForBlock</span>(block)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;text&#39;</span>) <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block<span class="op">.</span><span class="at">text</span>)</span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;image&#39;</span> <span class="op">||</span> block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;document&#39;</span>) <span class="cf">return</span> <span class="dv">2000</span>  <span class="co">// Fixed estimate</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;tool_result&#39;</span>) <span class="cf">return</span> <span class="fu">roughTokenCountEstimationForContent</span>(block<span class="op">.</span><span class="at">content</span>)</span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;tool_use&#39;</span>)</span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block<span class="op">.</span><span class="at">name</span> <span class="op">+</span> <span class="fu">jsonStringify</span>(block<span class="op">.</span><span class="at">input</span> <span class="op">??</span> {}))</span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;thinking&#39;</span>) <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block<span class="op">.</span><span class="at">thinking</span>)</span>
+<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;redacted_thinking&#39;</span>) <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block<span class="op">.</span><span class="at">data</span>)</span>
+<span id="cb41-10"><a href="#cb41-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(<span class="fu">jsonStringify</span>(block))</span>
+<span id="cb41-11"><a href="#cb41-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Images and documents get a fixed 2,000-token estimate because their
+actual token consumption depends on resolution and encoding, not byte
+length. Tool use blocks concatenate the tool name with the serialized
+input — the name itself costs tokens. The <code>redacted_thinking</code>
+branch handles Opus's encrypted thinking blocks, which contain opaque
+data that still counts against the context window.</p>
+<h3 id="usage-tracking--cumulative-not-delta">Usage Tracking —
+Cumulative, Not Delta</h3>
+<div class="sourceCode" id="cb42"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="co">// claude.ts:2924-2987</span></span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">updateUsage</span>(</span>
+<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a>  usage<span class="op">:</span> <span class="bu">Readonly</span><span class="op">&lt;</span>NonNullableUsage<span class="op">&gt;,</span></span>
+<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a>  partUsage<span class="op">:</span> BetaMessageDeltaUsage <span class="op">|</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> NonNullableUsage {</span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a>    input_tokens<span class="op">:</span> partUsage<span class="op">.</span><span class="at">input_tokens</span> <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb42-8"><a href="#cb42-8" aria-hidden="true" tabindex="-1"></a>      <span class="op">?</span> partUsage<span class="op">.</span><span class="at">input_tokens</span> <span class="op">:</span> usage<span class="op">.</span><span class="at">input_tokens</span><span class="op">,</span></span>
+<span id="cb42-9"><a href="#cb42-9" aria-hidden="true" tabindex="-1"></a>    output_tokens<span class="op">:</span> partUsage<span class="op">.</span><span class="at">output_tokens</span> <span class="op">??</span> usage<span class="op">.</span><span class="at">output_tokens</span><span class="op">,</span></span>
+<span id="cb42-10"><a href="#cb42-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb42-11"><a href="#cb42-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb42-12"><a href="#cb42-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The Anthropic streaming API provides <strong>cumulative</strong>
+usage totals, not deltas. The <code>&gt; 0</code> guard on input tokens
+handles a subtlety: <code>message_delta</code> events may include
+explicit 0 values for input tokens, which should not overwrite the real
+values from <code>message_start</code>. Without this guard, the final
+usage would show 0 input tokens.</p>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building the API communication layer for a production CLI agent, the
+Claude Code approach teaches:</p>
+<p><strong>1. Cache key stability is an architectural concern.</strong>
+Every configuration change — headers, tools, system prompt — potentially
+invalidates 50-70K tokens of cached context. The latch pattern (set
+once, never unset within a session) is the primary tool for
+stability.</p>
+<p><strong>2. Separate cache key from behavior.</strong> Beta headers
+(cache key) and parameters (behavior) should be independently
+controllable. Fast mode header latched + speed parameter dynamic =
+stable cache during cooldown.</p>
+<p><strong>3. Make retries observable.</strong> An async generator retry
+engine yields progress messages while sleeping. The UI shows real-time
+retry status without blocking the rendering loop.</p>
+<p><strong>4. Skip SDK convenience when it costs performance.</strong>
+Raw stream processing avoids O(n^2) JSON parsing. Manual content block
+accumulation is more code but runs in linear time.</p>
+<p><strong>5. Detect cache breaks forensically.</strong> Two-phase
+detection (pre-call snapshot + post-call verification) with correlation
+tells you <em>which</em> component busted the cache, not just
+<em>that</em> it busted.</p>
+<p><strong>6. Tier your estimation methods.</strong> Exact API count,
+cheap model fallback, rough estimate, file-type-aware estimate. Each
+layer handles the failure of the one above. The system always has a
+number, just at varying accuracy.</p>
+<p><strong>7. Handle the long tail of network failures.</strong> Stream
+idle watchdog, stall detection, stale connection recovery, non-streaming
+fallback — each handles a different failure mode that the SDK's simple
+timeout can't cover. Production CLI sessions run for hours; the network
+will fail in every way possible.</p>
+<p><strong>8. Abstract providers at the narrowest layer.</strong> The
+client factory and beta handling are the only two places where provider
+identity matters. The other ~6,500 lines of API client code don't know
+whether they're talking to Anthropic's API, AWS Bedrock, GCP Vertex, or
+Azure Foundry.</p>
+<p>In Chapter 6, we'll examine the context management system that keeps
+conversations within the model's token window. The API client sends what
+the query loop gives it, but the context manager decides <em>what to
+give</em>: a graduated compression pipeline from cheap history snipping
+to full LLM-based compaction, spanning seven tiers across ~6,927 lines.
+Where this chapter focused on keeping requests cheap (cache stability),
+Chapter 6 focuses on keeping them small enough to send at all.</p>
+</div>
+</body>
+</html>

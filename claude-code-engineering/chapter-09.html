@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 9: The Permission System — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-9-the-permission-system">Chapter 9: The Permission
+System</h1>
+<p>In Chapter 8, we examined the tool system — how tools register,
+declare schemas, and execute. But we glossed over a critical checkpoint
+that fires before any tool runs: <em>does the agent have permission to
+use this tool with these arguments?</em> That question sits at the
+center of the trust relationship between user and AI agent. Answer it
+too permissively and the agent deletes production databases. Answer it
+too restrictively and the user spends their day approving
+<code>git status</code>.</p>
+<p>Claude Code's permission system is not a simple allowlist. It is an
+~8,310-line subsystem spanning 17 files that implements six permission
+modes, an eight-source rule cascade, a two-stage AI classifier, denial
+tracking with circuit breakers, hook-based overrides with
+defense-in-depth guarantees, and dangerous-pattern detection that strips
+interpreter rules at runtime. The system processes every tool invocation
+— typically hundreds per session — and must be fast enough that the user
+never notices it, yet thorough enough that a prompt injection can't
+trick it into running <code>rm -rf /</code>.</p>
+<p>This chapter walks through the full pipeline: how modes work, how
+rules are evaluated, how the auto-mode classifier decides what's safe,
+how hooks integrate without bypassing policy, and how the system handles
+its own failures. By the end, you'll have a complete blueprint for
+building a permission system that balances autonomy with safety.</p>
+<hr />
+<h2 id="the-permission-modes--six-levels-of-trust">The Permission Modes
+— Six Levels of Trust</h2>
+<p>The fundamental abstraction is the <strong>permission mode</strong> —
+a session-wide setting that determines the default behavior when no rule
+matches. Think of it as the answer to "when in doubt, what should the
+agent do?"</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// types/permissions.ts:16-22</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> EXTERNAL_PERMISSION_MODES <span class="op">=</span> [</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;acceptEdits&#39;</span><span class="op">,</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;bypassPermissions&#39;</span><span class="op">,</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;default&#39;</span><span class="op">,</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;dontAsk&#39;</span><span class="op">,</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;plan&#39;</span><span class="op">,</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>] <span class="im">as</span> <span class="kw">const</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="co">// types/permissions.ts:28-29</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> InternalPermissionMode <span class="op">=</span> ExternalPermissionMode <span class="op">|</span> <span class="st">&#39;auto&#39;</span> <span class="op">|</span> <span class="st">&#39;bubble&#39;</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> PermissionMode <span class="op">=</span> InternalPermissionMode</span></code></pre></div>
+<p>Six modes, ordered from most restrictive to most permissive:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Behavior</th>
+<th>Use Case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>plan</code></td>
+<td>Read-only; optionally uses classifier</td>
+<td>Planning phase, reviewing code</td>
+</tr>
+<tr>
+<td><code>dontAsk</code></td>
+<td>Convert all prompts to denials</td>
+<td>CI/CD, headless agents</td>
+</tr>
+<tr>
+<td><code>default</code></td>
+<td>Ask user for every unrecognized tool use</td>
+<td>First-time users, unfamiliar codebases</td>
+</tr>
+<tr>
+<td><code>acceptEdits</code></td>
+<td>Auto-allow file edits in working directory</td>
+<td>Trusted local development</td>
+</tr>
+<tr>
+<td><code>auto</code></td>
+<td>AI classifier decides per tool use</td>
+<td>Experienced users who want flow state</td>
+</tr>
+<tr>
+<td><code>bypassPermissions</code></td>
+<td>Allow everything except deny rules and safety checks</td>
+<td>"I know what I'm doing" mode</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>auto</code> mode deserves special attention — it's gated
+behind a build-time feature flag (<code>TRANSCRIPT_CLASSIFIER</code>),
+which means it doesn't even exist in external builds unless the flag is
+enabled:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// types/permissions.ts:33-36</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> INTERNAL_PERMISSION_MODES <span class="op">=</span> [</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>EXTERNAL_PERMISSION_MODES<span class="op">,</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>(<span class="fu">feature</span>(<span class="st">&#39;TRANSCRIPT_CLASSIFIER&#39;</span>) <span class="op">?</span> ([<span class="st">&#39;auto&#39;</span>] <span class="im">as</span> <span class="kw">const</span>) <span class="op">:</span> ([] <span class="im">as</span> <span class="kw">const</span>))<span class="op">,</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>] <span class="im">as</span> <span class="kw">const</span> satisfies <span class="kw">readonly</span> PermissionMode[]</span></code></pre></div>
+<p>This is the dead-code elimination pattern from Chapter 2 applied to a
+security-critical feature. If <code>TRANSCRIPT_CLASSIFIER</code> is
+false at build time, the string <code>'auto'</code> never appears in the
+bundle — not in mode lists, not in validation schemas, nowhere. A user
+can't select a mode that doesn't exist in their build.</p>
+<h3 id="mode-resolution-at-startup">Mode Resolution at Startup</h3>
+<p>Mode initialization follows a priority cascade similar to the
+settings cascade from Chapter 2, but with kill switches:</p>
+<pre><code>Priority Order:
+1. --dangerously-skip-permissions CLI flag  --&gt;  bypassPermissions
+2. --permission-mode CLI flag               --&gt;  parsed mode
+3. settings.permissions.defaultMode         --&gt;  settings mode
+4. Fallback                                 --&gt;  default
+
+Each candidate is validated against kill switches before acceptance.</code></pre>
+<p>The implementation iterates through candidates and skips any that are
+disabled:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissionSetup.ts:778-796</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (<span class="kw">const</span> mode <span class="kw">of</span> orderedModes) {</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (mode <span class="op">===</span> <span class="st">&#39;bypassPermissions&#39;</span> <span class="op">&amp;&amp;</span> disableBypassPermissionsMode) {</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...notification...</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">continue</span> <span class="co">// Skip this mode if it&#39;s disabled</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  result <span class="op">=</span> { mode<span class="op">,</span> notification }</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">break</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Kill switches exist at two levels. A Statsig gate
+(<code>tengu_disable_bypass_permissions_mode</code>) lets the platform
+operator disable bypass mode for all users remotely. A settings field
+(<code>permissions.disableBypassPermissionsMode</code>) lets enterprise
+admins lock it out via managed settings. Auto mode has additional
+circuit breakers: a GrowthBook feature flag, a settings field, and a
+model-support check. If any single breaker fires, the mode is
+unavailable.</p>
+<p>This is the pattern for building controllable permission modes:
+<strong>define the mode, then define every mechanism that can disable
+it.</strong> The mode resolution logic doesn't care <em>why</em> a mode
+is disabled — it just skips it and tries the next candidate.</p>
+<hr />
+<h2 id="the-permission-evaluation-pipeline">The Permission Evaluation
+Pipeline</h2>
+<p>Every tool invocation passes through a single entry point:
+<code>hasPermissionsToUseTool()</code>. This function wraps an inner
+pipeline with auto-mode integration and denial tracking. The full
+flow:</p>
+<pre><code>hasPermissionsToUseTool(tool, input, context, assistantMessage, toolUseID)
+  |
+  +-- hasPermissionsToUseToolInner(tool, input, context)
+  |     |
+  |     +-- Step 1a: Deny rule on entire tool?          --&gt; deny
+  |     +-- Step 1b: Ask rule on entire tool?           --&gt; ask
+  |     +-- Step 1c: tool.checkPermissions(input, ctx)  --&gt; tool-specific
+  |     +-- Step 1d: Tool implementation denied?        --&gt; deny
+  |     +-- Step 1e: Tool requires user interaction?    --&gt; ask
+  |     +-- Step 1f: Content-specific ask rule?         --&gt; ask
+  |     +-- Step 1g: Safety check? (.git/, .claude/)    --&gt; ask (bypass-immune)
+  |     +-- Step 2a: Bypass mode?                       --&gt; allow
+  |     +-- Step 2b: Tool in always-allow rules?        --&gt; allow
+  |     +-- Step 3:  Passthrough --&gt; ask conversion
+  |
+  +-- Post-processing (outer function):
+        +-- On allow: reset denial tracking
+        +-- On ask + dontAsk mode: convert to deny
+        +-- On ask + auto mode: run classifier pipeline
+        +-- On ask + headless agent: run hooks, then auto-deny</code></pre>
+<p>This pipeline has a deliberate ordering principle: <strong>denials
+are checked before allows, and safety checks are checked before mode
+overrides.</strong> This means a deny rule always wins over an allow
+rule, and a safety check for <code>.git/</code> always fires even in
+bypass mode.</p>
+<h3 id="steps-1a-1b-whole-tool-rule-evaluation">Steps 1a-1b: Whole-Tool
+Rule Evaluation</h3>
+<p>The first check is the simplest — does a deny or ask rule exist for
+this entire tool?</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissions.ts:1170-1181</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> denyRule <span class="op">=</span> <span class="fu">getDenyRuleForTool</span>(appState<span class="op">.</span><span class="at">toolPermissionContext</span><span class="op">,</span> tool)</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (denyRule) {</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    behavior<span class="op">:</span> <span class="st">&#39;deny&#39;</span><span class="op">,</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    decisionReason<span class="op">:</span> { type<span class="op">:</span> <span class="st">&#39;rule&#39;</span><span class="op">,</span> rule<span class="op">:</span> denyRule }<span class="op">,</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    message<span class="op">:</span> <span class="vs">`Permission to use </span><span class="sc">${</span>tool<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs"> has been denied.`</span><span class="op">,</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Rule matching handles three patterns via
+<code>toolMatchesRule()</code>
+(<code>permissions.ts:238-269</code>):</p>
+<ul>
+<li><strong>Direct name match:</strong> Rule <code>Bash</code> matches
+tool <code>Bash</code></li>
+<li><strong>MCP server-level match:</strong> Rule
+<code>mcp__server1</code> matches <code>mcp__server1__tool1</code>
+(block all tools from a server)</li>
+<li><strong>MCP wildcard:</strong> Rule <code>mcp__server1__*</code>
+matches all tools from that server (explicit wildcard form)</li>
+</ul>
+<p>This is the first firewall. If your enterprise policy says "deny
+Bash," no amount of allow rules, bypass mode, or AI classifiers can
+override it. The deny fires at the top of the pipeline and exits
+immediately.</p>
+<h3 id="step-1c-tool-specific-permission-checks">Step 1c: Tool-Specific
+Permission Checks</h3>
+<p>Each tool implements its own <code>checkPermissions()</code> method —
+the interface we saw in Chapter 8. For most tools, this is a simple
+check against the working directory. For Bash, it's a deeply detailed
+pipeline in <code>bashPermissions.ts</code> (~800 lines) that:</p>
+<ol type="1">
+<li>Parses the command into subcommands (up to 50; beyond that, falls
+back to <code>ask</code>)</li>
+<li>Strips safe environment variables (<code>NODE_ENV</code>,
+<code>RUST_BACKTRACE</code>, etc.) before matching</li>
+<li>Checks each subcommand against prefix rules, wildcard rules, and
+exact rules</li>
+<li>Runs safety checks (path constraints, sed constraints)</li>
+<li>Returns a composite result from all subcommands</li>
+</ol>
+<p>The 50-subcommand limit
+(<code>MAX_SUBCOMMANDS_FOR_SECURITY_CHECK = 50</code>) is a practical
+cap. A command like
+<code>cat a &amp;&amp; cat b &amp;&amp; cat c &amp;&amp; ...</code> with
+100 subcommands would require 100 rule evaluations. Rather than doing
+potentially incorrect analysis on extremely complex commands, the system
+falls back to asking the user.</p>
+<h3 id="step-1g-safety-checks--the-bypass-immune-layer">Step 1g: Safety
+Checks — The Bypass-Immune Layer</h3>
+<p>Certain paths are protected even when the user has explicitly set
+<code>bypassPermissions</code> mode:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissions.ts:1255-1260</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  toolPermissionResult<span class="op">?.</span><span class="at">behavior</span> <span class="op">===</span> <span class="st">&#39;ask&#39;</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  toolPermissionResult<span class="op">.</span><span class="at">decisionReason</span><span class="op">?.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;safetyCheck&#39;</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>) {</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> toolPermissionResult</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Safety checks protect:</p>
+<ul>
+<li><code>.git/</code> — modifying git internals can corrupt the
+repository</li>
+<li><code>.claude/</code> — modifying agent configuration can alter
+security behavior</li>
+<li><code>.vscode/</code> — modifying editor settings can inject
+commands</li>
+<li>Shell configuration files (<code>.bashrc</code>,
+<code>.zshrc</code>, etc.) — modifying these achieves persistent code
+execution</li>
+</ul>
+<p>The <code>classifierApprovable</code> flag on each safety check
+(<code>types/permissions.ts:319</code>) controls whether the auto-mode
+classifier can override it. Sensitive-file paths set
+<code>classifierApprovable: true</code> — the classifier can reason
+about context (e.g., "the user asked me to edit .bashrc to add a PATH
+entry"). Windows path bypass attempts set it to <code>false</code> — the
+classifier can never approve those.</p>
+<p>This is an important engineering decision: <strong>bypass-immune
+safety checks create a hard floor that no mode, rule, or classifier can
+penetrate.</strong> You want this layer to be small (a handful of
+critical paths) and absolute (no exceptions). If you make it too broad,
+users can't work. If you make it too narrow, a prompt injection can edit
+your shell config.</p>
+<h3 id="steps-2a-2b-mode-and-rule-allows">Steps 2a-2b: Mode and Rule
+Allows</h3>
+<p>Only after all deny checks and safety checks pass does the system
+check for allows:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissions.ts:1268-1281</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> shouldBypassPermissions <span class="op">=</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  appState<span class="op">.</span><span class="at">toolPermissionContext</span><span class="op">.</span><span class="at">mode</span> <span class="op">===</span> <span class="st">&#39;bypassPermissions&#39;</span> <span class="op">||</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  (appState<span class="op">.</span><span class="at">toolPermissionContext</span><span class="op">.</span><span class="at">mode</span> <span class="op">===</span> <span class="st">&#39;plan&#39;</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    appState<span class="op">.</span><span class="at">toolPermissionContext</span><span class="op">.</span><span class="at">isBypassPermissionsModeAvailable</span>)</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (shouldBypassPermissions) {</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    behavior<span class="op">:</span> <span class="st">&#39;allow&#39;</span><span class="op">,</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    updatedInput<span class="op">:</span> <span class="fu">getUpdatedInputOrFallback</span>(toolPermissionResult<span class="op">,</span> input)<span class="op">,</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>    decisionReason<span class="op">:</span> { type<span class="op">:</span> <span class="st">&#39;mode&#39;</span><span class="op">,</span> mode<span class="op">:</span> appState<span class="op">.</span><span class="at">toolPermissionContext</span><span class="op">.</span><span class="at">mode</span> }<span class="op">,</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Notice the plan-mode interaction: if the user entered plan mode
+<em>from</em> bypass mode, the
+<code>isBypassPermissionsModeAvailable</code> flag preserves the bypass
+capability. This prevents a confusing scenario where entering plan mode
+to review something strips the user's bypass permissions.</p>
+<p>Allow rules (<code>permissions.ts:1284-1297</code>) fire next,
+matching specific tools and patterns. If no rule matches and the tool's
+own <code>checkPermissions</code> returned <code>passthrough</code>
+(meaning "I have no opinion"), the system converts it to
+<code>ask</code> — the user gets prompted.</p>
+<h3 id="the-decision-type-system">The Decision Type System</h3>
+<p>Every permission decision carries a typed reason explaining
+<em>why</em>:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">// types/permissions.ts:271-324</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> PermissionDecisionReason <span class="op">=</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;rule&#39;</span><span class="op">;</span> rule<span class="op">:</span> PermissionRule }</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;mode&#39;</span><span class="op">;</span> mode<span class="op">:</span> PermissionMode }</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;subcommandResults&#39;</span><span class="op">;</span> reasons<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> PermissionResult<span class="op">&gt;</span> }</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;hook&#39;</span><span class="op">;</span> hookName<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;classifier&#39;</span><span class="op">;</span> classifier<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> reason<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;safetyCheck&#39;</span><span class="op">;</span> reason<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> classifierApprovable<span class="op">:</span> <span class="dt">boolean</span> }</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;sandboxOverride&#39;</span><span class="op">;</span> reason<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;workingDir&#39;</span><span class="op">;</span> reason<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;other&#39;</span><span class="op">;</span> reason<span class="op">:</span> <span class="dt">string</span> }</span></code></pre></div>
+<p>This is more than debugging convenience. The decision reason
+drives:</p>
+<ul>
+<li><strong>UI display:</strong> "Allowed by rule:
+<code>Bash(git diff:*)</code>" vs. "Allowed by bypass mode"</li>
+<li><strong>Analytics:</strong> Track which rules fire most, which tools
+get denied, which classifier decisions are overridden</li>
+<li><strong>Denial tracking:</strong> The classifier fallback needs to
+know whether a denial came from the classifier or from a rule</li>
+<li><strong>Permission suggestions:</strong> When the system prompts the
+user, it can suggest adding an allow rule based on the command
+prefix</li>
+</ul>
+<p>Build your decision types as discriminated unions with explicit
+reasons. You'll thank yourself when debugging why a particular tool call
+was blocked three sessions ago.</p>
+<hr />
+<h2 id="the-permission-rule-system">The Permission Rule System</h2>
+<p>Rules are the declarative layer of the permission system. Instead of
+writing code for each permission decision, you declare rules like
+<code>Bash(git diff:*)</code> or <code>Read(./.env)</code> and the
+system evaluates them.</p>
+<h3 id="rule-structure">Rule Structure</h3>
+<p>A permission rule has three components:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// types/permissions.ts:54-79</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> PermissionRule <span class="op">=</span> {</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  source<span class="op">:</span> PermissionRuleSource    <span class="co">// where it came from</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  ruleBehavior<span class="op">:</span> PermissionBehavior <span class="co">// &#39;allow&#39; | &#39;deny&#39; | &#39;ask&#39;</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  ruleValue<span class="op">:</span> PermissionRuleValue   <span class="co">// { toolName, ruleContent? }</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Sources are ordered by trust, mapping directly to the settings
+cascade from Chapter 2:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Example</th>
+<th>Mutable by User?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>policySettings</code></td>
+<td>Enterprise/managed settings</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>flagSettings</code></td>
+<td>Feature flag settings</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>userSettings</code></td>
+<td><code>~/.claude/settings.json</code></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>projectSettings</code></td>
+<td><code>.claude/settings.json</code></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>localSettings</code></td>
+<td><code>.claude/settings.local.json</code></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>cliArg</code></td>
+<td><code>--allowed-tools Bash(git:*)</code></td>
+<td>Session only</td>
+</tr>
+<tr>
+<td><code>command</code></td>
+<td>Built-in command rules</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>session</code></td>
+<td>Runtime session rules</td>
+<td>Session only</td>
+</tr>
+</tbody>
+</table>
+<p>This ordering matters for conflict resolution. A
+<code>policySettings</code> deny rule cannot be overridden by a
+<code>userSettings</code> allow rule. The pipeline checks denies first
+from all sources, then allows. But within the same behavior (e.g., two
+allow rules from different sources), the provenance tracking tells you
+which settings file to edit.</p>
+<h3 id="rule-parsing">Rule Parsing</h3>
+<p>The parser in <code>permissionRuleParser.ts</code> handles the
+<code>ToolName(content)</code> syntax with escape support:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissionRuleParser.ts:93-133</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">permissionRuleValueFromString</span>(</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  ruleString<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> PermissionRuleValue {</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> openParenIndex <span class="op">=</span> <span class="fu">findFirstUnescapedChar</span>(ruleString<span class="op">,</span> <span class="st">&#39;(&#39;</span>)</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (openParenIndex <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) {</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { toolName<span class="op">:</span> <span class="fu">normalizeLegacyToolName</span>(ruleString) }</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... matching close paren ...</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> rawContent <span class="op">=</span> ruleString<span class="op">.</span><span class="fu">substring</span>(openParenIndex <span class="op">+</span> <span class="dv">1</span><span class="op">,</span> closeParenIndex)</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (rawContent <span class="op">===</span> <span class="st">&#39;&#39;</span> <span class="op">||</span> rawContent <span class="op">===</span> <span class="st">&#39;*&#39;</span>) {</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { toolName<span class="op">:</span> <span class="fu">normalizeLegacyToolName</span>(toolName) }</span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> ruleContent <span class="op">=</span> <span class="fu">unescapeRuleContent</span>(rawContent)</span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { toolName<span class="op">:</span> <span class="fu">normalizeLegacyToolName</span>(toolName)<span class="op">,</span> ruleContent }</span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Parsing examples:</p>
+<ul>
+<li><code>Bash</code> --&gt; <code>{ toolName: 'Bash' }</code>
+(tool-wide rule)</li>
+<li><code>Bash(*)</code> --&gt; <code>{ toolName: 'Bash' }</code>
+(normalized to tool-wide)</li>
+<li><code>Bash(npm install)</code> --&gt;
+<code>{ toolName: 'Bash', ruleContent: 'npm install' }</code></li>
+<li><code>Bash(python -c "print\(1\)")</code> --&gt;
+<code>{ toolName: 'Bash', ruleContent: 'python -c "print(1)"' }</code></li>
+</ul>
+<p>The escape handling counts preceding backslashes to determine whether
+a parenthesis is escaped. Even count means unescaped, odd means escaped.
+This logic is duplicated in both the parser and the validation module
+(<code>permissionValidation.ts</code>) rather than shared — a pragmatic
+choice to keep the parser and validator independent. Coupling them would
+mean a parser bug could bypass validation or vice versa.</p>
+<p>Legacy tool names get normalized: <code>Task</code> becomes
+<code>Agent</code>, <code>KillShell</code> becomes
+<code>TaskStop</code>. This handles rename migrations transparently —
+users with old settings files don't need to update their rules.</p>
+<h3 id="shell-rule-matching">Shell Rule Matching</h3>
+<p>Bash commands use three matching strategies in
+<code>shellRuleMatching.ts</code>:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// shellRuleMatching.ts:25-37</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> ShellPermissionRule <span class="op">=</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;exact&#39;</span><span class="op">;</span> command<span class="op">:</span> <span class="dt">string</span> }     <span class="co">// &quot;git status&quot; matches &quot;git status&quot;</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;prefix&#39;</span><span class="op">;</span> prefix<span class="op">:</span> <span class="dt">string</span> }     <span class="co">// &quot;npm:*&quot; matches &quot;npm install&quot;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> { type<span class="op">:</span> <span class="st">&#39;wildcard&#39;</span><span class="op">;</span> pattern<span class="op">:</span> <span class="dt">string</span> }  <span class="co">// &quot;git *&quot; matches &quot;git commit -m foo&quot;</span></span></code></pre></div>
+<p><strong>Exact rules</strong> match the full command string.
+<strong>Prefix rules</strong> use the legacy <code>:*</code> syntax —
+<code>npm:*</code> matches any command starting with <code>npm</code>
+followed by a space or end-of-string. <strong>Wildcard rules</strong>
+use <code>*</code> for glob matching, converted to regex internally.</p>
+<p>The wildcard matching (<code>shellRuleMatching.ts:90-154</code>) has
+a subtle detail: trailing <code> *</code> is made optional so that
+<code>git *</code> matches bare <code>git</code> in addition to
+<code>git commit</code>, <code>git push</code>, etc. And the
+<code>s</code> (dotAll) flag ensures <code>*</code> matches newlines,
+which matters for heredoc content in commands.</p>
+<h3 id="the-immutable-permission-context">The Immutable Permission
+Context</h3>
+<p>All permission state lives in a single immutable record:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">// types/permissions.ts:427-441</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> ToolPermissionContext <span class="op">=</span> {</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> mode<span class="op">:</span> PermissionMode</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> additionalWorkingDirectories<span class="op">:</span> ReadonlyMap<span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="op">...&gt;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> alwaysAllowRules<span class="op">:</span> ToolPermissionRulesBySource</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> alwaysDenyRules<span class="op">:</span> ToolPermissionRulesBySource</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> alwaysAskRules<span class="op">:</span> ToolPermissionRulesBySource</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> isBypassPermissionsModeAvailable<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> strippedDangerousRules<span class="op">?:</span> ToolPermissionRulesBySource</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> shouldAvoidPermissionPrompts<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> prePlanMode<span class="op">?:</span> PermissionMode</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Rules are stored per-source, so the system knows which settings file
+each rule came from. All mutations go through
+<code>applyPermissionUpdate()</code>
+(<code>PermissionUpdate.ts:55-188</code>), which returns a new context
+via spread — the standard immutable update pattern. This matters because
+the context lives in React state (via <code>useAppState</code>). Shallow
+spreading ensures React detects changes and re-renders the permission UI
+correctly.</p>
+<hr />
+<h2 id="settings-based-permissions--loading-from-disk">Settings-Based
+Permissions — Loading from Disk</h2>
+<p>Permission rules persist in settings files as JSON:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permissions&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;allow&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;Bash(git diff:*)&quot;</span><span class="ot">,</span> <span class="st">&quot;Read&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;deny&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;Read(./.env)&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;ask&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;Bash(npm publish:*)&quot;</span><span class="ot">]</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>The loader (<code>permissionsLoader.ts:120-133</code>) reads from all
+enabled sources:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissionsLoader.ts:120-133</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">loadAllPermissionRulesFromDisk</span>()<span class="op">:</span> PermissionRule[] {</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">shouldAllowManagedPermissionRulesOnly</span>()) {</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">getPermissionRulesForSource</span>(<span class="st">&#39;policySettings&#39;</span>)</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> rules<span class="op">:</span> PermissionRule[] <span class="op">=</span> []</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> source <span class="kw">of</span> <span class="fu">getEnabledSettingSources</span>()) {</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    rules<span class="op">.</span><span class="fu">push</span>(<span class="op">...</span><span class="fu">getPermissionRulesForSource</span>(source))</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> rules</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The enterprise lockdown check is the first line:
+<code>shouldAllowManagedPermissionRulesOnly()</code> returns true when
+an enterprise admin has set
+<code>allowManagedPermissionRulesOnly</code>. In that case, only
+<code>policySettings</code> are loaded — user, project, and local
+settings are ignored entirely. This is how a security team at a large
+organization ensures developers can't weaken permission policies.</p>
+<h3 id="syncing-changes-from-disk">Syncing Changes from Disk</h3>
+<p>When settings change on disk (the user edits
+<code>settings.json</code> in their editor), the sync function performs
+a full replace:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissions.ts:1419-1471</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">syncPermissionRulesFromDisk</span>(</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  toolPermissionContext<span class="op">:</span> ToolPermissionContext<span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  rules<span class="op">:</span> PermissionRule[]<span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> ToolPermissionContext {</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> context <span class="op">=</span> toolPermissionContext</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Clear all disk-based sources before applying new rules</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> diskSources <span class="op">=</span> [<span class="st">&#39;userSettings&#39;</span><span class="op">,</span> <span class="st">&#39;projectSettings&#39;</span><span class="op">,</span> <span class="st">&#39;localSettings&#39;</span>]</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> diskSource <span class="kw">of</span> diskSources) {</span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> behavior <span class="kw">of</span> [<span class="st">&#39;allow&#39;</span><span class="op">,</span> <span class="st">&#39;deny&#39;</span><span class="op">,</span> <span class="st">&#39;ask&#39;</span>]) {</span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>      context <span class="op">=</span> <span class="fu">applyPermissionUpdate</span>(context<span class="op">,</span> {</span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>        type<span class="op">:</span> <span class="st">&#39;replaceRules&#39;</span><span class="op">,</span> rules<span class="op">:</span> []<span class="op">,</span> behavior<span class="op">,</span> destination<span class="op">:</span> diskSource<span class="op">,</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>      })</span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> updates <span class="op">=</span> <span class="fu">convertRulesToUpdates</span>(rules<span class="op">,</span> <span class="st">&#39;replaceRules&#39;</span>)</span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">applyPermissionUpdates</span>(context<span class="op">,</span> updates)</span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The clear-then-replace pattern is important. Without it, deleting a
+rule from <code>settings.json</code> would have no effect — the
+in-memory context would still contain the old rule. CLI args and session
+rules are preserved across the sync because they don't come from
+disk.</p>
+<h3 id="rule-validation">Rule Validation</h3>
+<p>Before rules reach the evaluation pipeline, they're validated
+(<code>permissionValidation.ts:58-262</code>):</p>
+<ol type="1">
+<li><strong>Empty check</strong> — blank rules rejected</li>
+<li><strong>Parentheses matching</strong> — escape-aware counting of
+<code>(</code> and <code>)</code></li>
+<li><strong>Empty parentheses</strong> — <code>Bash()</code> is invalid
+(use <code>Bash</code> or <code>Bash(*)</code> for tool-wide)</li>
+<li><strong>MCP validation</strong> — MCP rules can't have patterns in
+parentheses (MCP tools use the <code>mcp__server__tool</code> naming
+convention, not pattern matching)</li>
+<li><strong>Tool name validation</strong> — must start with
+uppercase</li>
+<li><strong>Bash-specific</strong> — <code>:*</code> must be at end;
+validates prefix syntax</li>
+<li><strong>File tool-specific</strong> — rejects <code>:*</code> syntax
+(wrong tool type), warns about misplaced wildcards</li>
+</ol>
+<p>This validation catches mistakes before they silently fail at
+evaluation time. A rule like <code>bash(git diff)</code> (lowercase
+<code>b</code>) would never match anything because tool names are
+capitalized. Better to reject it with a clear error at load time.</p>
+<hr />
+<h2 id="the-auto-mode-classifier">The Auto-Mode Classifier</h2>
+<p>Auto mode is where the permission system gets genuinely interesting.
+Instead of asking the user or following static rules, the system makes
+an <strong>AI-driven security decision</strong> for each tool
+invocation. A separate model call — a "side query" — evaluates whether
+the proposed action is safe given the conversation context.</p>
+<h3 id="fast-paths-avoiding-the-classifier">Fast Paths: Avoiding the
+Classifier</h3>
+<p>The classifier is an API call, which means latency and cost. The
+system avoids it whenever possible with three fast paths
+(<code>permissions.ts:596-686</code>):</p>
+<p><strong>1. acceptEdits simulation.</strong> If the tool would be
+allowed under <code>acceptEdits</code> mode (e.g., a file edit within
+the working directory), allow it without the classifier. This covers the
+most common case — file edits during development.</p>
+<p><strong>2. Safe-tool allowlist.</strong> Read-only and metadata-only
+tools skip the classifier entirely:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// classifierDecision.ts:56-94</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SAFE_YOLO_ALLOWLISTED_TOOLS <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span>([</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  FILE_READ_TOOL_NAME<span class="op">,</span>         <span class="co">// Read-only</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  GREP_TOOL_NAME<span class="op">,</span>              <span class="co">// Search</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  GLOB_TOOL_NAME<span class="op">,</span>              <span class="co">// Search</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  TODO_WRITE_TOOL_NAME<span class="op">,</span>        <span class="co">// Metadata only</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  TASK_CREATE_TOOL_NAME<span class="op">,</span>       <span class="co">// Task management</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  ASK_USER_QUESTION_TOOL_NAME<span class="op">,</span> <span class="co">// UI interaction</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... 20+ tools total</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>])</span></code></pre></div>
+<p><strong>3. PowerShell guard.</strong> PowerShell requires explicit
+permission unless a feature flag is enabled. This is a platform-specific
+safety constraint — PowerShell's execution policy model differs from
+Unix shells.</p>
+<p>These fast paths ensure the classifier fires only for genuinely
+ambiguous cases: Bash commands that aren't in the allowlist, file writes
+outside the working directory, and MCP tool calls.</p>
+<h3 id="transcript-construction--anti-manipulation-design">Transcript
+Construction — Anti-Manipulation Design</h3>
+<p>The classifier sees a compressed transcript of the conversation, but
+with a critical security restriction:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">// yoloClassifier.ts:302-360</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">buildTranscriptEntries</span>(messages<span class="op">:</span> Message[])<span class="op">:</span> TranscriptEntry[] {</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> msg <span class="kw">of</span> messages) {</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (msg<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;user&#39;</span>) {</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Include user text</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (msg<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;assistant&#39;</span>) {</span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>      <span class="co">// ONLY include tool_use blocks — assistant text is excluded</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Assistant text is excluded from the classifier transcript. Only
+<code>tool_use</code> blocks are included. This is a deliberate
+anti-manipulation measure. The main model generates assistant text, and
+a prompt injection could craft text designed to influence the
+classifier's judgment — e.g., "I've verified this command is safe and
+the user explicitly asked for it." By excluding assistant text, the
+classifier sees only what the user said and what tools were actually
+called, not the model's narrative about the situation.</p>
+<p>The transcript is serialized in a compact format (JSONL or
+text-prefix, controlled by feature flag) to minimize tokens. The
+classifier also receives the user's <code>CLAUDE.md</code> as context,
+so it can understand user intent:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">// yoloClassifier.ts:468-472</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>text<span class="op">:</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  <span class="vs">`The following is the user&#39;s CLAUDE.md configuration. These are `</span> <span class="op">+</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  <span class="vs">`instructions the user provided to the agent and should be treated `</span> <span class="op">+</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="vs">`as part of the user&#39;s intent when evaluating actions.</span><span class="sc">\n\n</span><span class="vs">`</span> <span class="op">+</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>  <span class="vs">`&lt;user_claude_md&gt;</span><span class="sc">\n${</span>claudeMd<span class="sc">}\n</span><span class="vs">&lt;/user_claude_md&gt;`</span><span class="op">,</span></span></code></pre></div>
+<p>This lets the classifier approve actions that align with the user's
+stated workflow — if <code>CLAUDE.md</code> says "always use ruff for
+formatting," the classifier is more likely to allow
+<code>ruff check</code> commands.</p>
+<h3 id="the-two-stage-classifier-pipeline">The Two-Stage Classifier
+Pipeline</h3>
+<p>The classifier runs in two stages to balance latency and
+accuracy:</p>
+<pre><code>Stage 1 (fast): max_tokens=64, stop on &lt;/block&gt;
+  |
+  +-- &quot;yes&quot; (block) --&gt; escalate to Stage 2
+  +-- &quot;no&quot; (allow)  --&gt; return allow immediately
+  
+Stage 2 (thinking): max_tokens=4096, chain-of-thought
+  |
+  +-- &lt;thinking&gt;...&lt;/thinking&gt;&lt;block&gt;yes/no&lt;/block&gt;
+  +-- Full reasoning before verdict</code></pre>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">// yoloClassifier.ts:550-551</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> XML_S1_SUFFIX <span class="op">=</span> <span class="st">&#39;</span><span class="sc">\n</span><span class="st">Err on the side of blocking. &lt;block&gt; immediately.&#39;</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="co">// yoloClassifier.ts:560-561</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> XML_S2_SUFFIX <span class="op">=</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;</span><span class="sc">\n</span><span class="st">Review the classification process and follow it carefully...&#39;</span></span></code></pre></div>
+<p>Stage 1 uses a 64-token limit with a stop sequence on
+<code>&lt;/block&gt;</code> — it's asking for an immediate yes/no
+verdict. The prompt nudges toward blocking ("err on the side of
+blocking"). If Stage 1 says allow, the action proceeds immediately with
+minimal latency. If Stage 1 says block, Stage 2 fires with a 4,096-token
+budget for chain-of-thought reasoning.</p>
+<p>This two-stage design is an optimization that reduces false negatives
+(accidentally blocking safe commands). Stage 1's bias toward blocking
+means it catches genuinely dangerous actions quickly. Stage 2's deeper
+reasoning catches false positives (commands that look dangerous but are
+actually safe in context). The net effect: safe commands are fast (Stage
+1 only), dangerous commands are properly evaluated (Stage 2), and
+borderline commands get thorough analysis before being denied.</p>
+<p>Three classifier modes are available, controlled by feature
+flags:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>'both'</code> (default)</td>
+<td>Stage 1 fast check, escalate blocks to Stage 2</td>
+</tr>
+<tr>
+<td><code>'fast'</code></td>
+<td>Stage 1 only (final verdict)</td>
+</tr>
+<tr>
+<td><code>'thinking'</code></td>
+<td>Stage 2 only (skip fast path)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="fail-closed-design">Fail-Closed Design</h3>
+<p>When the classifier is unavailable — API error, timeout, or context
+overflow — the system defaults to blocking:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissions.ts:845-876</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (classifierResult<span class="op">.</span><span class="at">unavailable</span>) {</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">getFeatureValue_CACHED_WITH_REFRESH</span>(</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">&#39;tengu_iron_gate_closed&#39;</span><span class="op">,</span> <span class="kw">true</span><span class="op">,</span> <span class="op">...</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  )) {</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { behavior<span class="op">:</span> <span class="st">&#39;deny&#39;</span><span class="op">,</span> <span class="op">...</span> }  <span class="co">// Fail closed</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> result  <span class="co">// Fail open (feature-gated escape hatch)</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>tengu_iron_gate_closed</code> gate controls fail-closed vs.
+fail-open behavior. The default is <code>true</code> — fail closed. This
+is the correct default for a security-critical system. If you can't
+determine whether an action is safe, the safe answer is "no."</p>
+<p>When the transcript exceeds the classifier's context window
+(<code>transcriptTooLong</code>), the error is deterministic — retrying
+won't help. The system falls back to manual prompting for interactive
+sessions, or aborts for headless agents.</p>
+<hr />
+<h2 id="dangerous-permission-detection--auto-mode-safety">Dangerous
+Permission Detection — Auto-Mode Safety</h2>
+<p>Allow rules fire <em>before</em> the classifier. This creates a
+subtle but critical vulnerability: a rule like
+<code>Bash(python:*)</code> would auto-allow any Python command,
+bypassing the classifier entirely. Since Python can execute arbitrary
+code, this effectively disables the classifier for the most dangerous
+category of commands.</p>
+<p>The system detects and strips these dangerous rules when entering
+auto mode:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissionSetup.ts:510-553</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">stripDangerousPermissionsForAutoMode</span>(context) {</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> stripped<span class="op">:</span> ToolPermissionRulesBySource <span class="op">=</span> {}</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> perm <span class="kw">of</span> dangerousPermissions) {</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    (stripped[perm<span class="op">.</span><span class="at">source</span>] <span class="op">??=</span> [])<span class="op">.</span><span class="fu">push</span>(</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>      <span class="fu">permissionRuleValueToString</span>(perm<span class="op">.</span><span class="at">ruleValue</span>)</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span><span class="fu">removeDangerousPermissions</span>(context<span class="op">,</span> dangerousPermissions)<span class="op">,</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>    strippedDangerousRules<span class="op">:</span> stripped<span class="op">,</span>  <span class="co">// Stashed for later restoration</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>A Bash rule is classified as dangerous if it matches any of:</p>
+<ol type="1">
+<li><strong>Tool-level allow</strong> — <code>Bash</code> with no
+<code>ruleContent</code> (allows ALL commands)</li>
+<li><strong>Interpreter prefixes</strong> — <code>python:*</code>,
+<code>node:*</code>, <code>bash:*</code>, <code>ruby:*</code>,
+<code>perl:*</code>, etc.</li>
+<li><strong>Wildcard interpreter</strong> — <code>python*</code>,
+<code>node*</code></li>
+<li><strong>Space wildcard</strong> — <code>python *</code></li>
+<li><strong>Flag wildcard</strong> — <code>python -*</code> (matches
+<code>python -c 'evil'</code>)</li>
+</ol>
+<p>The dangerous patterns list (<code>dangerousPatterns.ts:18-42</code>)
+covers cross-platform code execution entry points:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> CROSS_PLATFORM_CODE_EXEC <span class="op">=</span> [</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;python&#39;</span><span class="op">,</span> <span class="st">&#39;python3&#39;</span><span class="op">,</span> <span class="st">&#39;python2&#39;</span><span class="op">,</span> <span class="st">&#39;node&#39;</span><span class="op">,</span> <span class="st">&#39;deno&#39;</span><span class="op">,</span> <span class="st">&#39;tsx&#39;</span><span class="op">,</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;ruby&#39;</span><span class="op">,</span> <span class="st">&#39;perl&#39;</span><span class="op">,</span> <span class="st">&#39;php&#39;</span><span class="op">,</span> <span class="st">&#39;lua&#39;</span><span class="op">,</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;npx&#39;</span><span class="op">,</span> <span class="st">&#39;bunx&#39;</span><span class="op">,</span> <span class="st">&#39;npm run&#39;</span><span class="op">,</span> <span class="st">&#39;yarn run&#39;</span><span class="op">,</span> <span class="st">&#39;pnpm run&#39;</span><span class="op">,</span> <span class="st">&#39;bun run&#39;</span><span class="op">,</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;bash&#39;</span><span class="op">,</span> <span class="st">&#39;sh&#39;</span><span class="op">,</span> <span class="st">&#39;ssh&#39;</span><span class="op">,</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>]</span></code></pre></div>
+<p>The key engineering pattern here is
+<strong>stash-and-restore</strong>. Dangerous rules are removed from the
+active context but saved in <code>strippedDangerousRules</code>. When
+the user leaves auto mode, they're restored:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissionSetup.ts:561-579</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">restoreDangerousPermissions</span>(context) {</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> stash <span class="op">=</span> context<span class="op">.</span><span class="at">strippedDangerousRules</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>stash) <span class="cf">return</span> context</span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> result <span class="op">=</span> context</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [source<span class="op">,</span> ruleStrings] <span class="kw">of</span> <span class="bu">Object</span><span class="op">.</span><span class="fu">entries</span>(stash)) {</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    result <span class="op">=</span> <span class="fu">applyPermissionUpdate</span>(result<span class="op">,</span> {</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>      type<span class="op">:</span> <span class="st">&#39;addRules&#39;</span><span class="op">,</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>      rules<span class="op">:</span> ruleStrings<span class="op">.</span><span class="fu">map</span>(permissionRuleValueFromString)<span class="op">,</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>      behavior<span class="op">:</span> <span class="st">&#39;allow&#39;</span><span class="op">,</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>      destination<span class="op">:</span> source<span class="op">,</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { <span class="op">...</span>result<span class="op">,</span> strippedDangerousRules<span class="op">:</span> <span class="dt">undefined</span> }</span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The user's settings files are never modified — this is purely an
+in-memory transformation. If you have <code>Bash(python:*)</code> in
+your <code>settings.json</code>, it still allows all Python commands in
+<code>default</code> mode. It only gets stripped when you switch to
+<code>auto</code> mode, where the classifier needs to evaluate those
+commands.</p>
+<p>Similarly, certain shell prefixes (<code>sh</code>,
+<code>bash</code>, <code>sudo</code>, <code>env</code>,
+<code>xargs</code>, etc.) are blocked from ever being <em>suggested</em>
+as permission rules (<code>bashPermissions.ts:196-226</code>). A
+suggestion like <code>Bash(sudo:*)</code> would auto-approve any
+<code>sudo</code> invocation — essentially privilege escalation via
+permission rule.</p>
+<hr />
+<h2 id="hook-integration-with-permissions">Hook Integration with
+Permissions</h2>
+<p>Hooks (which we'll cover fully in Chapter 10) integrate with the
+permission system through <code>PreToolUse</code> events. A hook can
+return <code>allow</code>, <code>deny</code>, or <code>ask</code> for
+any tool use. But the integration has a critical invariant: <strong>a
+hook <code>allow</code> does not bypass deny/ask rules from
+settings.</strong></p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// toolHooks.ts:347-405</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (hookPermissionResult<span class="op">?.</span><span class="at">behavior</span> <span class="op">===</span> <span class="st">&#39;allow&#39;</span>) {</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> hookInput <span class="op">=</span> hookPermissionResult<span class="op">.</span><span class="at">updatedInput</span> <span class="op">??</span> input</span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Hook allow skips the interactive prompt, but deny/ask rules still apply</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> ruleCheck <span class="op">=</span> <span class="cf">await</span> <span class="fu">checkRuleBasedPermissions</span>(tool<span class="op">,</span> hookInput<span class="op">,</span> context)</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (ruleCheck <span class="op">===</span> <span class="kw">null</span>) {</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { decision<span class="op">:</span> hookPermissionResult<span class="op">,</span> input<span class="op">:</span> hookInput }  <span class="co">// Allowed</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (ruleCheck<span class="op">.</span><span class="at">behavior</span> <span class="op">===</span> <span class="st">&#39;deny&#39;</span>) {</span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { decision<span class="op">:</span> ruleCheck }  <span class="co">// Deny rule overrides hook allow</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ask rule -&gt; dialog required despite hook approval</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { decision<span class="op">:</span> <span class="cf">await</span> <span class="fu">canUseTool</span>(<span class="op">...</span>) }</span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This is a defense-in-depth measure. Consider the scenario: an
+enterprise admin sets a deny rule for <code>Bash(rm -rf:*)</code> via
+managed policy settings. A developer installs a third-party hook that
+returns <code>allow</code> for cleanup scripts that include
+<code>rm -rf</code>. Without this invariant, the hook would bypass the
+policy. With it, the deny rule wins regardless.</p>
+<p>The layered resolution:</p>
+<pre><code>Hook says &quot;allow&quot;
+  --&gt; Check deny rules  --&gt; deny overrides hook
+  --&gt; Check ask rules   --&gt; ask overrides hook (forces prompt)
+  --&gt; No rules matched  --&gt; hook allow takes effect</code></pre>
+<h3 id="permission-hooks-for-headless-agents">Permission Hooks for
+Headless Agents</h3>
+<p>When an agent runs without a user to prompt
+(<code>shouldAvoidPermissionPrompts</code>),
+<code>PermissionRequest</code> hooks get a chance to decide:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">// permissions.ts:400-471</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">runPermissionRequestHooksForHeadlessAgent</span>(<span class="op">...</span>) {</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="cf">await</span> (<span class="kw">const</span> hookResult <span class="kw">of</span> <span class="fu">executePermissionRequestHooks</span>(<span class="op">...</span>)) {</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (decision<span class="op">.</span><span class="at">behavior</span> <span class="op">===</span> <span class="st">&#39;allow&#39;</span>) {</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (decision<span class="op">.</span><span class="at">updatedPermissions</span><span class="op">?.</span><span class="at">length</span>) {</span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>        <span class="fu">persistPermissionUpdates</span>(decision<span class="op">.</span><span class="at">updatedPermissions</span>)</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> {</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>        behavior<span class="op">:</span> <span class="st">&#39;allow&#39;</span><span class="op">,</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>        decisionReason<span class="op">:</span> { type<span class="op">:</span> <span class="st">&#39;hook&#39;</span><span class="op">,</span> hookName<span class="op">:</span> <span class="st">&#39;PermissionRequest&#39;</span> }<span class="op">,</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (decision<span class="op">.</span><span class="at">behavior</span> <span class="op">===</span> <span class="st">&#39;deny&#39;</span>) {</span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (decision<span class="op">.</span><span class="at">interrupt</span>) {</span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>        context<span class="op">.</span><span class="at">abortController</span><span class="op">.</span><span class="fu">abort</span>()  <span class="co">// Hook can abort the entire agent</span></span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> { behavior<span class="op">:</span> <span class="st">&#39;deny&#39;</span><span class="op">,</span> <span class="op">...</span> }</span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb28-19"><a href="#cb28-19" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb28-20"><a href="#cb28-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">null</span>  <span class="co">// No hook decided -&gt; fall through to auto-deny</span></span>
+<span id="cb28-21"><a href="#cb28-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This is how you build CI/CD integration for permission-aware agents.
+A <code>PermissionRequest</code> hook can check an external policy
+service, verify the command against a corporate allowlist, or log the
+decision for audit — all without a human in the loop.</p>
+<hr />
+<h2 id="denial-tracking-and-safety-limits">Denial Tracking and Safety
+Limits</h2>
+<p>The auto-mode classifier can deny actions the model wants to take.
+But what happens when the model keeps trying? Without a circuit breaker,
+the model could burn through its entire token budget retrying blocked
+actions.</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">// denialTracking.ts:7-15</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> DenialTrackingState <span class="op">=</span> {</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>  consecutiveDenials<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>  totalDenials<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> DENIAL_LIMITS <span class="op">=</span> {</span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>  maxConsecutive<span class="op">:</span> <span class="dv">3</span><span class="op">,</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>  maxTotal<span class="op">:</span> <span class="dv">20</span><span class="op">,</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>} <span class="im">as</span> <span class="kw">const</span></span></code></pre></div>
+<p>After 3 consecutive denials or 20 total denials, the system falls
+back to prompting the user (<code>permissions.ts:984-1058</code>). The
+model is clearly trying to do something the classifier doesn't like —
+time to ask a human.</p>
+<p>For headless agents, exceeding denial limits throws an
+<code>AbortError</code>. The agent terminates rather than continuing to
+burn tokens on actions it can't perform. This is a cost protection
+mechanism as much as a safety one.</p>
+<p>The denial state persistence has a subtle optimization: subagents use
+in-place mutation (<code>Object.assign</code>) because their
+<code>setAppState</code> is a no-op. The main session uses
+<code>setAppState</code> with a reference equality check —
+<code>recordSuccess</code> returns the same reference when
+<code>consecutiveDenials</code> is already 0, so React skips the
+re-render. This micro-optimization matters when the permission system
+runs hundreds of times per session.</p>
+<hr />
+<h2 id="mode-transitions-and-remote-killswitches">Mode Transitions and
+Remote Killswitches</h2>
+<p>Switching between permission modes is not a simple assignment.
+Transitions are centralized through
+<code>transitionPermissionMode</code>
+(<code>permissionSetup.ts:597-646</code>), which handles the side
+effects:</p>
+<ul>
+<li><strong>Entering auto mode:</strong> Activate the classifier, strip
+dangerous rules via
+<code>stripDangerousPermissionsForAutoMode</code></li>
+<li><strong>Leaving auto mode:</strong> Deactivate the classifier,
+restore dangerous rules via
+<code>restoreDangerousPermissions</code></li>
+<li><strong>Entering plan mode:</strong> Save the current mode in
+<code>prePlanMode</code> so exiting plan mode restores it correctly</li>
+<li><strong>Plan + auto interaction:</strong> If the user enters plan
+mode from auto mode, <code>prePlanMode</code> remembers
+<code>'auto'</code>. When they exit plan mode, auto mode reactivates
+with the classifier and dangerous rule stripping intact</li>
+</ul>
+<p>Both bypass mode and auto mode can be disabled remotely via
+Statsig/GrowthBook gates while a session is running
+(<code>bypassPermissionsKillswitch.ts</code>). The killswitch uses a
+critical concurrency pattern: <code>verifyAutoModeGateAccess</code>
+returns a <em>transform function</em>, not a pre-computed context. The
+transform is applied inside <code>setAppState(prev =&gt; ...)</code>
+against the current context. This prevents the async GrowthBook call
+from clobbering a mode change that happened during the await. Without
+this pattern, a user switching from auto to <code>acceptEdits</code>
+during the async check could have their mode unexpectedly reverted.</p>
+<hr />
+<h2 id="trust-boundaries--the-complete-picture">Trust Boundaries — The
+Complete Picture</h2>
+<p>The permission system enforces multiple trust boundaries
+simultaneously:</p>
+<pre><code>Trust Boundary Map:
+.--------------------------------------------------------------------.
+| Enterprise Policy (policySettings)                                  |
+|   Cannot be overridden by any other source                         |
+|   .--------------------------------------------------------------. |
+|   | User Settings (userSettings)                                  | |
+|   |   Can override project settings but not policy               | |
+|   |   .--------------------------------------------------------. | |
+|   |   | Project Settings (projectSettings, localSettings)       | | |
+|   |   |   Can add allow rules but not override deny from above  | | |
+|   |   |   .--------------------------------------------------. | | |
+|   |   |   | Session Rules (cliArg, session)                    | | | |
+|   |   |   |   Temporary, scoped to current session            | | | |
+|   |   |   |   .--------------------------------------------. | | | |
+|   |   |   |   | Auto-Mode Classifier                       | | | | |
+|   |   |   |   |   Evaluates within allow/deny boundaries   | | | | |
+|   |   |   |   |   Cannot see assistant-authored text       | | | | |
+|   |   |   |   |   Fails closed on error                   | | | | |
+|   |   |   |   &#39;--------------------------------------------&#39; | | | |
+|   |   |   |   .--------------------------------------------. | | | |
+|   |   |   |   | Hooks                                      | | | | |
+|   |   |   |   |   Can allow/deny but cannot override       | | | | |
+|   |   |   |   |   deny rules from settings                 | | | | |
+|   |   |   |   &#39;--------------------------------------------&#39; | | | |
+|   |   |   &#39;--------------------------------------------------&#39; | | |
+|   |   &#39;--------------------------------------------------------&#39; | |
+|   &#39;--------------------------------------------------------------&#39; |
+|   .--------------------------------------------------------------. |
+|   | Bypass-Immune Safety Checks                                   | |
+|   |   .git/, .claude/, shell configs                              | |
+|   |   Cannot be overridden by ANY mode, rule, or classifier      | |
+|   &#39;--------------------------------------------------------------&#39; |
+&#39;--------------------------------------------------------------------&#39;</code></pre>
+<p>Each boundary has a clear enforcement mechanism:</p>
+<table>
+<thead>
+<tr>
+<th>Boundary</th>
+<th>Enforcement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Enterprise --&gt; User</td>
+<td><code>policySettings</code> checked before
+<code>userSettings</code>; <code>allowManagedPermissionRulesOnly</code>
+blocks all others</td>
+</tr>
+<tr>
+<td>User --&gt; AI</td>
+<td>Permission modes control what the AI can do without asking</td>
+</tr>
+<tr>
+<td>Settings --&gt; Hooks</td>
+<td>Hook <code>allow</code> cannot override deny/ask rules from
+settings</td>
+</tr>
+<tr>
+<td>Auto-mode --&gt; Classifier</td>
+<td>Classifier excluded from seeing assistant text
+(anti-manipulation)</td>
+</tr>
+<tr>
+<td>Classifier --&gt; Safety</td>
+<td>Safety checks for <code>.git/</code>, <code>.claude/</code> are
+bypass-immune</td>
+</tr>
+<tr>
+<td>Dangerous patterns</td>
+<td>Interpreter/shell prefix rules stripped in auto mode</td>
+</tr>
+<tr>
+<td>Denial limits</td>
+<td>3 consecutive or 20 total denials trigger fallback to human</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building a permission system for an AI agent that runs arbitrary
+tools, the Claude Code approach teaches several principles that
+generalize beyond this specific implementation:</p>
+<p><strong>1. Deny-first, allow-second.</strong> The pipeline checks
+denies before allows at every level. A deny from any source (policy,
+user settings, project settings) cannot be overridden by an allow from
+any other source. This is the simplest possible mental model for
+conflict resolution: if anyone says no, the answer is no.</p>
+<p><strong>2. Create bypass-immune layers.</strong> Even in the most
+permissive mode (<code>bypassPermissions</code>), certain paths remain
+protected. The bypass-immune layer should be small (a handful of
+critical paths) and absolute (no escape hatches). Users who set bypass
+mode are saying "I trust the agent." Bypass-immune checks protect users
+from the consequences of that trust when the agent makes mistakes.</p>
+<p><strong>3. Fail closed, always.</strong> When the classifier is
+unavailable, the default is deny. When the command is too complex to
+analyze (&gt;50 subcommands), the default is ask. When denial limits are
+exceeded, the default is fallback to human. Every ambiguous case
+resolves to the more restrictive option.</p>
+<p><strong>4. Track provenance.</strong> Every permission decision
+carries a typed reason, and every rule carries its source. This makes
+debugging permission issues tractable ("this was denied by a rule from
+<code>policySettings</code>") and enables the UI to show meaningful
+explanations and suggestions.</p>
+<p><strong>5. Separate the cache key from the behavior.</strong>
+Dangerous rule stripping is an in-memory transformation that never
+modifies settings files. Mode transitions stash and restore rules rather
+than deleting them. The user's configuration is sacred — the permission
+system adapts its behavior without touching the source of truth.</p>
+<p><strong>6. Defense in depth for extensibility.</strong> Hooks can
+influence permission decisions, but they can't override policy. This
+lets you build a plugin ecosystem without creating security holes. The
+invariant "hook allow cannot bypass deny rules" is simple to state,
+simple to verify, and impossible to accidentally break.</p>
+<p><strong>7. Build anti-manipulation into the classifier
+design.</strong> Excluding assistant text from the classifier transcript
+is a single line of code, but it closes an entire category of prompt
+injection attacks. The classifier evaluates what happened (tool calls)
+and what the user wanted (user messages + CLAUDE.md), not what the model
+claims about the situation.</p>
+<p>In Chapter 10, we'll examine the hook system — the extensibility
+layer that lets users and enterprise admins attach custom logic to 27
+lifecycle events. Hooks fire before and after tool execution, can modify
+inputs and outputs, and integrate with the permission system through the
+defense-in-depth pattern we've seen here. Where the permission system
+asks "should this tool run?", the hook system asks "what should happen
+around this tool run?"</p>
+</div>
+</body>
+</html>

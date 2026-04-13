@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 6: Context Management & Compaction — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-6-context-management--compaction">Chapter 6: Context
+Management &amp; Compaction</h1>
+<p>In Chapter 5, we examined the API client that communicates with the
+model — prompt caching strategies, beta header latching, and the retry
+engine. But every request faces a hard constraint: the model's context
+window. At 200K tokens, it sounds generous until you realize a single
+large file read can consume 10K tokens, and an agentic session with
+dozens of tool calls accumulates context faster than you'd expect.
+Within 15-20 turns, a typical session approaches the window limit.</p>
+<p>Claude Code's answer is a <strong>graduated compression
+pipeline</strong> — seven tiers of increasingly aggressive strategies
+that fire in sequence as context pressure grows. The cheapest tiers run
+on every request with zero cost. The most expensive tier makes a full
+LLM summarization call. The last-resort tier fires only when the API
+returns an actual error. Together, these tiers span ~6,927 lines across
+18 files, making context management one of the largest subsystems in the
+codebase.</p>
+<p>This chapter examines each tier: what triggers it, how it works, what
+it costs, and why it exists in that specific position in the
+pipeline.</p>
+<hr />
+<h2 id="the-graduated-pipeline">The Graduated Pipeline</h2>
+<p>The core tension in context management is <strong>minimize
+information loss while respecting hard API context limits.</strong>
+Aggressive compression loses details the model needs. Conservative
+compression risks context overflow errors. The graduated pipeline
+resolves this by trying cheap, low-loss strategies first and escalating
+only when they fail.</p>
+<pre><code>Context Window Budget (200K tokens)
+|-------------------------------------------------------------------|
+0%              73.5%          83.5%         88.5%              100%
+                  |               |              |
+           Warning Zone     Auto-Compact    Blocking Limit
+                  |               |              |
+          Microcompact fires   Full LLM      Reactive Compact
+          (cache-aware)        summary        (error-driven)
+
+Tier Activation Sequence:
+.-------------------------------------------------------------.
+| Tier 0: API-native context management (server-side)          |
+| Tier 1: Time-based microcompact (content-clear on resume)    |
+| Tier 2: Cached microcompact (cache-edit API)                 |
+| Tier 3: Session memory compact (pre-extracted summary)       |
+| Tier 4: Auto-compact (full LLM summarization)                |
+| Tier 5: Reactive compact (413/PTL error recovery)            |
+| Tier 6: Context collapse (lazy evaluation, feature-gated)    |
+&#39;-------------------------------------------------------------&#39;</code></pre>
+<p>Three data flow paths trigger these tiers:</p>
+<p><strong>Pre-request path</strong> (before calling the model): Tiers
+0-2 run inside <code>microcompactMessages()</code> in
+<code>microCompact.ts</code>. They modify or annotate messages before
+the API call, at zero or near-zero cost.</p>
+<p><strong>Post-response path</strong> (after the model responds): Tier
+3-4 run inside <code>autoCompactIfNeeded()</code> in
+<code>autoCompact.ts</code>. They check the token count against
+thresholds and summarize if needed.</p>
+<p><strong>Error recovery path</strong> (when the API rejects the
+request): Tiers 5-6 run inside the query loop from Chapter 4. They
+handle 413/prompt-too-long errors by compacting and retrying.</p>
+<h3 id="pipeline-execution-order-in-queryts">Pipeline Execution Order in
+query.ts</h3>
+<p>Understanding the execution order matters because it determines what
+context reaches the API. The pipeline runs in <code>query.ts</code>
+(lines 365-468), cheapest-first:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// query.ts:365 — Start with messages after last compact boundary</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> messagesForQuery <span class="op">=</span> [<span class="op">...</span><span class="fu">getMessagesAfterCompactBoundary</span>(messages)]</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="co">// --- Tool result budget enforcement (query.ts:379-394) ---</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>messagesForQuery <span class="op">=</span> <span class="cf">await</span> <span class="fu">applyToolResultBudget</span>(</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  messagesForQuery<span class="op">,</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  toolUseContext<span class="op">.</span><span class="at">contentReplacementState</span><span class="op">,</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  persistReplacements <span class="op">?</span> records <span class="kw">=&gt;</span> <span class="kw">void</span> <span class="fu">recordContentReplacement</span>(<span class="op">...</span>) <span class="op">:</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">new</span> <span class="bu">Set</span>(toolUseContext<span class="op">.</span><span class="at">options</span><span class="op">.</span><span class="at">tools</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">filter</span>(t <span class="kw">=&gt;</span> <span class="op">!</span><span class="bu">Number</span><span class="op">.</span><span class="fu">isFinite</span>(t<span class="op">.</span><span class="at">maxResultSizeChars</span>))<span class="op">.</span><span class="fu">map</span>(t <span class="kw">=&gt;</span> t<span class="op">.</span><span class="at">name</span>))<span class="op">,</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">// --- History snipping (query.ts:401-409) ---</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="fu">feature</span>(<span class="st">&#39;HISTORY_SNIP&#39;</span>)) {</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> snipResult <span class="op">=</span> snipModule<span class="op">!.</span><span class="fu">snipCompactIfNeeded</span>(messagesForQuery)</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>  messagesForQuery <span class="op">=</span> snipResult<span class="op">.</span><span class="at">messages</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>  snipTokensFreed <span class="op">=</span> snipResult<span class="op">.</span><span class="at">tokensFreed</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="co">// --- Microcompact: Tier 1+2 (query.ts:413-426) ---</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> microcompactResult <span class="op">=</span> <span class="cf">await</span> deps<span class="op">.</span><span class="fu">microcompact</span>(</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  messagesForQuery<span class="op">,</span> toolUseContext<span class="op">,</span> querySource<span class="op">,</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>messagesForQuery <span class="op">=</span> microcompactResult<span class="op">.</span><span class="at">messages</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="co">// --- Context Collapse projection: Tier 6 (query.ts:440-447) ---</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="fu">feature</span>(<span class="st">&#39;CONTEXT_COLLAPSE&#39;</span>) <span class="op">&amp;&amp;</span> contextCollapse) {</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> collapseResult <span class="op">=</span> <span class="cf">await</span> contextCollapse<span class="op">.</span><span class="fu">applyCollapsesIfNeeded</span>(</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>    messagesForQuery<span class="op">,</span> toolUseContext<span class="op">,</span> querySource<span class="op">,</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>  messagesForQuery <span class="op">=</span> collapseResult<span class="op">.</span><span class="at">messages</span></span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a><span class="co">// --- Auto-compact: Tier 3+4 (query.ts:454-468) ---</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> { compactionResult<span class="op">,</span> consecutiveFailures } <span class="op">=</span> <span class="cf">await</span> deps<span class="op">.</span><span class="fu">autocompact</span>(</span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>  messagesForQuery<span class="op">,</span> toolUseContext<span class="op">,</span></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>  { systemPrompt<span class="op">,</span> userContext<span class="op">,</span> systemContext<span class="op">,</span> toolUseContext<span class="op">,</span></span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a>    forkContextMessages<span class="op">:</span> messagesForQuery }<span class="op">,</span></span>
+<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a>  querySource<span class="op">,</span> tracking<span class="op">,</span> snipTokensFreed<span class="op">,</span></span>
+<span id="cb2-40"><a href="#cb2-40" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>The ordering is deliberate. Snip and microcompact are synchronous or
+near-instant — no API calls. Context collapse is a read-time projection.
+Auto-compact is the expensive tier (an API call for summarization). By
+running cheap operations first, the system avoids expensive
+summarization when a simple content-clear would suffice.</p>
+<hr />
+<h2 id="tier-0-api-native-context-management">Tier 0: API-Native Context
+Management</h2>
+<p>The cheapest possible tier delegates compression to the API server
+itself. No local computation, no extra API call — just additional
+parameters on the existing request.</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// apiMicrocompact.ts:35-56</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> ContextEditStrategy <span class="op">=</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> {</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>      type<span class="op">:</span> <span class="st">&#39;clear_tool_uses_20250919&#39;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>      trigger<span class="op">?:</span> { type<span class="op">:</span> <span class="st">&#39;input_tokens&#39;</span><span class="op">;</span> value<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>      keep<span class="op">?:</span> { type<span class="op">:</span> <span class="st">&#39;tool_uses&#39;</span><span class="op">;</span> value<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>      clear_tool_inputs<span class="op">?:</span> <span class="dt">boolean</span> <span class="op">|</span> <span class="dt">string</span>[]</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>      exclude_tools<span class="op">?:</span> <span class="dt">string</span>[]</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>      clear_at_least<span class="op">?:</span> { type<span class="op">:</span> <span class="st">&#39;input_tokens&#39;</span><span class="op">;</span> value<span class="op">:</span> <span class="dt">number</span> }</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> {</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>      type<span class="op">:</span> <span class="st">&#39;clear_thinking_20251015&#39;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>      keep<span class="op">:</span> { type<span class="op">:</span> <span class="st">&#39;thinking_turns&#39;</span><span class="op">;</span> value<span class="op">:</span> <span class="dt">number</span> } <span class="op">|</span> <span class="st">&#39;all&#39;</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    }</span></code></pre></div>
+<p>Two strategy types:</p>
+<p><strong><code>clear_tool_uses_20250919</code></strong> clears old
+tool results and inputs when the input token count exceeds a threshold.
+Default thresholds: trigger at 180K tokens, target 40K tokens. This
+removes the bulk of context — tool results are typically the largest
+content blocks.</p>
+<p><strong><code>clear_thinking_20251015</code></strong> clears thinking
+blocks from older turns. When the session has been idle for more than an
+hour (cache is cold anyway), it clears all but the most recent thinking
+turn.</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// apiMicrocompact.ts:64-91</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getAPIContextManagement</span>(options<span class="op">?:</span> {</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  hasThinking<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  isRedactThinkingActive<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  clearAllThinking<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>})<span class="op">:</span> ContextManagementConfig <span class="op">|</span> <span class="dt">undefined</span> {</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> strategies<span class="op">:</span> ContextEditStrategy[] <span class="op">=</span> []</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (hasThinking <span class="op">&amp;&amp;</span> <span class="op">!</span>isRedactThinkingActive) {</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    strategies<span class="op">.</span><span class="fu">push</span>({</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>      type<span class="op">:</span> <span class="st">&#39;clear_thinking_20251015&#39;</span><span class="op">,</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>      keep<span class="op">:</span> clearAllThinking <span class="op">?</span> { type<span class="op">:</span> <span class="st">&#39;thinking_turns&#39;</span><span class="op">,</span> value<span class="op">:</span> <span class="dv">1</span> } <span class="op">:</span> <span class="st">&#39;all&#39;</span><span class="op">,</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Tool clearing is internal-only</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">USER_TYPE</span> <span class="op">!==</span> <span class="st">&#39;ant&#39;</span>) {</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> strategies<span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span> <span class="op">?</span> { edits<span class="op">:</span> strategies } <span class="op">:</span> <span class="kw">undefined</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... tool result and tool use clearing strategies</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The thinking-clear strategy skips when <code>redact-thinking</code>
+is active because redacted thinking blocks have no model-visible content
+— clearing them saves nothing.</p>
+<p>This tier's limitation: it only affects tool results and thinking
+blocks. Conversation text, system prompts, and user messages are
+untouched. When those grow large, higher tiers must handle it.</p>
+<hr />
+<h2 id="tier-1-time-based-microcompact">Tier 1: Time-Based
+Microcompact</h2>
+<p>When a user returns to a session after a long idle period, the
+server-side prompt cache has already expired (5-minute or 1-hour TTL, as
+we saw in Chapter 5). The full prompt prefix will be rewritten
+regardless. This creates an opportunity: if the cache is cold, we can
+freely modify message content without cache-busting concerns.</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// microCompact.ts:422-444</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">evaluateTimeBasedTrigger</span>(</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">:</span> Message[]<span class="op">,</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  querySource<span class="op">:</span> QuerySource <span class="op">|</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> { gapMinutes<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> config<span class="op">:</span> TimeBasedMCConfig } <span class="op">|</span> <span class="dt">null</span> {</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> config <span class="op">=</span> <span class="fu">getTimeBasedMCConfig</span>()</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>config<span class="op">.</span><span class="at">enabled</span> <span class="op">||</span> <span class="op">!</span>querySource <span class="op">||</span> <span class="op">!</span><span class="fu">isMainThreadSource</span>(querySource)) {</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> lastAssistant <span class="op">=</span> messages<span class="op">.</span><span class="fu">findLast</span>(m <span class="kw">=&gt;</span> m<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;assistant&#39;</span>)</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>lastAssistant) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> gapMinutes <span class="op">=</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    (<span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> <span class="kw">new</span> <span class="bu">Date</span>(lastAssistant<span class="op">.</span><span class="at">timestamp</span>)<span class="op">.</span><span class="fu">getTime</span>()) <span class="op">/</span> <span class="dv">60_000</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span><span class="bu">Number</span><span class="op">.</span><span class="fu">isFinite</span>(gapMinutes) <span class="op">||</span> gapMinutes <span class="op">&lt;</span> config<span class="op">.</span><span class="at">gapThresholdMinutes</span>) {</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { gapMinutes<span class="op">,</span> config }</span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The trigger is simple: if the time since the last assistant message
+exceeds a threshold (default 60 minutes), fire. The algorithm:</p>
+<ol type="1">
+<li>Collect all compactable tool IDs from assistant messages (Read,
+Bash, Grep, Glob, WebSearch, WebFetch, Edit, Write)</li>
+<li>Keep the last N results (default 5, minimum 1)</li>
+<li>Replace everything else's <code>tool_result</code> content with
+<code>'[Old tool result content cleared]'</code></li>
+</ol>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// microCompact.ts:459-464</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> keepRecent <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">max</span>(<span class="dv">1</span><span class="op">,</span> config<span class="op">.</span><span class="at">keepRecent</span>)</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> keepSet <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span>(compactableIds<span class="op">.</span><span class="fu">slice</span>(<span class="op">-</span>keepRecent))</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> clearSet <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span>(compactableIds<span class="op">.</span><span class="fu">filter</span>(id <span class="kw">=&gt;</span> <span class="op">!</span>keepSet<span class="op">.</span><span class="fu">has</span>(id)))</span></code></pre></div>
+<p>Unlike cached microcompact (Tier 2), this tier <strong>mutates
+messages directly</strong>. It can afford to because the cache is cold —
+there's no cached prefix to preserve. After firing, it resets the cached
+MC state since any server cache entries are now invalidated, and
+notifies <code>promptCacheBreakDetection</code> to expect lower cache
+reads so the expected miss is not flagged as a break.</p>
+<p>The trade-off is explicit: no LLM cost, but tool result content is
+permanently cleared from those messages. The model can no longer
+reference the exact output of old tool calls — but after 60 minutes of
+idle time, that content is rarely relevant anyway.</p>
+<p>This tier only fires on the main thread. Subagents have short
+lifetimes where gap-based eviction doesn't apply.</p>
+<hr />
+<h2 id="tier-2-cached-microcompact">Tier 2: Cached Microcompact</h2>
+<p>This is the most architecturally interesting tier because its entire
+purpose is <strong>cache preservation</strong>. Rather than modifying
+local message content (which would change the byte sequence and bust the
+cache), it uses the API's <code>cache_edits</code> mechanism to
+surgically remove content from the cached prefix on the server side.</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// microCompact.ts:276-293</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (<span class="fu">feature</span>(<span class="st">&#39;CACHED_MICROCOMPACT&#39;</span>)) {</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> mod <span class="op">=</span> <span class="cf">await</span> <span class="fu">getCachedMCModule</span>()</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> model <span class="op">=</span> toolUseContext<span class="op">?.</span><span class="at">options</span><span class="op">.</span><span class="at">mainLoopModel</span> <span class="op">??</span> <span class="fu">getMainLoopModel</span>()</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    mod<span class="op">.</span><span class="fu">isCachedMicrocompactEnabled</span>() <span class="op">&amp;&amp;</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    mod<span class="op">.</span><span class="fu">isModelSupportedForCacheEditing</span>(model) <span class="op">&amp;&amp;</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="fu">isMainThreadSource</span>(querySource)</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  ) {</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="cf">await</span> <span class="fu">cachedMicrocompactPath</span>(messages<span class="op">,</span> querySource)</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The algorithm doesn't modify local messages. Instead:</p>
+<ol type="1">
+<li>Walk messages to collect compactable tool IDs</li>
+<li>Register tool results with a module-level state tracker
+(<code>CachedMCState</code>)</li>
+<li>Ask the state for tool results to delete (based on count/trigger
+thresholds from GrowthBook)</li>
+<li>Create a <code>cache_edits</code> block consumed by the API
+layer</li>
+<li>The API uses <code>cache_reference</code> + <code>cache_edits</code>
+to remove tool results from the cached prefix without invalidating
+it</li>
+</ol>
+<p>The lifecycle of a cache edit follows a careful four-step
+sequence:</p>
+<pre><code>1. cachedMicrocompactPath() → sets module-level pendingCacheEdits
+2. consumePendingCacheEdits() → API layer reads and clears pending
+3. pinCacheEdits(index, block) → after API success, pin at position
+4. getPinnedCacheEdits() → re-sent at original positions for cache hits</code></pre>
+<p>The boundary message is <strong>deferred</strong> until after the API
+response so the actual <code>cache_deleted_input_tokens</code> from the
+API can be used instead of client-side estimates. This deferral is
+critical for accurate telemetry — client-side rough estimates (Chapter
+7's <code>roughTokenCountEstimation</code>) can be off by 30-50% on tool
+result content.</p>
+<p>This tier is feature-gated to internal users and requires model
+support for cache editing. The complexity of managing module-level state
+across turns is the price for cache-optimal compaction. Module-level
+state must also be reset when any compaction occurs — including
+compaction triggered by other tiers — to prevent stale edit references
+from corrupting future requests.</p>
+<hr />
+<h2 id="tier-3-session-memory-compact">Tier 3: Session Memory
+Compact</h2>
+<p>The key innovation of Tier 3: <strong>no LLM call needed for
+compaction.</strong> Session memory is a markdown file maintained by a
+background subagent that periodically extracts conversation highlights.
+When compaction triggers, this pre-extracted summary replaces the
+compacted messages.</p>
+<h3 id="how-session-memory-extraction-works">How Session Memory
+Extraction Works</h3>
+<p>A background extraction service monitors the conversation and builds
+the summary incrementally:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">// sessionMemory.ts:134-181</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">shouldExtractMemory</span>(messages<span class="op">:</span> Message[])<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> currentTokenCount <span class="op">=</span> <span class="fu">tokenCountWithEstimation</span>(messages)</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span><span class="fu">isSessionMemoryInitialized</span>()) {</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="fu">hasMetInitializationThreshold</span>(currentTokenCount)) <span class="cf">return</span> <span class="kw">false</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">markSessionMemoryInitialized</span>()</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> hasMetTokenThreshold <span class="op">=</span> <span class="fu">hasMetUpdateThreshold</span>(currentTokenCount)</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> toolCallsSinceLastUpdate <span class="op">=</span> <span class="fu">countToolCallsSince</span>(messages<span class="op">,</span> lastMemoryMessageUuid)</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> hasMetToolCallThreshold <span class="op">=</span> toolCallsSinceLastUpdate <span class="op">&gt;=</span> <span class="fu">getToolCallsBetweenUpdates</span>()</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> hasToolCallsInLastTurn <span class="op">=</span> <span class="fu">hasToolCallsInLastAssistantTurn</span>(messages)</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Trigger: (tokens AND toolCalls) OR (tokens AND natural break)</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> (hasMetTokenThreshold <span class="op">&amp;&amp;</span> hasMetToolCallThreshold) <span class="op">||</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>         (hasMetTokenThreshold <span class="op">&amp;&amp;</span> <span class="op">!</span>hasToolCallsInLastTurn)</span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The extraction fires when both a token threshold (default 5,000 since
+last extraction) and a tool call threshold (default 3 calls) are met —
+or when the token threshold is met and the model just completed a turn
+without tool calls (a natural break point). The dual-threshold prevents
+extraction from firing on every message while ensuring the summary stays
+reasonably current. Initialization requires a minimum of 10,000 tokens
+before the first extraction fires, avoiding the overhead of extracting
+from trivially short conversations.</p>
+<h3 id="the-wait-mechanism">The Wait Mechanism</h3>
+<p>When session memory compact needs the extraction to be current —
+because the background subagent is still running — it waits with bounded
+patience:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// sessionMemoryUtils.ts:89-105</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">waitForSessionMemoryExtraction</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> startTime <span class="op">=</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>()</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> (extractionStartedAt) {</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> extractionStartedAt <span class="op">&gt;</span> <span class="dv">60_000</span>) <span class="cf">return</span>  <span class="co">// Stale, don&#39;t wait</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> startTime <span class="op">&gt;</span> <span class="dv">15_000</span>) <span class="cf">return</span>  <span class="co">// Timeout</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">sleep</span>(<span class="dv">1000</span>)</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Two timeouts protect against hangs: a 60-second stale guard (if the
+extraction started more than a minute ago, it's probably stuck) and a
+15-second maximum wait. After either timeout, session memory compact
+uses whatever summary is available, even if it's slightly stale. The
+alternative — blocking the main thread indefinitely — is worse than
+using a slightly outdated summary.</p>
+<h3 id="compaction-algorithm">Compaction Algorithm</h3>
+<p>When auto-compact triggers and session memory is available, it tries
+session memory compact first:</p>
+<p><strong>Phase 1: Calculate what to keep.</strong></p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// sessionMemoryCompact.ts:323-397</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">calculateMessagesToKeepIndex</span>(</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">:</span> Message[]<span class="op">,</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  lastSummarizedIndex<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Expand backwards until meeting BOTH minimums:</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// - At least config.minTokens (default 10,000) tokens</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// - At least config.minTextBlockMessages (default 5) messages with text</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Hard cap at config.maxTokens (default 40,000)</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Floor at last compact boundary (disk discontinuity invariant)</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The dual minimum (tokens AND message count) prevents degenerate cases
+where a single massive tool result satisfies the token minimum but only
+one message is kept — leaving the model with no conversational
+context.</p>
+<p><strong>Phase 2: Adjust for API invariants.</strong></p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// sessionMemoryCompact.ts:232-314</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">adjustIndexToPreserveAPIInvariants</span>(</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">:</span> Message[]<span class="op">,</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  startIndex<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Step 1: Ensure tool_use/tool_result pairs aren&#39;t split</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Step 2: Ensure thinking blocks sharing message.id are kept together</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This function handles a subtle bug documented in extensive comments
+at <code>sessionMemoryCompact.ts:196-231</code>: when streaming yields
+separate assistant messages per content block (thinking, tool_use) with
+the same <code>message.id</code>, splitting between them creates
+orphaned <code>tool_result</code> blocks that the API rejects. The
+adjustment walks forward to include all siblings of a split message,
+ensuring the kept tail is always a valid API message sequence.</p>
+<p><strong>Phase 3: Build the result.</strong> The session memory
+markdown becomes the summary, wrapped in standard compaction boundary
+and summary messages. If the session memory file is oversized,
+<code>truncateSessionMemoryForCompact()</code> truncates it and appends
+a note with the full file path so the model can <code>Read</code> it if
+needed.</p>
+<p>If the post-compact token count still exceeds the auto-compact
+threshold, session memory compact returns <code>null</code> and falls
+through to Tier 4 (full LLM compact). This guard ensures the system
+doesn't accept a compaction that doesn't actually solve the space
+problem.</p>
+<hr />
+<h2 id="tier-4-auto-compact--full-llm-summarization">Tier 4:
+Auto-Compact — Full LLM Summarization</h2>
+<p>When cheaper tiers can't reduce context enough, the system makes a
+full LLM call to summarize the conversation. This is the most expensive
+tier but produces the highest-quality summaries.</p>
+<h3 id="trigger">Trigger</h3>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">// autoCompact.ts:72-91</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getAutoCompactThreshold</span>(model<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> effectiveContextWindow <span class="op">=</span> <span class="fu">getEffectiveContextWindowSize</span>(model)</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> effectiveContextWindow <span class="op">-</span> AUTOCOMPACT_BUFFER_TOKENS</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// AUTOCOMPACT_BUFFER_TOKENS = 13,000</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// For 200K context: (200K - 20K_reserved) - 13K = 167,000</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The effective context window subtracts 20K tokens reserved for the
+compaction summary output (the p99.99 summary length is 17,387 tokens).
+The 13K buffer ensures compaction fires before the blocking limit,
+giving the system room to generate the summary without hitting the
+window ceiling.</p>
+<h3 id="circuit-breaker">Circuit Breaker</h3>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// autoCompact.ts:68-70</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="co">// BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="co">// in a single session, wasting ~250K API calls/day globally.</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES <span class="op">=</span> <span class="dv">3</span></span></code></pre></div>
+<p>Before this circuit breaker was added, sessions with irrecoverably
+long context would retry compaction thousands of times. A single session
+hit 3,272 consecutive failures. Across all users, this burned
+approximately 250K wasted API calls per day. The fix: after 3
+consecutive failures, stop trying for the rest of the session. The
+counter resets only on a successful compaction or a <code>/clear</code>
+command.</p>
+<p>This pattern — a failure budget on recursive retry systems — is one
+of the most important engineering lessons in the codebase. Any system
+where failure triggers the same operation again needs a hard cap.
+Without it, pathological inputs create unbounded amplification. The 250K
+wasted calls/day figure is a real production cost that motivated the
+three-strike limit.</p>
+<p>Two additional circuit breakers protect the compaction system:</p>
+<ul>
+<li><strong>PTL retry:</strong> <code>MAX_PTL_RETRIES = 3</code> — when
+the compaction request itself hits prompt-too-long, progressively drop
+message groups and retry up to 3 times</li>
+<li><strong>Streaming retry:</strong>
+<code>MAX_COMPACT_STREAMING_RETRIES = 2</code> — with exponential
+backoff when the streaming connection drops mid-compact</li>
+</ul>
+<h3 id="the-compaction-engine">The Compaction Engine</h3>
+<p>The core function <code>compactConversation()</code> in
+<code>compact.ts</code> (lines 387-763) orchestrates the full
+compaction:</p>
+<ol type="1">
+<li><p><strong>Pre-compact hooks.</strong> Execute
+<code>PreCompact</code> hooks, merge custom instructions.</p></li>
+<li><p><strong>Image stripping.</strong>
+<code>stripImagesFromMessages()</code> (<code>compact.ts:145-200</code>)
+removes image/document blocks before sending, replacing with
+<code>[image]</code>/<code>[document]</code> markers. This prevents the
+compaction API call itself from overflowing, especially in sessions with
+frequent screenshots.</p></li>
+<li><p><strong>Build the compact prompt.</strong> The prompt in
+<code>prompt.ts</code> is carefully structured with a
+<code>NO_TOOLS_PREAMBLE</code> that aggressively prevents tool calls
+(the compaction fork inherits the parent's tool set for cache key
+matching, but tool calls waste the single turn), and requires the model
+to write chain-of-thought in <code>&lt;analysis&gt;</code> tags before
+the final summary in <code>&lt;summary&gt;</code> tags. The analysis is
+stripped by <code>formatCompactSummary()</code> before the summary
+enters context.</p></li>
+<li><p><strong>Stream via forked agent.</strong> The compaction call
+shares the main conversation's cached prefix:</p></li>
+</ol>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// compact.ts:1178-1229</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> result <span class="op">=</span> <span class="cf">await</span> <span class="fu">runForkedAgent</span>({</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  promptMessages<span class="op">:</span> [summaryRequest]<span class="op">,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  cacheSafeParams<span class="op">,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  canUseTool<span class="op">:</span> <span class="fu">createCompactCanUseTool</span>()<span class="op">,</span>  <span class="co">// Denies ALL tool use</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  querySource<span class="op">:</span> <span class="st">&#39;compact&#39;</span><span class="op">,</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  forkLabel<span class="op">:</span> <span class="st">&#39;compact&#39;</span><span class="op">,</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  maxTurns<span class="op">:</span> <span class="dv">1</span><span class="op">,</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  skipCacheWrite<span class="op">:</span> <span class="kw">true</span><span class="op">,</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>})</span></code></pre></div>
+<p>The <code>skipCacheWrite: true</code> is critical — the fork's
+response shouldn't create a new cache entry that competes with the main
+conversation's cache. The <code>maxTurns: 1</code> prevents the
+compaction agent from entering an agentic loop. A January 2026
+experiment confirmed the cache-sharing path: without it, 98% of compact
+requests were cache misses, doubling the cost of every compaction.</p>
+<ol start="5" type="1">
+<li><strong>PTL retry loop.</strong> If the compaction request itself
+hits prompt-too-long (the conversation is so large that even describing
+it overflows), truncate oldest message groups and retry up to 3
+times:</li>
+</ol>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// compact.ts:243-291</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">truncateHeadForPTLRetry</span>(</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">:</span> Message[]<span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  ptlResponse<span class="op">:</span> AssistantMessage<span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> Message[] <span class="op">|</span> <span class="dt">null</span> {</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> groups <span class="op">=</span> <span class="fu">groupMessagesByApiRound</span>(input)</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (groups<span class="op">.</span><span class="at">length</span> <span class="op">&lt;</span> <span class="dv">2</span>) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> tokenGap <span class="op">=</span> <span class="fu">getPromptTooLongTokenGap</span>(ptlResponse)</span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> dropCount<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (tokenGap <span class="op">!==</span> <span class="kw">undefined</span>) {</span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Drop enough groups to cover the gap</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> acc <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> dropCount <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> g <span class="kw">of</span> groups) {</span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>      acc <span class="op">+=</span> <span class="fu">roughTokenCountEstimationForMessages</span>(g)</span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>      dropCount<span class="op">++</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (acc <span class="op">&gt;=</span> tokenGap) <span class="cf">break</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">else</span> {</span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>    dropCount <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">max</span>(<span class="dv">1</span><span class="op">,</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">floor</span>(groups<span class="op">.</span><span class="at">length</span> <span class="op">*</span> <span class="fl">0.2</span>))  <span class="co">// 20% fallback</span></span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb16-21"><a href="#cb16-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>When the exact token gap is available from the error, the system
+drops exactly enough groups. When it's not (older API versions), it
+falls back to dropping 20% of groups.</p>
+<h3 id="the-compact-prompt--structured-extraction">The Compact Prompt —
+Structured Extraction</h3>
+<p>The prompt requires 9 sections in the summary:</p>
+<ol type="1">
+<li><strong>Primary Request</strong> — what the user originally
+asked</li>
+<li><strong>Key Concepts</strong> — technical terms and decisions</li>
+<li><strong>Files/Code</strong> — files read or modified</li>
+<li><strong>Errors/Fixes</strong> — bugs found and resolved</li>
+<li><strong>Problem Solving</strong> — approaches tried</li>
+<li><strong>All User Messages</strong> — every user instruction
+(prevents forgetting)</li>
+<li><strong>Pending Tasks</strong> — what's left to do</li>
+<li><strong>Current Work</strong> — what was happening when compaction
+fired</li>
+<li><strong>Optional Next Step</strong> — what to do next</li>
+</ol>
+<p>Section 9 has a critical constraint: "ensure that this step is
+DIRECTLY in line with the user's most recent explicit requests." This
+combats a known failure mode where compacted sessions drift to old or
+completed tasks — the model resumes work that was already finished
+because the summary made it seem current.</p>
+<h3 id="partial-compact">Partial Compact</h3>
+<p>Two directions are supported via
+<code>partialCompactConversation()</code>
+(<code>compact.ts:772-1106</code>):</p>
+<ul>
+<li><strong><code>'from'</code> direction:</strong> Summarizes messages
+after a pivot, keeps earlier ones. Preserves prompt cache for the kept
+prefix — the summary appends rather than replaces.</li>
+<li><strong><code>'up_to'</code> direction:</strong> Summarizes messages
+before a pivot, keeps later ones. Invalidates the cache since the
+summary precedes the kept messages, changing the byte sequence of the
+cached prefix.</li>
+</ul>
+<p>Each direction has its own prompt variant. The <code>'up_to'</code>
+variant includes a "Context for Continuing Work" section instead of
+"Current Work," since the kept messages already represent current
+work.</p>
+<hr />
+<h2 id="post-compact-rebuilding">Post-Compact Rebuilding</h2>
+<p>Compaction deletes messages, but the model needs context to continue
+working. Post-compact rebuilding is the pipeline that re-injects
+critical context into the conversation after compaction. It runs through
+eight parallel attachment generation steps, each with its own token
+budget:</p>
+<p><strong>1. File restoration</strong>
+(<code>compact.ts:1415-1464</code>). Reads the pre-compact
+<code>readFileState</code> cache (filename to content/timestamp
+mapping), sorts by recency, takes the top 5 files, and re-reads each for
+fresh content via <code>FileReadTool</code>. Budget: 50K tokens total,
+5K per file. Files already visible in preserved messages are skipped
+(dedup against Read tool results in the kept tail), as are plan files
+and CLAUDE.md/memory files (restored via separate steps).</p>
+<p><strong>2. Plan restoration</strong>
+(<code>compact.ts:1470-1486</code>). If a plan file exists for the
+current session, attaches it so the model remembers what it was working
+toward.</p>
+<p><strong>3. Plan mode preservation</strong>
+(<code>compact.ts:1542-1560</code>). If the user is in plan mode,
+creates a <code>plan_mode</code> attachment so the model continues in
+plan mode post-compact rather than reverting to execution mode.</p>
+<p><strong>4. Skill restoration</strong>
+(<code>compact.ts:1494-1534</code>). Gathers all invoked skills, sorts
+most-recent-first (budget pressure drops the least relevant), and
+truncates each to 5K tokens (keeps the head, where setup instructions
+live). Total budget: 25K tokens. The truncation marker tells the model
+it can <code>Read</code> the full skill file:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// compact.ts:1657-1672</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SKILL_TRUNCATION_MARKER <span class="op">=</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;</span><span class="sc">\n\n</span><span class="st">[... skill content truncated for compaction; &#39;</span> <span class="op">+</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;use Read on the skill path if you need the full text]&#39;</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">truncateToTokens</span>(content<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> maxTokens<span class="op">:</span> <span class="dt">number</span>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">roughTokenCountEstimation</span>(content) <span class="op">&lt;=</span> maxTokens) <span class="cf">return</span> content</span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> charBudget <span class="op">=</span> maxTokens <span class="op">*</span> <span class="dv">4</span> <span class="op">-</span> SKILL_TRUNCATION_MARKER<span class="op">.</span><span class="at">length</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> content<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> charBudget) <span class="op">+</span> SKILL_TRUNCATION_MARKER</span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><strong>5. Delta re-announcement</strong>
+(<code>compact.ts:567-585</code>). Re-announces deferred tool schemas,
+available agents, and MCP server instructions. For full compaction, all
+deltas are diffed against empty message history (a complete
+re-announcement). For partial compaction, deltas are diffed against
+<code>messagesToKeep</code>, so only what's missing from the kept
+context is re-injected.</p>
+<p><strong>6. Async agent status</strong>
+(<code>compact.ts:1568-1599</code>). Attaches the status of any running
+or completed background agents so the model doesn't spawn duplicates of
+already-running tasks.</p>
+<p><strong>7. Session start hooks</strong>
+(<code>compact.ts:592</code>). Re-runs <code>SessionStart</code> hooks
+to restore CLAUDE.md and other session-scoped context that was set up
+during initialization.</p>
+<p><strong>8. Post-compact hooks</strong> (<code>compact.ts:723</code>).
+Executes <code>PostCompact</code> hooks for user-defined post-compaction
+actions.</p>
+<p>The message assembly order is deliberate:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">// compact.ts:330-338</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> [</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  result<span class="op">.</span><span class="at">boundaryMarker</span><span class="op">,</span>         <span class="co">// System compact boundary (metadata)</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>result<span class="op">.</span><span class="at">summaryMessages</span><span class="op">,</span>      <span class="co">// User message with formatted summary</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>(result<span class="op">.</span><span class="at">messagesToKeep</span> <span class="op">??</span> [])<span class="op">,</span>  <span class="co">// Preserved recent messages</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>result<span class="op">.</span><span class="at">attachments</span><span class="op">,</span>          <span class="co">// File/skill/plan/delta attachments</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>result<span class="op">.</span><span class="at">hookResults</span><span class="op">,</span>          <span class="co">// SessionStart hook outputs</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>]</span></code></pre></div>
+<p>The boundary marker comes first because it carries metadata (trigger
+type, pre-compact token count, last message UUID, discovered tool names)
+that downstream systems use for chain linking. Summary messages precede
+preserved messages so the model reads context before recent history.
+Attachments and hook results come last because they're supplementary —
+the model should not mistake a re-injected file read for a user
+request.</p>
+<h3 id="transcript-preservation">Transcript Preservation</h3>
+<p>When the <code>KAIROS</code> feature is active, pre-compaction
+messages are written to a reduced transcript segment on disk before
+being discarded. This enables a reference in the summary message: "If
+you need specific details from before compaction, read the full
+transcript at: {path}." The model can then use <code>Read</code> to
+recover exact details that the summary omitted, turning compaction from
+a lossy operation into a recoverable one.</p>
+<hr />
+<h2 id="cache-reset">Cache Reset</h2>
+<p>After compaction, caches must be invalidated because the message
+history they reference no longer exists:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">// compact.ts:518-529</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> preCompactReadFileState <span class="op">=</span> <span class="fu">cacheToObject</span>(context<span class="op">.</span><span class="at">readFileState</span>)</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>context<span class="op">.</span><span class="at">readFileState</span><span class="op">.</span><span class="fu">clear</span>()</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>context<span class="op">.</span><span class="at">loadedNestedMemoryPaths</span><span class="op">?.</span><span class="fu">clear</span>()</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Intentionally NOT resetting sentSkillNames: re-injecting full</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="co">// skill_listing (~4K tokens) post-compact is pure cache_creation</span></span></code></pre></div>
+<p>The comment about <code>sentSkillNames</code> is a cost optimization:
+skill listings are ~4K tokens. If they're already in the cache,
+re-injecting them creates unnecessary cache writes. By preserving the
+"already sent" flag, skills only re-inject when actually needed.</p>
+<p>The centralized cleanup function <code>runPostCompactCleanup()</code>
+(<code>postCompactCleanup.ts:31-77</code>) resets all affected caches in
+one call:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">// postCompactCleanup.ts:31-77</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">runPostCompactCleanup</span>(querySource<span class="op">?:</span> QuerySource)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> isMainThreadCompact <span class="op">=</span> querySource <span class="op">===</span> <span class="kw">undefined</span> <span class="op">||</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>    querySource<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;repl_main_thread&#39;</span>) <span class="op">||</span> querySource <span class="op">===</span> <span class="st">&#39;sdk&#39;</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">resetMicrocompactState</span>()</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (isMainThreadCompact) {</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>    <span class="fu">resetContextCollapse</span>()</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>    getUserContext<span class="op">.</span><span class="at">cache</span><span class="op">.</span><span class="at">clear</span><span class="op">?.</span>()       <span class="co">// Memoized CLAUDE.md</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">resetGetMemoryFilesCache</span>(<span class="st">&#39;compact&#39;</span>)</span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">clearSystemPromptSections</span>()</span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">clearClassifierApprovals</span>()</span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">clearSpeculativeChecks</span>()</span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>  <span class="co">// NOT resetting sentSkillNames (saves ~4K tokens)</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">clearBetaTracingState</span>()</span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">sweepFileContentCache</span>()</span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">clearSessionMessagesCache</span>()</span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>isMainThreadCompact</code> guard is critical: subagents
+share module-level state with the main thread. Resetting context
+collapse or the CLAUDE.md cache from a subagent's compact would corrupt
+the main thread's state. Only main-thread compacts reset main-thread
+resources.</p>
+<p>Post-compaction also re-appends session metadata:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">// compact.ts:708-712</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Re-append session metadata (custom title, tag) so it stays within</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="co">// the 16KB tail window that readLiteMetadata reads for --resume display.</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="fu">reAppendSessionMetadata</span>()</span></code></pre></div>
+<p>Without this, post-compaction messages push the metadata entry out of
+the 16KB window, causing <code>--resume</code> to show the
+auto-generated title instead of the user-set session name. A small
+detail that significantly affects user experience.</p>
+<hr />
+<h2 id="tier-5-reactive-compact--error-driven-recovery">Tier 5: Reactive
+Compact — Error-Driven Recovery</h2>
+<p>Reactive compact is the last resort before session death. It fires
+when the API returns a 413 / prompt-too-long error — meaning the context
+has already exceeded the window, and the request failed.</p>
+<p>The error is withheld from the output stream (using the error
+withholding pattern from Chapter 4) and intercepted by the recovery
+loop:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co">// query.ts (in the recovery section, lines 1070-1117)</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (reactiveCompact<span class="op">?.</span><span class="fu">isWithheldPromptTooLong</span>(message)) {</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  withheld <span class="op">=</span> <span class="kw">true</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a><span class="co">// ...later...</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> ((isWithheld413 <span class="op">||</span> isWithheldMedia) <span class="op">&amp;&amp;</span> reactiveCompact) {</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> compacted <span class="op">=</span> <span class="cf">await</span> reactiveCompact<span class="op">.</span><span class="fu">tryReactiveCompact</span>({</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>    hasAttempted<span class="op">:</span> hasAttemptedReactiveCompact<span class="op">,</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    querySource<span class="op">,</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">:</span> messagesForQuery<span class="op">,</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    cacheSafeParams<span class="op">:</span> { <span class="op">...</span> }<span class="op">,</span></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>  })</span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The algorithm extracts the exact overflow from the error message:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// errors.ts:85-118</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">parsePromptTooLongTokenCounts</span>(rawMessage<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> {</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  actualTokens<span class="op">:</span> <span class="dt">number</span> <span class="op">|</span> <span class="dt">undefined</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  limitTokens<span class="op">:</span> <span class="dt">number</span> <span class="op">|</span> <span class="dt">undefined</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>} {</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> match <span class="op">=</span> rawMessage<span class="op">.</span><span class="fu">match</span>(</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    <span class="ss">/prompt is too long</span><span class="sc">[^0-9]*(\d+)\s*</span><span class="ss">tokens</span><span class="sc">?\s*</span><span class="ss">&gt;</span><span class="sc">\s*(\d+)</span><span class="ss">/i</span><span class="op">,</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>    actualTokens<span class="op">:</span> match <span class="op">?</span> <span class="pp">parseInt</span>(match[<span class="dv">1</span>]<span class="op">!,</span> <span class="dv">10</span>) <span class="op">:</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>    limitTokens<span class="op">:</span> match <span class="op">?</span> <span class="pp">parseInt</span>(match[<span class="dv">2</span>]<span class="op">!,</span> <span class="dv">10</span>) <span class="op">:</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Using the token gap (actual - limit), it peels the minimum number of
+message groups from the oldest end, summarizes them, and retries. This
+is more precise than auto-compact — it removes exactly what's needed to
+fit, losing minimum information.</p>
+<p>Reactive compact also handles image/PDF size errors by stripping
+images from messages and retrying. This handles the scenario where a
+user pastes a large screenshot that pushes the context over the
+limit.</p>
+<h3 id="reactive-only-mode">Reactive-Only Mode</h3>
+<p>A feature flag <code>tengu_cobalt_raccoon</code> enables
+reactive-only mode: proactive auto-compact is suppressed, and reactive
+compact handles all context pressure. The <code>/compact</code> command
+also routes through reactive compact when this mode is active. This was
+an experimental alternative philosophy — let the context grow to the
+limit and only compact on actual failure, maximizing context retention
+at the cost of occasional failed requests.</p>
+<h3 id="interaction-with-context-collapse">Interaction with Context
+Collapse</h3>
+<p>When context collapse (Tier 6) is active, it drains staged collapses
+before reactive compact fires. The recovery waterfall in
+<code>query.ts</code> (lines 1085-1117) tries collapse recovery first;
+reactive compact only runs if collapse can't recover — ensuring the most
+appropriate strategy handles each failure mode.</p>
+<hr />
+<h2 id="tier-6-context-collapse">Tier 6: Context Collapse</h2>
+<p>Context collapse is the most aggressive tier, feature-gated behind
+<code>CONTEXT_COLLAPSE</code>. It fundamentally changes how context
+management works: instead of reacting to pressure, it proactively
+manages context with a lazy evaluation strategy.</p>
+<p>When collapse is enabled, it <strong>suppresses auto-compact
+entirely</strong>:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">// autoCompact.ts:205-223</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Context-collapse mode: same suppression. Collapse IS the context</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="co">// management system when it&#39;s on — the 90% commit / 95% blocking-spawn</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co">// flow owns the headroom problem. Autocompact firing at effective-13k</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="co">// (~93% of effective) sits right between collapse&#39;s commit-start (90%)</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a><span class="co">// and blocking (95%), so it would race collapse and usually win, nuking</span></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="co">// granular context that collapse was about to save.</span></span></code></pre></div>
+<p>The comment reveals the design tension: auto-compact's 93% threshold
+sits between collapse's 90% commit and 95% blocking thresholds. If both
+systems are active, auto-compact fires first and destroys the granular
+context that collapse was about to save. The solution: when collapse is
+on, it's the sole context management system.</p>
+<p>Context collapse uses the internal codename
+<code>marble_origami</code> as its query source. Auto-compact explicitly
+skips this source to prevent deadlock — collapse's own compaction calls
+shouldn't trigger auto-compact.</p>
+<hr />
+<h2 id="message-grouping--the-unit-of-compaction">Message Grouping — The
+Unit of Compaction</h2>
+<p>All compaction tiers that remove messages operate on
+<strong>groups</strong>, not individual messages. A group is one API
+round-trip: one assistant response and all the user/tool messages that
+follow it.</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co">// grouping.ts:22-63</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">groupMessagesByApiRound</span>(messages<span class="op">:</span> Message[])<span class="op">:</span> Message[][] {</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> groups<span class="op">:</span> Message[][] <span class="op">=</span> []</span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> current<span class="op">:</span> Message[] <span class="op">=</span> []</span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> lastAssistantId<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">undefined</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> msg <span class="kw">of</span> messages) {</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (msg<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;assistant&#39;</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>        msg<span class="op">.</span><span class="at">message</span><span class="op">.</span><span class="at">id</span> <span class="op">!==</span> lastAssistantId <span class="op">&amp;&amp;</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>        current<span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>      groups<span class="op">.</span><span class="fu">push</span>(current)</span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>      current <span class="op">=</span> [msg]</span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>      current<span class="op">.</span><span class="fu">push</span>(msg)</span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (msg<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;assistant&#39;</span>) {</span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a>      lastAssistantId <span class="op">=</span> msg<span class="op">.</span><span class="at">message</span><span class="op">.</span><span class="at">id</span></span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (current<span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) groups<span class="op">.</span><span class="fu">push</span>(current)</span>
+<span id="cb25-21"><a href="#cb25-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> groups</span>
+<span id="cb25-22"><a href="#cb25-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Boundaries fire on <strong>new assistant response IDs</strong>, not
+on user messages. This is deliberate: in single-prompt agentic sessions
+(SDK/eval callers), the entire workload is one human turn with many
+assistant responses. Grouping by user messages would produce one giant
+group; grouping by assistant IDs produces fine-grained groups that can
+be individually dropped.</p>
+<p>The code intentionally avoids tracking unresolved
+<code>tool_use</code> IDs. The comment at <code>grouping.ts:40-42</code>
+explains: malformed conversations (dangling <code>tool_use</code> after
+session resume) would pin the grouping gate shut forever, merging all
+messages into one group. Instead, <code>ensureToolResultPairing</code>
+at API time repairs split pairs — a defensive strategy that prefers
+resilience over correctness in edge cases.</p>
+<hr />
+<h2 id="the-threshold-system">The Threshold System</h2>
+<p>Four buffer constants define the zones of context pressure:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// autoCompact.ts:62-65</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> AUTOCOMPACT_BUFFER_TOKENS <span class="op">=</span> <span class="dv">13_000</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> WARNING_THRESHOLD_BUFFER_TOKENS <span class="op">=</span> <span class="dv">20_000</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> ERROR_THRESHOLD_BUFFER_TOKENS <span class="op">=</span> <span class="dv">20_000</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> MANUAL_COMPACT_BUFFER_TOKENS <span class="op">=</span> <span class="dv">3_000</span></span></code></pre></div>
+<p>For a 200K-token model:</p>
+<pre><code>Context Window: 200,000 tokens
+  - Max Output Reserved: 20,000 (compact summary p99.99 = 17,387)
+  = Effective Window: 180,000
+
+  147,000 (73.5%) — Warning threshold: status bar shows yellow
+  167,000 (83.5%) — Auto-compact threshold: Tier 3/4 fires
+  177,000 (88.5%) — Blocking limit: new requests blocked
+  180,000 (90.0%) — Effective limit: hard API ceiling</code></pre>
+<p>The <code>calculateTokenWarningState</code> function feeds the status
+bar:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">// autoCompact.ts:93-145</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">calculateTokenWarningState</span>(tokenUsage<span class="op">:</span> <span class="dt">number</span><span class="op">,</span> model<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> {</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  percentLeft<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  isAboveWarningThreshold<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  isAboveErrorThreshold<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>  isAboveAutoCompactThreshold<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>  isAtBlockingLimit<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The 13K auto-compact buffer is tuned so compaction fires before the
+blocking limit but not so aggressively that it triggers on every large
+tool result. The gap between auto-compact (83.5%) and blocking (88.5%)
+gives the compaction call room to complete — the summary itself needs
+tokens to generate.</p>
+<p>The <code>MANUAL_COMPACT_BUFFER_TOKENS</code> (3K) controls the
+<code>/compact</code> command's threshold — much lower than auto-compact
+because the user explicitly asked for compaction, so aggressive behavior
+is expected.</p>
+<hr />
+<h2 id="cache-aware-design-across-tiers">Cache-Aware Design Across
+Tiers</h2>
+<p>Every tier explicitly considers prompt cache impact — this is the
+unifying design principle:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Cache Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0: API-native</td>
+<td>Zero — server handles it</td>
+</tr>
+<tr>
+<td>1: Time-based MC</td>
+<td>Mutates freely — cache is known cold (&gt;60 min idle)</td>
+</tr>
+<tr>
+<td>2: Cached MC</td>
+<td>Entire purpose is cache preservation via
+<code>cache_edits</code></td>
+</tr>
+<tr>
+<td>3: Session memory</td>
+<td>Avoids LLM call entirely — no cache interaction</td>
+</tr>
+<tr>
+<td>4: Auto-compact</td>
+<td>Fork shares parent's cache prefix via
+<code>skipCacheWrite</code></td>
+</tr>
+<tr>
+<td>5: Reactive</td>
+<td>Accepts cache break as cost of recovery</td>
+</tr>
+<tr>
+<td>6: Collapse</td>
+<td>Owns the context lifecycle — manages cache internally</td>
+</tr>
+</tbody>
+</table>
+<p>After any compaction, <code>notifyCompaction()</code> resets the
+cache break detection baseline so the expected cache miss isn't flagged
+as a break. Missing this call caused 20% false-positive break events —
+discovered in production analytics (BQ 2026-03-01). The fix was a single
+function call, but finding it required correlating cache break telemetry
+with compaction events across thousands of sessions.</p>
+<hr />
+<h2 id="feature-flags-as-kill-switches">Feature Flags as Kill
+Switches</h2>
+<p>Every experimental tier has GrowthBook feature flags:</p>
+<ul>
+<li><code>tengu_slate_heron</code>: Time-based MC config</li>
+<li><code>CACHED_MICROCOMPACT</code>: Cache-editing MC</li>
+<li><code>tengu_session_memory</code> + <code>tengu_sm_compact</code>:
+Session memory compact</li>
+<li><code>tengu_cobalt_raccoon</code>: Reactive-only mode</li>
+<li><code>CONTEXT_COLLAPSE</code>: Context collapse</li>
+<li><code>tengu_compact_cache_prefix</code>: Cache sharing for compact
+fork</li>
+</ul>
+<p>This means any tier can be disabled remotely without a code deploy.
+When a tier causes unexpected behavior in production — corrupted
+summaries, excessive API calls, cache break regressions — the team can
+kill it within minutes via the flag server.</p>
+<p>The flags are also used for gradual rollout: new tiers launch at 1%
+of users, monitored via telemetry events (<code>tengu_compact</code>,
+<code>tengu_sm_compact_*</code>, <code>tengu_cached_microcompact</code>,
+etc.), and gradually increase to 100% as confidence grows. Each
+telemetry event includes pre/post token counts, cache hit rates, trigger
+metadata, and recompaction chain detection — a signal-rich dataset for
+evaluating whether a new tier is net-positive.</p>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building a context management system for a production CLI agent, the
+Claude Code approach teaches:</p>
+<p><strong>1. Graduate your compression strategies.</strong> Cheap
+operations first (string replacement, server-side edits), expensive
+operations only when cheap ones fail (LLM summarization), error-driven
+recovery as the last resort. Users never pay for more compression than
+they need.</p>
+<p><strong>2. Design around cache economics.</strong> Every compression
+strategy must answer: "does this bust the cache?" The 10x cost
+difference between cache hits and misses (detailed in Chapter 5's
+caching section) means a cache-busting compaction can cost more than the
+context it saves.</p>
+<p><strong>3. Use circuit breakers for recursive systems.</strong>
+Compaction that fails can trigger more compaction. Without the 3-failure
+circuit breaker, a single broken session burned 3,272 consecutive
+attempts. Any system that retries on failure needs a failure budget.</p>
+<p><strong>4. Pre-extract summaries in the background.</strong> Session
+memory compact's zero-LLM-cost compaction is possible because the
+summary was extracted incrementally during the session. Background
+extraction during natural breaks (tool calls, user idle time) amortizes
+the cost across turns rather than paying it all at compaction time.</p>
+<p><strong>5. Group messages by API round, not by role.</strong> In
+agentic sessions with one user turn and many model turns, role-based
+grouping produces one giant group. Response-ID-based grouping produces
+fine-grained units that can be individually dropped.</p>
+<p><strong>6. Rebuild context after compaction.</strong> Compaction
+deletes messages, but the model needs context to continue working —
+recently read files, active plans, invoked skills. The post-compact
+rebuilding pipeline re-injects this context with strict token budgets
+per category (50K for files, 25K for skills) so restoration doesn't
+itself cause another compaction.</p>
+<p><strong>7. Constrain the summary prompt against drift.</strong> After
+compaction, the model tends to resume old or completed tasks. The
+"ensure DIRECTLY in line with user's most recent explicit requests"
+constraint in Section 9 of the compact prompt combats this known failure
+mode.</p>
+<p><strong>8. Separate main-thread from subagent state.</strong>
+Module-level state is shared across forks. Cache resets from subagent
+compacts must not corrupt main-thread caches. Guard every cleanup
+function with an <code>isMainThreadCompact</code> check.</p>
+<p>In Chapter 7, we'll examine the token estimation and budget system
+that feeds these threshold calculations — the layered estimation stack
+from rough heuristics to API-backed counting, the 8K-to-64K output token
+escalation, and the +500K auto-continue budget system.</p>
+</div>
+</body>
+</html>

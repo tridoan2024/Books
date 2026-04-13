@@ -1,0 +1,1928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 20: The Skill System — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-20-the-skill-system">Chapter 20: The Skill System</h1>
+<h2 id="part-vi-skills--configuration">Part VI: Skills &amp;
+Configuration</h2>
+<p>The first five parts of this book covered the engine: how the agent
+boots, processes queries, executes tools, enforces permissions, and
+fires hooks. These are the load-bearing walls of the system. But a house
+with strong walls and no furniture is uninhabitable. Part VI is about
+the furniture — the systems that make the agent usable, configurable,
+and extensible by people who never touch the core codebase.</p>
+<p>This chapter covers the skill system: the primary mechanism through
+which an AI CLI agent learns new workflows without code changes. A skill
+is a markdown file with YAML frontmatter that teaches the LLM how to
+perform a specific task — reviewing code, fixing issues, drafting
+documentation, profiling performance. Skills are the answer to a
+fundamental tension in agent design: the LLM needs domain-specific
+instructions to be useful, but those instructions change faster than you
+can ship releases.</p>
+<p>Claude Code's skill system — approximately 2,475 lines across two
+core files — handles skill loading from five sources with priority
+ordering, YAML frontmatter parsing without a YAML library, dynamic
+context injection via shell command execution embedded in prompts,
+argument substitution, auto-activation by file path patterns, system
+prompt injection, and an auto-improvement engine that analyzes
+conversation turns and proposes skill updates. Understanding how to
+build this system is essential for any agent that needs to be more than
+a generic chatbot.</p>
+<hr />
+<h2 id="201-architecture-overview">20.1 Architecture Overview</h2>
+<p>The skill system lives in two files:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Lines</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>skills/mod.rs</code></td>
+<td>1,678</td>
+<td>Core loading, registry, frontmatter parsing, dynamic injection,
+slash commands</td>
+</tr>
+<tr>
+<td><code>skills/improvement.rs</code></td>
+<td>797</td>
+<td>Auto-improvement engine, turn analysis, metrics tracking</td>
+</tr>
+</tbody>
+</table>
+<p>The data flow is straightforward. When a user types
+<code>/code-review</code>, the system parses the slash command, looks up
+the skill by name, resolves its body (substituting arguments and
+executing embedded shell commands), and returns the resolved content for
+injection into the LLM conversation:</p>
+<pre><code>User types /skill-name args
+       |
+       v
+SkillRegistry::execute_slash_command()
+       |
+       v
+parse_slash_command() -&gt; (name, args)
+       |
+       v
+find_by_name() or find_by_name_ci()
+       |
+       v
+Skill::resolve_body_with_cache()
+       |
+       +-- Step 1: $ARGUMENTS substitution
+       +-- Step 2: !`command` injection (cached via SHA-256)
+       |
+       v
+SlashCommandResult { resolved_body, is_fork, model, ... }</code></pre>
+<p>This pipeline runs synchronously on every skill invocation. The
+inject cache ensures that shell commands execute at most once per unique
+<code>(command, working_directory)</code> pair within a session. The
+entire resolution completes in under 100ms for skills without shell
+injections, and under 5 seconds even for skills that run
+<code>git diff</code> or <code>gh pr view</code> — the 5-second timeout
+is enforced per injection command.</p>
+<p>Before we walk through the implementation, let's establish the core
+design decisions that shape everything:</p>
+<ol type="1">
+<li><strong>Skills are markdown files, not code.</strong> Anyone who can
+write a README can write a skill. No compilation, no type system, no
+runtime to install.</li>
+<li><strong>Project skills shadow user skills.</strong> This prevents a
+user-level skill from interfering with a project's workflow
+expectations.</li>
+<li><strong>No YAML parser dependency.</strong> The frontmatter format
+is a restricted subset of YAML. A 100-line line-by-line parser handles
+it, avoiding 50KB of compiled YAML library for features nobody
+uses.</li>
+<li><strong>Injection failures are visible, not fatal.</strong> When a
+shell command in a skill fails, the LLM receives a sentinel string like
+<code>(command timed out after 5s)</code> instead of crashing the entire
+skill resolution.</li>
+</ol>
+<hr />
+<h2 id="202-the-skill-loading-pipeline">20.2 The Skill Loading
+Pipeline</h2>
+<h3 id="five-sources-priority-ordering">Five Sources, Priority
+Ordering</h3>
+<p>A production skill system needs multiple sources. Users want personal
+skills. Teams want shared skills. Organizations want managed skills.
+Plugins want to register skills dynamically. And the agent itself ships
+with bundled skills for core workflows.</p>
+<p>Here is the loading priority from highest to lowest:</p>
+<table>
+<thead>
+<tr>
+<th>Priority</th>
+<th>Source</th>
+<th>Path</th>
+<th>Committed to Git?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>Project</strong></td>
+<td><code>.claude/skills/*/SKILL.md</code></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>User</strong></td>
+<td><code>~/.config/claude/skills/*/SKILL.md</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>Managed</strong></td>
+<td>Org-provisioned via policy endpoint</td>
+<td>No</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>Plugins</strong></td>
+<td><code>~/.claude/plugins/*/skills/*/SKILL.md</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>Bundled</strong></td>
+<td>Compiled into the binary</td>
+<td>N/A</td>
+</tr>
+</tbody>
+</table>
+<p>The key rule: <strong>when two skills share the same name, the
+higher-priority source wins.</strong> A project skill named
+<code>code-review</code> shadows a user skill named
+<code>code-review</code>. This is the same shadowing principle that CSS
+uses for specificity, that environment variables use for scope, and that
+the permission system uses for rule evaluation (as we saw in Chapter
+15).</p>
+<h3 id="implementation-the-registry-load">Implementation: The Registry
+Load</h3>
+<p>The <code>SkillRegistry::load()</code> function is the entry point.
+It loads from each source in priority order, tracking seen names to
+implement the shadowing:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// skills/mod.ts (conceptual TypeScript equivalent)</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SkillRegistry {</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  skills<span class="op">:</span> Skill[]</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  injectCache<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;</span>  <span class="co">// SHA-256 key -&gt; output</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">loadSkillRegistry</span>(projectRoot<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> SkillRegistry {</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> skills<span class="op">:</span> Skill[] <span class="op">=</span> []</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> seenNames <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;</span>()  <span class="co">// name -&gt; source path</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Priority 1: Project skills</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> projectDir <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(projectRoot<span class="op">,</span> <span class="st">&#39;.claude&#39;</span><span class="op">,</span> <span class="st">&#39;skills&#39;</span>)</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">loadFromDirectory</span>(projectDir<span class="op">,</span> <span class="st">&#39;project&#39;</span><span class="op">,</span> skills<span class="op">,</span> seenNames)</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Priority 2: User skills</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> userDir <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(os<span class="op">.</span><span class="fu">homedir</span>()<span class="op">,</span> <span class="st">&#39;.config&#39;</span><span class="op">,</span> <span class="st">&#39;claude&#39;</span><span class="op">,</span> <span class="st">&#39;skills&#39;</span>)</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">loadFromDirectory</span>(userDir<span class="op">,</span> <span class="st">&#39;user&#39;</span><span class="op">,</span> skills<span class="op">,</span> seenNames)</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Priority 3: Managed skills (from org policy)</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>  <span class="fu">loadManagedSkills</span>(skills<span class="op">,</span> seenNames)</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Priority 4: Plugin skills</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>  <span class="fu">loadPluginSkills</span>(skills<span class="op">,</span> seenNames)</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Priority 5: Bundled skills (compiled in)</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>  <span class="fu">loadBundledSkills</span>(skills<span class="op">,</span> seenNames)</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { skills<span class="op">,</span> injectCache<span class="op">:</span> <span class="kw">new</span> <span class="bu">Map</span>() }</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>seenNames</code> map is the shadowing mechanism. When
+<code>loadFromDirectory</code> encounters a skill whose name already
+exists in <code>seenNames</code>, it logs a message at info level and
+skips the duplicate:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">loadFromDirectory</span>(</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  dir<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  source<span class="op">:</span> SkillSource<span class="op">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  skills<span class="op">:</span> Skill[]<span class="op">,</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  seenNames<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;,</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>fs<span class="op">.</span><span class="fu">existsSync</span>(dir)) <span class="cf">return</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> entries <span class="op">=</span> fs<span class="op">.</span><span class="fu">readdirSync</span>(dir<span class="op">,</span> { withFileTypes<span class="op">:</span> <span class="kw">true</span> })</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">filter</span>(e <span class="kw">=&gt;</span> e<span class="op">.</span><span class="fu">isDirectory</span>())</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">sort</span>((a<span class="op">,</span> b) <span class="kw">=&gt;</span> a<span class="op">.</span><span class="at">name</span><span class="op">.</span><span class="fu">localeCompare</span>(b<span class="op">.</span><span class="at">name</span>))  <span class="co">// Deterministic order</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> entry <span class="kw">of</span> entries) {</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> skillFile <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(dir<span class="op">,</span> entry<span class="op">.</span><span class="at">name</span><span class="op">,</span> <span class="st">&#39;SKILL.md&#39;</span>)</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>fs<span class="op">.</span><span class="fu">existsSync</span>(skillFile)) <span class="cf">continue</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span> {</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> skill <span class="op">=</span> <span class="fu">parseSkill</span>(skillFile<span class="op">,</span> path<span class="op">.</span><span class="fu">join</span>(dir<span class="op">,</span> entry<span class="op">.</span><span class="at">name</span>)<span class="op">,</span> source)</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (seenNames<span class="op">.</span><span class="fu">has</span>(skill<span class="op">.</span><span class="at">name</span>)) {</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        log<span class="op">.</span><span class="fu">info</span>(<span class="vs">`Skipping </span><span class="sc">${</span>source<span class="sc">}</span><span class="vs"> skill &#39;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">&#39; — `</span> <span class="op">+</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>          <span class="vs">`shadowed by </span><span class="sc">${</span>seenNames<span class="op">.</span><span class="fu">get</span>(skill<span class="op">.</span><span class="at">name</span>)<span class="sc">}</span><span class="vs">`</span>)</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">continue</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>      seenNames<span class="op">.</span><span class="fu">set</span>(skill<span class="op">.</span><span class="at">name</span><span class="op">,</span> <span class="vs">`</span><span class="sc">${</span>source<span class="sc">}</span><span class="vs">:</span><span class="sc">${</span>entry<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">`</span>)</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>      skills<span class="op">.</span><span class="fu">push</span>(skill)</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">catch</span> (err) {</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>      log<span class="op">.</span><span class="fu">warn</span>(<span class="vs">`Failed to parse skill at </span><span class="sc">${</span>skillFile<span class="sc">}</span><span class="vs">: </span><span class="sc">${</span>err<span class="sc">}</span><span class="vs">`</span>)</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Never crash on skill parse failure</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Three details matter here:</p>
+<ol type="1">
+<li><p><strong>Sorted entries.</strong> The directory listing is sorted
+alphabetically. Without this, the load order would depend on the
+filesystem's directory entry ordering, which varies between ext4, APFS,
+and NTFS. Deterministic ordering means deterministic shadowing when two
+skills in the same source directory have the same name (first
+alphabetically wins).</p></li>
+<li><p><strong>Never crash on parse failure.</strong> A malformed
+<code>SKILL.md</code> file logs a warning and is skipped. This is
+critical for a system where users author skills — you cannot let a typo
+in one skill break every other skill.</p></li>
+<li><p><strong>The <code>SKILL.md</code> convention.</strong> Each skill
+lives in its own directory (e.g.,
+<code>.claude/skills/code-review/SKILL.md</code>). The directory can
+contain additional files — reference documents, example outputs,
+templates — that the skill's body can reference. This is why skills are
+directories, not standalone files.</p></li>
+</ol>
+<h3 id="why-five-sources">Why Five Sources?</h3>
+<p>You might wonder why the system needs five sources instead of, say,
+two (project and user). The answer is organizational complexity:</p>
+<ul>
+<li><strong>Project skills</strong> are checked into git. Every team
+member gets the same workflows. The <code>code-review</code> skill runs
+the same checks for everyone working on the repo.</li>
+<li><strong>User skills</strong> are personal. Your
+<code>research</code> skill might use different sources than your
+colleague's. Your <code>scaffold</code> skill might set up projects
+differently.</li>
+<li><strong>Managed skills</strong> come from your organization's policy
+server. When the security team mandates that every code review includes
+OWASP checks, they push a managed skill that cannot be overridden.</li>
+<li><strong>Plugin skills</strong> come from the marketplace.
+Third-party authors package skills into plugins that users install. The
+agent's plugin system (Chapter 37) manages installation, updates, and
+removal.</li>
+<li><strong>Bundled skills</strong> ship with the agent binary. These
+are the core workflows — <code>loop</code>, <code>remember</code>,
+<code>verify</code>, <code>batch</code>, <code>simplify</code> — that
+define the agent's baseline capabilities.</li>
+</ul>
+<hr />
+<h2 id="203-yaml-frontmatter-the-18-field-specification">20.3 YAML
+Frontmatter: The 18-Field Specification</h2>
+<p>Every skill file starts with YAML frontmatter between
+<code>---</code> delimiters. The frontmatter configures how the skill is
+discovered, triggered, and executed. Here is the complete
+specification:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">name</span><span class="kw">:</span><span class="at"> code-review</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="fu">description</span><span class="kw">:</span><span class="at"> Reviews code for bugs, security, performance. Use when user</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="at">  says &quot;review&quot;, &quot;check my code&quot;, &quot;code review&quot;, &quot;find bugs&quot;.</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="fu">argument-hint</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="at">file-or-directory</span><span class="kw">]</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="fu">allowed-tools</span><span class="kw">:</span><span class="at"> Read, Grep, Glob, Bash</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="fu">model</span><span class="kw">:</span><span class="at"> opus</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="fu">effort</span><span class="kw">:</span><span class="at"> high</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="fu">context</span><span class="kw">:</span><span class="at"> fork</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="fu">agent</span><span class="kw">:</span><span class="at"> code-reviewer</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="fu">paths</span><span class="kw">:</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">&quot;src/**/*.ts&quot;</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">&quot;lib/**/*.py&quot;</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="fu">user-invocable</span><span class="kw">:</span><span class="at"> </span><span class="ch">true</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a><span class="fu">disable-model-invocation</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="co"># Additional fields for advanced use:</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="co"># memory: project</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a><span class="co"># max-turns: 50</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a><span class="co"># isolation: worktree</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a><span class="co"># timeout: 300</span></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a><span class="co"># references: [&quot;docs/standards.md&quot;, &quot;docs/owasp-top10.md&quot;]</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a><span class="co"># output-format: table</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a><span class="co"># requires: [&quot;git&quot;, &quot;ruff&quot;]</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a><span class="co"># Code Review Skill</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a><span class="at">When invoked, perform a thorough code review...</span></span></code></pre></div>
+<h3 id="all-18-fields">All 18 Fields</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>name</code></td>
+<td>string</td>
+<td>directory name</td>
+<td>Slash command name (<code>/code-review</code>)</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>description</code></td>
+<td>string</td>
+<td><code>""</code></td>
+<td>Trigger phrases for auto-detection + autocomplete text</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>argument-hint</code></td>
+<td>string</td>
+<td>none</td>
+<td>Shown in <code>/</code> menu autocomplete (e.g.,
+<code>[issue-number]</code>)</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>allowed-tools</code></td>
+<td>string[]</td>
+<td>all tools</td>
+<td>Tools that skip permission prompts during this skill</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>model</code></td>
+<td>string</td>
+<td>session default</td>
+<td>Override model: <code>opus</code>, <code>sonnet</code>,
+<code>haiku</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>effort</code></td>
+<td>string</td>
+<td>session default</td>
+<td>Override reasoning effort: <code>low</code>, <code>medium</code>,
+<code>high</code>, <code>max</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>context</code></td>
+<td>string</td>
+<td><code>"inline"</code></td>
+<td><code>inline</code> (inject into conversation) or <code>fork</code>
+(spawn subagent)</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>agent</code></td>
+<td>string</td>
+<td><code>"general-purpose"</code></td>
+<td>Which agent type for <code>context: fork</code></td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>paths</code></td>
+<td>string[]</td>
+<td><code>[]</code></td>
+<td>Glob patterns for auto-activation</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>user-invocable</code></td>
+<td>boolean</td>
+<td><code>true</code></td>
+<td>Visible in <code>/</code> menu?</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>disable-model-invocation</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>Prevent LLM from auto-triggering?</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>memory</code></td>
+<td>string</td>
+<td><code>"project"</code></td>
+<td>Memory scope: <code>user</code>, <code>project</code>,
+<code>local</code></td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>max-turns</code></td>
+<td>number</td>
+<td>unlimited</td>
+<td>Limit agent turns for <code>context: fork</code></td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>isolation</code></td>
+<td>string</td>
+<td>none</td>
+<td><code>worktree</code> for git-isolated execution</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>timeout</code></td>
+<td>number</td>
+<td>none</td>
+<td>Skill execution timeout in seconds</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>references</code></td>
+<td>string[]</td>
+<td><code>[]</code></td>
+<td>Additional files loaded into context</td>
+</tr>
+<tr>
+<td>17</td>
+<td><code>output-format</code></td>
+<td>string</td>
+<td><code>"markdown"</code></td>
+<td>Expected output format hint</td>
+</tr>
+<tr>
+<td>18</td>
+<td><code>requires</code></td>
+<td>string[]</td>
+<td><code>[]</code></td>
+<td>System commands that must exist (validated at load)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-frontmatter-parser">The Frontmatter Parser</h3>
+<p>The system deliberately avoids pulling in a YAML parsing library.
+This is not laziness — it is a conscious engineering decision. The
+frontmatter format is a restricted subset of YAML: key-value pairs and
+simple lists. A full YAML parser would accept anchors, multi-document
+streams, flow sequences, and other features that would confuse skill
+authors and produce error messages referencing YAML spec details
+irrelevant to <code>SKILL.md</code> authoring.</p>
+<p>The parser is approximately 100 lines and uses two boolean state
+flags to track multi-line list sections:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> Frontmatter {</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  name<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  description<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  allowedTools<span class="op">?:</span> <span class="dt">string</span>[]</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  model<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  effort<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>  paths<span class="op">:</span> <span class="dt">string</span>[]</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>  userInvocable<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  disableModelInvocation<span class="op">?:</span> <span class="dt">boolean</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  argumentHint<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  context<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>  agent<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... remaining fields</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">splitFrontmatter</span>(content<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> [<span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">,</span> <span class="dt">string</span>] {</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>content<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;---&#39;</span>)) <span class="cf">return</span> [<span class="kw">null</span><span class="op">,</span> content]</span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> endIndex <span class="op">=</span> content<span class="op">.</span><span class="fu">indexOf</span>(<span class="st">&#39;---&#39;</span><span class="op">,</span> <span class="dv">3</span>)</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (endIndex <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) <span class="cf">return</span> [<span class="kw">null</span><span class="op">,</span> content]</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> frontmatter <span class="op">=</span> content<span class="op">.</span><span class="fu">slice</span>(<span class="dv">3</span><span class="op">,</span> endIndex)</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> body <span class="op">=</span> content<span class="op">.</span><span class="fu">slice</span>(endIndex <span class="op">+</span> <span class="dv">3</span>)<span class="op">.</span><span class="fu">replace</span>(<span class="ss">/</span><span class="sc">^[\r\n]+</span><span class="ss">/</span><span class="op">,</span> <span class="st">&#39;&#39;</span>)</span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> [frontmatter<span class="op">,</span> body]</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">parseFrontmatterText</span>(text<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> Frontmatter {</span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> fm<span class="op">:</span> Frontmatter <span class="op">=</span> { paths<span class="op">:</span> [] }</span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> inPaths <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> inAllowedToolsList <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> rawLine <span class="kw">of</span> text<span class="op">.</span><span class="fu">split</span>(<span class="st">&#39;</span><span class="sc">\n</span><span class="st">&#39;</span>)) {</span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> line <span class="op">=</span> rawLine<span class="op">.</span><span class="fu">trim</span>()</span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>line <span class="op">||</span> line<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;#&#39;</span>)) <span class="cf">continue</span>  <span class="co">// Skip blanks and comments</span></span>
+<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-34"><a href="#cb5-34" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Multi-line list items (indented with -)</span></span>
+<span id="cb5-35"><a href="#cb5-35" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (line<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;- &#39;</span>)) {</span>
+<span id="cb5-36"><a href="#cb5-36" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> value <span class="op">=</span> <span class="fu">stripQuotes</span>(line<span class="op">.</span><span class="fu">slice</span>(<span class="dv">2</span>)<span class="op">.</span><span class="fu">trim</span>())</span>
+<span id="cb5-37"><a href="#cb5-37" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (inPaths) fm<span class="op">.</span><span class="at">paths</span><span class="op">.</span><span class="fu">push</span>(value)</span>
+<span id="cb5-38"><a href="#cb5-38" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (inAllowedToolsList) {</span>
+<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">allowedTools</span> <span class="op">=</span> fm<span class="op">.</span><span class="at">allowedTools</span> <span class="op">??</span> []</span>
+<span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">allowedTools</span><span class="op">.</span><span class="fu">push</span>(value)</span>
+<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb5-42"><a href="#cb5-42" aria-hidden="true" tabindex="-1"></a>      <span class="cf">continue</span></span>
+<span id="cb5-43"><a href="#cb5-43" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb5-44"><a href="#cb5-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-45"><a href="#cb5-45" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Key-value pair</span></span>
+<span id="cb5-46"><a href="#cb5-46" aria-hidden="true" tabindex="-1"></a>    inPaths <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb5-47"><a href="#cb5-47" aria-hidden="true" tabindex="-1"></a>    inAllowedToolsList <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb5-48"><a href="#cb5-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-49"><a href="#cb5-49" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> colonIndex <span class="op">=</span> line<span class="op">.</span><span class="fu">indexOf</span>(<span class="st">&#39;:&#39;</span>)</span>
+<span id="cb5-50"><a href="#cb5-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (colonIndex <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) <span class="cf">continue</span></span>
+<span id="cb5-51"><a href="#cb5-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-52"><a href="#cb5-52" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> key <span class="op">=</span> line<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> colonIndex)<span class="op">.</span><span class="fu">trim</span>()<span class="op">.</span><span class="fu">toLowerCase</span>()</span>
+<span id="cb5-53"><a href="#cb5-53" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> rawValue <span class="op">=</span> line<span class="op">.</span><span class="fu">slice</span>(colonIndex <span class="op">+</span> <span class="dv">1</span>)<span class="op">.</span><span class="fu">trim</span>()</span>
+<span id="cb5-54"><a href="#cb5-54" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-55"><a href="#cb5-55" aria-hidden="true" tabindex="-1"></a>    <span class="cf">switch</span> (key) {</span>
+<span id="cb5-56"><a href="#cb5-56" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;name&#39;</span><span class="op">:</span></span>
+<span id="cb5-57"><a href="#cb5-57" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">name</span> <span class="op">=</span> <span class="fu">stripQuotes</span>(rawValue)</span>
+<span id="cb5-58"><a href="#cb5-58" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-59"><a href="#cb5-59" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;description&#39;</span><span class="op">:</span></span>
+<span id="cb5-60"><a href="#cb5-60" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">description</span> <span class="op">=</span> <span class="fu">stripQuotes</span>(rawValue)</span>
+<span id="cb5-61"><a href="#cb5-61" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-62"><a href="#cb5-62" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;model&#39;</span><span class="op">:</span></span>
+<span id="cb5-63"><a href="#cb5-63" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">model</span> <span class="op">=</span> <span class="fu">stripQuotes</span>(rawValue)</span>
+<span id="cb5-64"><a href="#cb5-64" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-65"><a href="#cb5-65" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;effort&#39;</span><span class="op">:</span></span>
+<span id="cb5-66"><a href="#cb5-66" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">effort</span> <span class="op">=</span> <span class="fu">stripQuotes</span>(rawValue)</span>
+<span id="cb5-67"><a href="#cb5-67" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-68"><a href="#cb5-68" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;argument-hint&#39;</span><span class="op">:</span></span>
+<span id="cb5-69"><a href="#cb5-69" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">argumentHint</span> <span class="op">=</span> <span class="fu">stripQuotes</span>(rawValue)</span>
+<span id="cb5-70"><a href="#cb5-70" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-71"><a href="#cb5-71" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;context&#39;</span><span class="op">:</span></span>
+<span id="cb5-72"><a href="#cb5-72" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">context</span> <span class="op">=</span> <span class="fu">stripQuotes</span>(rawValue)</span>
+<span id="cb5-73"><a href="#cb5-73" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-74"><a href="#cb5-74" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;agent&#39;</span><span class="op">:</span></span>
+<span id="cb5-75"><a href="#cb5-75" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">agent</span> <span class="op">=</span> <span class="fu">stripQuotes</span>(rawValue)</span>
+<span id="cb5-76"><a href="#cb5-76" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-77"><a href="#cb5-77" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;user-invocable&#39;</span><span class="op">:</span></span>
+<span id="cb5-78"><a href="#cb5-78" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">userInvocable</span> <span class="op">=</span> rawValue<span class="op">.</span><span class="fu">toLowerCase</span>() <span class="op">===</span> <span class="st">&#39;true&#39;</span></span>
+<span id="cb5-79"><a href="#cb5-79" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-80"><a href="#cb5-80" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;disable-model-invocation&#39;</span><span class="op">:</span></span>
+<span id="cb5-81"><a href="#cb5-81" aria-hidden="true" tabindex="-1"></a>        fm<span class="op">.</span><span class="at">disableModelInvocation</span> <span class="op">=</span> rawValue<span class="op">.</span><span class="fu">toLowerCase</span>() <span class="op">===</span> <span class="st">&#39;true&#39;</span></span>
+<span id="cb5-82"><a href="#cb5-82" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-83"><a href="#cb5-83" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;paths&#39;</span><span class="op">:</span></span>
+<span id="cb5-84"><a href="#cb5-84" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> (rawValue<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;[&#39;</span>)) {</span>
+<span id="cb5-85"><a href="#cb5-85" aria-hidden="true" tabindex="-1"></a>          <span class="co">// Inline array: paths: [&quot;*.rs&quot;, &quot;*.toml&quot;]</span></span>
+<span id="cb5-86"><a href="#cb5-86" aria-hidden="true" tabindex="-1"></a>          fm<span class="op">.</span><span class="at">paths</span> <span class="op">=</span> <span class="fu">parseInlineArray</span>(rawValue)</span>
+<span id="cb5-87"><a href="#cb5-87" aria-hidden="true" tabindex="-1"></a>        } <span class="cf">else</span> <span class="cf">if</span> (<span class="op">!</span>rawValue) {</span>
+<span id="cb5-88"><a href="#cb5-88" aria-hidden="true" tabindex="-1"></a>          inPaths <span class="op">=</span> <span class="kw">true</span>  <span class="co">// Multi-line list follows</span></span>
+<span id="cb5-89"><a href="#cb5-89" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb5-90"><a href="#cb5-90" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-91"><a href="#cb5-91" aria-hidden="true" tabindex="-1"></a>      <span class="cf">case</span> <span class="st">&#39;allowed-tools&#39;</span><span class="op">:</span></span>
+<span id="cb5-92"><a href="#cb5-92" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> (rawValue) {</span>
+<span id="cb5-93"><a href="#cb5-93" aria-hidden="true" tabindex="-1"></a>          <span class="co">// Inline: allowed-tools: Read, Grep, Bash</span></span>
+<span id="cb5-94"><a href="#cb5-94" aria-hidden="true" tabindex="-1"></a>          fm<span class="op">.</span><span class="at">allowedTools</span> <span class="op">=</span> rawValue<span class="op">.</span><span class="fu">split</span>(<span class="st">&#39;,&#39;</span>)<span class="op">.</span><span class="fu">map</span>(s <span class="kw">=&gt;</span> s<span class="op">.</span><span class="fu">trim</span>())</span>
+<span id="cb5-95"><a href="#cb5-95" aria-hidden="true" tabindex="-1"></a>        } <span class="cf">else</span> {</span>
+<span id="cb5-96"><a href="#cb5-96" aria-hidden="true" tabindex="-1"></a>          inAllowedToolsList <span class="op">=</span> <span class="kw">true</span>  <span class="co">// Multi-line list follows</span></span>
+<span id="cb5-97"><a href="#cb5-97" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb5-98"><a href="#cb5-98" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb5-99"><a href="#cb5-99" aria-hidden="true" tabindex="-1"></a>      <span class="co">// ... remaining fields</span></span>
+<span id="cb5-100"><a href="#cb5-100" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb5-101"><a href="#cb5-101" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb5-102"><a href="#cb5-102" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> fm</span>
+<span id="cb5-103"><a href="#cb5-103" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb5-104"><a href="#cb5-104" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-105"><a href="#cb5-105" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">stripQuotes</span>(s<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb5-106"><a href="#cb5-106" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> ((s<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;&quot;&#39;</span>) <span class="op">&amp;&amp;</span> s<span class="op">.</span><span class="fu">endsWith</span>(<span class="st">&#39;&quot;&#39;</span>)) <span class="op">||</span></span>
+<span id="cb5-107"><a href="#cb5-107" aria-hidden="true" tabindex="-1"></a>      (s<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&quot;&#39;&quot;</span>) <span class="op">&amp;&amp;</span> s<span class="op">.</span><span class="fu">endsWith</span>(<span class="st">&quot;&#39;&quot;</span>))) {</span>
+<span id="cb5-108"><a href="#cb5-108" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> s<span class="op">.</span><span class="fu">slice</span>(<span class="dv">1</span><span class="op">,</span> <span class="op">-</span><span class="dv">1</span>)</span>
+<span id="cb5-109"><a href="#cb5-109" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb5-110"><a href="#cb5-110" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> s</span>
+<span id="cb5-111"><a href="#cb5-111" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The parser handles four formats for list fields:</p>
+<table>
+<thead>
+<tr>
+<th>Format</th>
+<th>Example</th>
+<th>How It Parses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inline comma-separated</td>
+<td><code>allowed-tools: Read, Grep, Bash</code></td>
+<td>Split on <code>,</code>, trim each</td>
+</tr>
+<tr>
+<td>Inline bracket notation</td>
+<td><code>paths: ["*.rs", "*.toml"]</code></td>
+<td>Strip brackets, split on <code>,</code>, strip quotes</td>
+</tr>
+<tr>
+<td>Multi-line list</td>
+<td><code>paths:\n  - "*.rs"\n  - "*.toml"</code></td>
+<td>State flag tracks current list, <code>- </code> prefix</td>
+</tr>
+<tr>
+<td>Empty (no value)</td>
+<td><code>paths:</code> followed by <code>- </code> lines</td>
+<td>Same as multi-line</td>
+</tr>
+</tbody>
+</table>
+<h3 id="validation-warnings-not-errors">Validation: Warnings, Not
+Errors</h3>
+<p>After parsing, the frontmatter undergoes validation. The validation
+produces warnings, not errors — a skill with a missing <code>name</code>
+field still loads, using the directory name as a fallback:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">validateFrontmatter</span>(fm<span class="op">:</span> Frontmatter<span class="op">,</span> filePath<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">string</span>[] {</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> warnings<span class="op">:</span> <span class="dt">string</span>[] <span class="op">=</span> []</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>fm<span class="op">.</span><span class="at">name</span>) {</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    warnings<span class="op">.</span><span class="fu">push</span>(<span class="vs">`</span><span class="sc">${</span>filePath<span class="sc">}</span><span class="vs">: missing &#39;name&#39; field, using directory name`</span>)</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>fm<span class="op">.</span><span class="at">description</span>) {</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    warnings<span class="op">.</span><span class="fu">push</span>(<span class="vs">`</span><span class="sc">${</span>filePath<span class="sc">}</span><span class="vs">: missing &#39;description&#39;, autocomplete will lack detail`</span>)</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (fm<span class="op">.</span><span class="at">context</span> <span class="op">===</span> <span class="st">&#39;fork&#39;</span> <span class="op">&amp;&amp;</span> <span class="op">!</span>fm<span class="op">.</span><span class="at">agent</span>) {</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>    warnings<span class="op">.</span><span class="fu">push</span>(<span class="vs">`</span><span class="sc">${</span>filePath<span class="sc">}</span><span class="vs">: context=fork without &#39;agent&#39; field — `</span> <span class="op">+</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>      <span class="vs">`will use general-purpose agent`</span>)</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> warnings</span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Three checks, three warnings. This is the right level of strictness
+for a user-authored configuration format. If you make validation too
+strict, users fight the system. If you make it too lenient, silent
+misconfigurations lead to mysterious behavior. The middle ground: load
+the skill, warn about potential issues, provide sensible defaults.</p>
+<hr />
+<h2 id="204-dynamic-context-injection">20.4 Dynamic Context
+Injection</h2>
+<p>This is the most powerful and most dangerous feature of the skill
+system. Dynamic context injection allows skill authors to embed shell
+commands inside their skill prompts. When the skill is invoked, the
+commands execute and their output replaces the command directive in the
+prompt text.</p>
+<h3 id="the-syntax">The Syntax</h3>
+<p>The injection syntax is <code>!`command`</code> — an exclamation
+point followed by a backtick-delimited command:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode markdown"><code class="sourceCode markdown"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="an">name:</span><span class="co"> pr-summary</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="an">description:</span><span class="co"> Summarize a pull request. Use when user says &quot;PR&quot;, &quot;pull request&quot;.</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="an">argument-hint:</span><span class="co"> [pr-number]</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="fu"># PR Summary</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="fu">## Context</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>PR diff: !<span class="in">`gh pr diff $ARGUMENTS`</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>Changed files: !<span class="in">`gh pr diff $ARGUMENTS --name-only`</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>PR details: !<span class="in">`gh pr view $ARGUMENTS --json title,body,author,labels`</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="fu">## Instructions</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>Analyze the PR and produce:</span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a><span class="ss">1. </span>A 2-3 sentence summary</span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="ss">2. </span>A changes table: | File | Type | Description |</span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a><span class="ss">3. </span>Risk assessment: breaking changes, security, performance</span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a><span class="ss">4. </span>Review checklist</span></code></pre></div>
+<p>When a user runs <code>/pr-summary 42</code>, two things happen in
+sequence:</p>
+<ol type="1">
+<li><strong>Argument substitution:</strong> <code>$ARGUMENTS</code> is
+replaced with <code>42</code> throughout the body.</li>
+<li><strong>Injection resolution:</strong> Each <code>!`...`</code>
+directive is replaced with the command's stdout.</li>
+</ol>
+<p>The result is a fully-materialized prompt that already contains the
+PR diff, file list, and PR metadata — before the LLM even starts
+thinking. This eliminates an entire round of tool calls. Without dynamic
+injection, the LLM would need to call <code>Bash(gh pr diff 42)</code>,
+wait for the result, then call <code>Bash(gh pr view 42 ...)</code>,
+wait again, and only then begin its analysis. With injection, the skill
+arrives pre-loaded with all necessary context.</p>
+<h3 id="implementation-the-two-stage-pipeline">Implementation: The
+Two-Stage Pipeline</h3>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> INJECT_COMMAND_TIMEOUT_MS <span class="op">=</span> <span class="dv">5000</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> INJECT_TIMEOUT_MSG <span class="op">=</span> <span class="st">&#39;(command timed out after 5s)&#39;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> INJECT_FAILURE_PREFIX <span class="op">=</span> <span class="st">&#39;(command failed:&#39;</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> INJECT_ERROR_PREFIX <span class="op">=</span> <span class="st">&#39;(command error:&#39;</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">resolveBody</span>(</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  skill<span class="op">:</span> Skill<span class="op">,</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>  arguments_<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>  cache<span class="op">?:</span> InjectCache<span class="op">,</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Stage 1: Argument substitution</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> body <span class="op">=</span> skill<span class="op">.</span><span class="at">bodyRaw</span><span class="op">.</span><span class="fu">replaceAll</span>(<span class="st">&#39;$ARGUMENTS&#39;</span><span class="op">,</span> arguments_)</span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Stage 2: Dynamic context injection</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> result <span class="op">=</span> <span class="st">&#39;&#39;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> remaining <span class="op">=</span> body</span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> (<span class="kw">true</span>) {</span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> start <span class="op">=</span> remaining<span class="op">.</span><span class="fu">indexOf</span>(<span class="st">&#39;!`&#39;</span>)</span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (start <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) {</span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>      result <span class="op">+=</span> remaining</span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>    result <span class="op">+=</span> remaining<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> start)</span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> afterMarker <span class="op">=</span> remaining<span class="op">.</span><span class="fu">slice</span>(start <span class="op">+</span> <span class="dv">2</span>)</span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> end <span class="op">=</span> afterMarker<span class="op">.</span><span class="fu">indexOf</span>(<span class="st">&#39;`&#39;</span>)</span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (end <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) {</span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>      <span class="co">// No closing backtick — preserve the marker literally</span></span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>      result <span class="op">+=</span> <span class="st">&#39;!`&#39;</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a>      remaining <span class="op">=</span> afterMarker</span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>      <span class="cf">continue</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> command <span class="op">=</span> afterMarker<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> end)</span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> output <span class="op">=</span> <span class="fu">executeInjection</span>(command<span class="op">,</span> skill<span class="op">.</span><span class="at">skillDir</span><span class="op">,</span> cache)</span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a>    result <span class="op">+=</span> output</span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a>    remaining <span class="op">=</span> afterMarker<span class="op">.</span><span class="fu">slice</span>(end <span class="op">+</span> <span class="dv">1</span>)</span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> result</span>
+<span id="cb8-43"><a href="#cb8-43" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The parser is a manual scanner, not a regex. It looks for the
+two-character sequence <code>!`</code>, finds the closing backtick,
+extracts the command, and replaces the directive with the command's
+output. This is O(n) in body length with at most O(k) shell invocations
+where k is the number of injection directives.</p>
+<p>Edge cases handled:</p>
+<ul>
+<li><strong>Unclosed backtick:</strong> The <code>!`</code> marker is
+preserved literally. The LLM sees it as text.</li>
+<li><strong>Nested backticks:</strong> Not supported. The first closing
+backtick terminates the command. If your command needs backticks, use
+<code>$(...)</code> subshell syntax instead.</li>
+<li><strong>Empty command:</strong> Valid. Runs <code>sh -c ""</code>
+which succeeds silently, producing empty output.</li>
+</ul>
+<h3 id="shell-execution-with-timeout">Shell Execution with Timeout</h3>
+<p>Each injection command runs under <code>sh -c</code> in the skill's
+directory:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">executeInjection</span>(</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  command<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  cwd<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  cache<span class="op">?:</span> InjectCache<span class="op">,</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Check cache first</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (cache) {</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> cached <span class="op">=</span> cache<span class="op">.</span><span class="fu">get</span>(command<span class="op">,</span> cwd)</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (cached <span class="op">!==</span> <span class="kw">undefined</span>) <span class="cf">return</span> cached</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">try</span> {</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> child <span class="op">=</span> <span class="fu">spawn</span>(<span class="st">&#39;sh&#39;</span><span class="op">,</span> [<span class="st">&#39;-c&#39;</span><span class="op">,</span> command]<span class="op">,</span> {</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>      cwd<span class="op">,</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>      stdio<span class="op">:</span> [<span class="st">&#39;ignore&#39;</span><span class="op">,</span> <span class="st">&#39;pipe&#39;</span><span class="op">,</span> <span class="st">&#39;pipe&#39;</span>]<span class="op">,</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>      timeout<span class="op">:</span> INJECT_COMMAND_TIMEOUT_MS<span class="op">,</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> result <span class="op">=</span> <span class="fu">waitWithTimeout</span>(child<span class="op">,</span> INJECT_COMMAND_TIMEOUT_MS)</span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> output<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (result <span class="op">===</span> <span class="kw">null</span>) {</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Timeout — kill the child</span></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>      child<span class="op">.</span><span class="fu">kill</span>(<span class="st">&#39;SIGKILL&#39;</span>)</span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>      output <span class="op">=</span> INJECT_TIMEOUT_MSG</span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (result<span class="op">.</span><span class="at">exitCode</span> <span class="op">!==</span> <span class="dv">0</span>) {</span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>      output <span class="op">=</span> <span class="vs">`</span><span class="sc">${</span>INJECT_FAILURE_PREFIX<span class="sc">}</span><span class="vs"> </span><span class="sc">${</span>command<span class="sc">}</span><span class="vs">)`</span></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>      output <span class="op">=</span> result<span class="op">.</span><span class="at">stdout</span><span class="op">.</span><span class="fu">trim</span>()</span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>    cache<span class="op">?.</span><span class="fu">set</span>(command<span class="op">,</span> cwd<span class="op">,</span> output)</span>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> output</span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">catch</span> (err) {</span>
+<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> output <span class="op">=</span> <span class="vs">`</span><span class="sc">${</span>INJECT_ERROR_PREFIX<span class="sc">}</span><span class="vs"> </span><span class="sc">${</span>err<span class="sc">}</span><span class="vs">)`</span></span>
+<span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a>    cache<span class="op">?.</span><span class="fu">set</span>(command<span class="op">,</span> cwd<span class="op">,</span> output)</span>
+<span id="cb9-37"><a href="#cb9-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> output</span>
+<span id="cb9-38"><a href="#cb9-38" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-39"><a href="#cb9-39" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Four outcomes, each producing a deterministic string:</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Return Value</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Success</td>
+<td>Trimmed stdout</td>
+<td>The actual diff output</td>
+</tr>
+<tr>
+<td>Non-zero exit</td>
+<td><code>(command failed: gh pr diff 999)</code></td>
+<td>PR 999 does not exist</td>
+</tr>
+<tr>
+<td>Timeout (5s)</td>
+<td><code>(command timed out after 5s)</code></td>
+<td>Network call hung</td>
+</tr>
+<tr>
+<td>Spawn error</td>
+<td><code>(command error: ENOENT)</code></td>
+<td><code>gh</code> not installed</td>
+</tr>
+</tbody>
+</table>
+<p>The critical design choice: <strong>sentinel strings instead of
+errors.</strong> When a command fails, the LLM still receives the full
+skill prompt — with a visible failure marker where the command output
+would be. This lets the LLM adapt. If it sees
+<code>(command failed: gh pr diff 999)</code>, it can tell the user "PR
+999 doesn't exist" rather than the skill silently failing with no output
+at all.</p>
+<h3 id="the-inject-cache">The Inject Cache</h3>
+<p>The inject cache prevents re-execution of identical commands within a
+session. The cache key is a SHA-256 hash of
+<code>(command, working_directory)</code>:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> InjectCache {</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> entries <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;</span>()</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> <span class="fu">cacheKey</span>(command<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> cwd<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> hash <span class="op">=</span> <span class="fu">createHash</span>(<span class="st">&#39;sha256&#39;</span>)</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    hash<span class="op">.</span><span class="fu">update</span>(command)</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    hash<span class="op">.</span><span class="fu">update</span>(<span class="st">&#39;|&#39;</span>)  <span class="co">// Separator prevents collision</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    hash<span class="op">.</span><span class="fu">update</span>(cwd)</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> hash<span class="op">.</span><span class="fu">digest</span>(<span class="st">&#39;hex&#39;</span>)</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">get</span>(command<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> cwd<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">undefined</span> {</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">this</span><span class="op">.</span><span class="at">entries</span><span class="op">.</span><span class="fu">get</span>(<span class="kw">this</span><span class="op">.</span><span class="fu">cacheKey</span>(command<span class="op">,</span> cwd))</span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">set</span>(command<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> cwd<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> output<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">entries</span><span class="op">.</span><span class="fu">set</span>(<span class="kw">this</span><span class="op">.</span><span class="fu">cacheKey</span>(command<span class="op">,</span> cwd)<span class="op">,</span> output)</span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  <span class="fu">clear</span>()<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">entries</span><span class="op">.</span><span class="fu">clear</span>()</span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The pipe separator <code>|</code> in the hash input prevents
+collisions between <code>("a", "b|c")</code> and
+<code>("a|b", "c")</code>. The cache has no TTL — it lives as long as
+the <code>SkillRegistry</code> instance, which is the session lifetime.
+A <code>clear()</code> method exists for manual invalidation.</p>
+<p>Why SHA-256 instead of a simpler hash? Because the <code>sha2</code>
+crate is already a dependency elsewhere in the codebase. No additional
+binary size. And while collision probability is irrelevant at cache
+sizes of dozens, the choice costs nothing and eliminates one class of
+bugs entirely.</p>
+<h3 id="security-implications">Security Implications</h3>
+<p>Dynamic injection is a shell execution vector. Any skill that uses
+<code>!`command`</code> can run arbitrary commands on the user's
+machine. This is intentional — the power comes from trusting skill
+authors the same way you trust scripts in your <code>$PATH</code>. But
+three mitigations limit the blast radius:</p>
+<ol type="1">
+<li><strong>5-second timeout.</strong> A runaway injection cannot block
+the session indefinitely.</li>
+<li><strong>Skill source priority.</strong> Managed skills (from your
+organization) override plugin skills. You control what runs.</li>
+<li><strong>The PreToolUse hook system.</strong> As we built in Chapter
+18, hooks can inspect and block tool executions. A hook could scan skill
+bodies for dangerous injection patterns before the skill loads.</li>
+</ol>
+<p>If you are building your own agent and this level of trust is
+unacceptable, you have two options: disable injection entirely (a
+feature flag), or sandbox injections in a restricted environment
+(container, seccomp, or WASM — at the cost of losing access to the
+user's git state and CLI tools).</p>
+<hr />
+<h2 id="205-bundled-skills-deep-dive">20.5 Bundled Skills Deep Dive</h2>
+<p>Bundled skills ship with the agent binary. They define the baseline
+experience — the workflows that work out of the box without any
+configuration. Claude Code ships approximately 15 bundled skills. The
+most architecturally interesting ones are:</p>
+<h3 id="loop">loop</h3>
+<p>The <code>/loop</code> skill runs a prompt or slash command on a
+recurring interval:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode markdown"><code class="sourceCode markdown"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="an">name:</span><span class="co"> loop</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="an">description:</span><span class="co"> Run a command on a recurring interval. Use when user says</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co">  &quot;loop&quot;, &quot;every N minutes&quot;, &quot;keep checking&quot;, &quot;poll&quot;, &quot;recurring&quot;.</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="an">argument-hint:</span><span class="co"> [interval] [command]</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="an">disable-model-invocation:</span><span class="co"> true</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="fu"># Loop Skill</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>Parse the arguments to extract:</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="ss">1. </span>An interval (default: 10 minutes). Accepted formats: &quot;5m&quot;, &quot;30s&quot;, &quot;1h&quot;.</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="ss">2. </span>A command to repeat (the rest of the arguments).</span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>Execute the command immediately, then schedule it to repeat at the interval.</span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>Use the cron scheduler (Chapter 41) for durable scheduling.</span></code></pre></div>
+<p>The <code>disable-model-invocation: true</code> flag is critical
+here. Without it, the LLM might auto-trigger the loop skill whenever a
+user says "keep checking on that" in casual conversation. Some skills
+are dangerous enough that only explicit <code>/loop</code> invocation
+should trigger them.</p>
+<h3 id="batch">batch</h3>
+<p>The <code>/batch</code> skill enables parallel multi-file changes
+using worktree isolation:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode markdown"><code class="sourceCode markdown"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="an">name:</span><span class="co"> batch</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="an">description:</span><span class="co"> Apply a change across many files in parallel. Use when user</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">  says &quot;batch&quot;, &quot;all files&quot;, &quot;every file&quot;, &quot;across the codebase&quot;.</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="an">argument-hint:</span><span class="co"> [instruction]</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="an">context:</span><span class="co"> fork</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="an">agent:</span><span class="co"> general-purpose</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="an">isolation:</span><span class="co"> worktree</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="an">model:</span><span class="co"> sonnet</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a><span class="fu"># Batch Skill</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a><span class="ss">1. </span>Parse the instruction to determine:</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a><span class="ss">   - </span>What change to make</span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a><span class="ss">   - </span>Which files are affected (use Glob/Grep to find them)</span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a><span class="ss">2. </span>For each file, spawn a sub-agent in an isolated git worktree</span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a><span class="ss">3. </span>Each agent applies the change to its file independently</span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a><span class="ss">4. </span>Collect results, verify no conflicts, merge worktrees</span></code></pre></div>
+<p>This skill demonstrates the interplay between three systems: the
+skill system provides the workflow definition, the subagent system
+(Chapter 13) provides parallel execution, and git worktree isolation
+prevents concurrent file edits from conflicting. The
+<code>context: fork</code> field tells the system to spawn a new agent
+rather than injecting the skill body into the current conversation.</p>
+<h3 id="simplify">simplify</h3>
+<p>The <code>/simplify</code> skill reviews recently changed code for
+quality:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode markdown"><code class="sourceCode markdown"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="an">name:</span><span class="co"> simplify</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="an">description:</span><span class="co"> Review changed code for reuse, quality, efficiency.</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="co">  Use when user says &quot;simplify&quot;, &quot;clean up&quot;, &quot;review changes&quot;.</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="an">allowed-tools:</span><span class="co"> Read, Grep, Glob, Bash</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="fu"># Simplify</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>Review the recent changes (use <span class="in">`git diff`</span> to find them).</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>For each changed file:</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="ss">1. </span>Check for code duplication with existing code</span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="ss">2. </span>Check for unnecessary complexity</span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a><span class="ss">3. </span>Check for performance issues</span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="ss">4. </span>Suggest concrete improvements with diffs</span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>Output format:</span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> File <span class="pp">|</span> Issue <span class="pp">|</span> Suggestion <span class="pp">|</span> Priority <span class="pp">|</span></span></code></pre></div>
+<p>The <code>allowed-tools</code> field restricts what tools the skill
+can use without permission prompts. During a simplify operation, the
+agent needs to read files and search the codebase — but it should not be
+writing files or running arbitrary commands without explicit
+approval.</p>
+<h3 id="verify">verify</h3>
+<p>The <code>/verify</code> skill runs project-appropriate verification
+after changes:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode markdown"><code class="sourceCode markdown"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="an">name:</span><span class="co"> verify</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="an">description:</span><span class="co"> Verify recent changes by running tests, linting, type checking.</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="co">  Use when user says &quot;verify&quot;, &quot;check&quot;, &quot;test&quot;, &quot;does it work&quot;.</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="an">allowed-tools:</span><span class="co"> Read, Bash, Grep</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a><span class="fu"># Verify</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>Detect the project&#39;s verification tools:</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>Python: pytest, ruff check, mypy/pyright</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>TypeScript: vitest/jest, eslint, tsc --noEmit</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>Rust: cargo test, cargo clippy, cargo check</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>Go: go test, go vet, golangci-lint</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>Run in order: type check -&gt; lint -&gt; test (fast to slow).</span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>Stop on first failure. Report results as a table.</span></code></pre></div>
+<h3 id="remember">remember</h3>
+<p>The <code>/remember</code> skill captures information to persistent
+memory:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode markdown"><code class="sourceCode markdown"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="an">name:</span><span class="co"> remember</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="an">description:</span><span class="co"> Save important context to memory. Use when user says</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">  &quot;remember this&quot;, &quot;save this&quot;, &quot;note that&quot;, &quot;don&#39;t forget&quot;.</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="an">argument-hint:</span><span class="co"> [what to remember]</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="an">disable-model-invocation:</span><span class="co"> true</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">---</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="fu"># Remember</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>Save the provided information to the project&#39;s memory system.</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>Categorize as: fact, preference, decision, or reference.</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>Write to the appropriate memory file in ~/.claude/projects/.</span></code></pre></div>
+<p>Again, <code>disable-model-invocation: true</code> — the agent should
+not decide on its own to write to persistent memory. That is a side
+effect with session-spanning consequences.</p>
+<h3 id="the-common-pattern">The Common Pattern</h3>
+<p>Notice the pattern across all bundled skills:</p>
+<ol type="1">
+<li><strong>Descriptive triggers</strong> in the
+<code>description</code> field list every phrase that should activate
+the skill.</li>
+<li><strong>Minimal frontmatter</strong> — only the fields that differ
+from defaults.</li>
+<li><strong>Clear step-by-step instructions</strong> in the body. The
+LLM follows numbered steps reliably.</li>
+<li><strong>Output format specification</strong> at the end. Tables,
+diffs, and structured formats reduce ambiguity.</li>
+<li><strong><code>disable-model-invocation</code></strong> on skills
+with side effects (loop, remember).</li>
+</ol>
+<p>If you are building your own agent, start with five bundled skills
+that cover your users' most common workflows. Observe which workflows
+users build custom skills for, and promote the best patterns to bundled
+status in the next release.</p>
+<hr />
+<h2 id="206-mcp-skill-builders">20.6 MCP Skill Builders</h2>
+<p>Skills do not have to be static markdown files. MCP servers can
+register skills dynamically at runtime through the skill builder
+protocol. This is how third-party integrations add workflows without
+shipping files to the user's disk.</p>
+<h3 id="the-protocol">The Protocol</h3>
+<p>An MCP server registers skills by exposing a <code>skills/list</code>
+resource that returns an array of skill definitions:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// MCP server implementation</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>server<span class="op">.</span><span class="fu">setRequestHandler</span>(<span class="st">&#39;resources/list&#39;</span><span class="op">,</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    resources<span class="op">:</span> [{</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>      uri<span class="op">:</span> <span class="st">&#39;skills://my-server/skills-list&#39;</span><span class="op">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>      name<span class="op">:</span> <span class="st">&#39;Dynamic skills from my-server&#39;</span><span class="op">,</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>      mimeType<span class="op">:</span> <span class="st">&#39;application/json&#39;</span><span class="op">,</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    }]<span class="op">,</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>server<span class="op">.</span><span class="fu">setRequestHandler</span>(<span class="st">&#39;resources/read&#39;</span><span class="op">,</span> <span class="kw">async</span> (request) <span class="kw">=&gt;</span> {</span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (request<span class="op">.</span><span class="at">params</span><span class="op">.</span><span class="at">uri</span> <span class="op">===</span> <span class="st">&#39;skills://my-server/skills-list&#39;</span>) {</span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>      contents<span class="op">:</span> [{</span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>        uri<span class="op">:</span> request<span class="op">.</span><span class="at">params</span><span class="op">.</span><span class="at">uri</span><span class="op">,</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>        mimeType<span class="op">:</span> <span class="st">&#39;application/json&#39;</span><span class="op">,</span></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>        text<span class="op">:</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">stringify</span>([</span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>          {</span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>            name<span class="op">:</span> <span class="st">&#39;deploy-staging&#39;</span><span class="op">,</span></span>
+<span id="cb16-21"><a href="#cb16-21" aria-hidden="true" tabindex="-1"></a>            description<span class="op">:</span> <span class="st">&#39;Deploy to staging. Use when user says &quot;deploy staging&quot;.&#39;</span><span class="op">,</span></span>
+<span id="cb16-22"><a href="#cb16-22" aria-hidden="true" tabindex="-1"></a>            body<span class="op">:</span> <span class="st">&#39;# Deploy to Staging</span><span class="sc">\n\n</span><span class="st">1. Run staging deploy...</span><span class="sc">\n</span><span class="st">&#39;</span><span class="op">,</span></span>
+<span id="cb16-23"><a href="#cb16-23" aria-hidden="true" tabindex="-1"></a>            allowedTools<span class="op">:</span> [<span class="st">&#39;Bash&#39;</span>]<span class="op">,</span></span>
+<span id="cb16-24"><a href="#cb16-24" aria-hidden="true" tabindex="-1"></a>            model<span class="op">:</span> <span class="st">&#39;sonnet&#39;</span><span class="op">,</span></span>
+<span id="cb16-25"><a href="#cb16-25" aria-hidden="true" tabindex="-1"></a>          }<span class="op">,</span></span>
+<span id="cb16-26"><a href="#cb16-26" aria-hidden="true" tabindex="-1"></a>          {</span>
+<span id="cb16-27"><a href="#cb16-27" aria-hidden="true" tabindex="-1"></a>            name<span class="op">:</span> <span class="st">&#39;rollback&#39;</span><span class="op">,</span></span>
+<span id="cb16-28"><a href="#cb16-28" aria-hidden="true" tabindex="-1"></a>            description<span class="op">:</span> <span class="st">&#39;Rollback last deployment.&#39;</span><span class="op">,</span></span>
+<span id="cb16-29"><a href="#cb16-29" aria-hidden="true" tabindex="-1"></a>            body<span class="op">:</span> <span class="st">&#39;# Rollback</span><span class="sc">\n\n</span><span class="st">1. Identify last successful deploy...</span><span class="sc">\n</span><span class="st">&#39;</span><span class="op">,</span></span>
+<span id="cb16-30"><a href="#cb16-30" aria-hidden="true" tabindex="-1"></a>          }<span class="op">,</span></span>
+<span id="cb16-31"><a href="#cb16-31" aria-hidden="true" tabindex="-1"></a>        ])<span class="op">,</span></span>
+<span id="cb16-32"><a href="#cb16-32" aria-hidden="true" tabindex="-1"></a>      }]<span class="op">,</span></span>
+<span id="cb16-33"><a href="#cb16-33" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb16-34"><a href="#cb16-34" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb16-35"><a href="#cb16-35" aria-hidden="true" tabindex="-1"></a>})</span></code></pre></div>
+<h3 id="loading-dynamic-skills">Loading Dynamic Skills</h3>
+<p>The skill registry queries connected MCP servers for skill
+definitions during the loading phase:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">loadMCPSkills</span>(</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  connections<span class="op">:</span> MCPConnection[]<span class="op">,</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  skills<span class="op">:</span> Skill[]<span class="op">,</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  seenNames<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;,</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> conn <span class="kw">of</span> connections) {</span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (conn<span class="op">.</span><span class="at">state</span> <span class="op">!==</span> <span class="st">&#39;connected&#39;</span>) <span class="cf">continue</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>conn<span class="op">.</span><span class="at">capabilities</span><span class="op">?.</span><span class="at">resources</span>) <span class="cf">continue</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span> {</span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> resources <span class="op">=</span> <span class="cf">await</span> conn<span class="op">.</span><span class="at">client</span><span class="op">.</span><span class="fu">listResources</span>()</span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> skillResource <span class="op">=</span> resources<span class="op">.</span><span class="fu">find</span>(r <span class="kw">=&gt;</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>        r<span class="op">.</span><span class="at">uri</span><span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;skills://&#39;</span>) <span class="op">&amp;&amp;</span> r<span class="op">.</span><span class="at">uri</span><span class="op">.</span><span class="fu">endsWith</span>(<span class="st">&#39;/skills-list&#39;</span>)</span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>      )</span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="op">!</span>skillResource) <span class="cf">continue</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> content <span class="op">=</span> <span class="cf">await</span> conn<span class="op">.</span><span class="at">client</span><span class="op">.</span><span class="fu">readResource</span>(skillResource<span class="op">.</span><span class="at">uri</span>)</span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> definitions <span class="op">=</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">parse</span>(content<span class="op">.</span><span class="at">text</span>) <span class="im">as</span> SkillDefinition[]</span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> (<span class="kw">const</span> def <span class="kw">of</span> definitions) {</span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a>        <span class="kw">const</span> skill <span class="op">=</span> <span class="fu">buildSkillFromDefinition</span>(def<span class="op">,</span> conn<span class="op">.</span><span class="at">name</span>)</span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> (seenNames<span class="op">.</span><span class="fu">has</span>(skill<span class="op">.</span><span class="at">name</span>)) {</span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a>          log<span class="op">.</span><span class="fu">info</span>(<span class="vs">`Skipping MCP skill &#39;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">&#39; — shadowed`</span>)</span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>          <span class="cf">continue</span></span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a>        seenNames<span class="op">.</span><span class="fu">set</span>(skill<span class="op">.</span><span class="at">name</span><span class="op">,</span> <span class="vs">`mcp:</span><span class="sc">${</span>conn<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">`</span>)</span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a>        skills<span class="op">.</span><span class="fu">push</span>(skill)</span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">catch</span> (err) {</span>
+<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a>      log<span class="op">.</span><span class="fu">warn</span>(<span class="vs">`Failed to load skills from MCP server &#39;</span><span class="sc">${</span>conn<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">&#39;: </span><span class="sc">${</span>err<span class="sc">}</span><span class="vs">`</span>)</span>
+<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>MCP skills follow the same shadowing rules as file-based skills. If a
+project already defines a <code>deploy-staging</code> skill, the MCP
+server's version is skipped. This ensures that local customizations
+always win.</p>
+<h3 id="dynamic-refresh">Dynamic Refresh</h3>
+<p>MCP skill builders support hot-reload. When an MCP server's
+connection is re-established (after a disconnection or server restart),
+the skill registry re-queries the server's skill list and updates its
+internal state. Skills added by a server are removed when the server
+disconnects. This is implemented through the same connection lifecycle
+hooks that manage MCP tool registration (Chapter 15).</p>
+<h3 id="security-considerations">Security Considerations</h3>
+<p>MCP-registered skills cannot use dynamic injection
+(<code>!`command`</code>). This restriction exists because MCP servers
+are external — they could inject arbitrary shell commands into the
+user's environment. Only file-based skills (project, user, managed,
+bundled) have access to dynamic injection, because those files exist on
+the user's filesystem and are subject to the same trust model as any
+other script.</p>
+<hr />
+<h2 id="207-auto-activation-and-path-based-triggering">20.7
+Auto-Activation and Path-Based Triggering</h2>
+<p>Not all skills are invoked via slash commands. Some skills should
+activate automatically when the user is working with specific file
+types. The <code>paths</code> frontmatter field enables this:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="fu">name</span><span class="kw">:</span><span class="at"> api-conventions</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="fu">description</span><span class="kw">:</span><span class="at"> API design conventions for this project.</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="fu">paths</span><span class="kw">:</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">&quot;src/api/**&quot;</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">&quot;**/routes/**&quot;</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">&quot;**/endpoints/**&quot;</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a><span class="fu">user-invocable</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a><span class="fu">disable-model-invocation</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a><span class="co"># API Conventions</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a><span class="fu">When working with API files</span><span class="kw">:</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a><span class="kw">-</span><span class="at"> </span><span class="fu">Use RESTful naming</span><span class="kw">:</span><span class="at"> plural nouns for collections</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a><span class="kw">-</span><span class="at"> </span><span class="fu">Return consistent error objects</span><span class="kw">:</span><span class="at"> </span><span class="kw">{</span><span class="at"> </span><span class="fu">error</span><span class="kw">:</span><span class="at"> string</span><span class="kw">,</span><span class="at"> </span><span class="fu">code</span><span class="kw">:</span><span class="at"> number </span><span class="kw">}</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a><span class="kw">-</span><span class="at"> Validate request bodies with Zod schemas</span></span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a><span class="kw">-</span><span class="at"> ...</span></span></code></pre></div>
+<p>This skill has <code>user-invocable: false</code> — it does not
+appear in the <code>/</code> menu. It activates automatically when the
+user reads or edits files matching the glob patterns.</p>
+<h3 id="the-matching-algorithm">The Matching Algorithm</h3>
+<p>When the agent is about to process a user message, it checks which
+files are in the active context (recently read, edited, or mentioned).
+The matching function filters skills by their path triggers:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">findAutoActivatingSkills</span>(</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  registry<span class="op">:</span> SkillRegistry<span class="op">,</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  activePaths<span class="op">:</span> <span class="dt">string</span>[]<span class="op">,</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> Skill[] {</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> registry<span class="op">.</span><span class="at">skills</span><span class="op">.</span><span class="fu">filter</span>(skill <span class="kw">=&gt;</span> {</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Must not have auto-invocation disabled</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (skill<span class="op">.</span><span class="at">disableModelInvocation</span>) <span class="cf">return</span> <span class="kw">false</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Must have path triggers defined</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (skill<span class="op">.</span><span class="at">pathTriggers</span><span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="kw">false</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">// At least one active path must match a trigger</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> activePaths<span class="op">.</span><span class="fu">some</span>(filePath <span class="kw">=&gt;</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>      skill<span class="op">.</span><span class="at">pathTriggers</span><span class="op">.</span><span class="fu">some</span>(pattern <span class="kw">=&gt;</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>        <span class="fu">globMatch</span>(pattern<span class="op">,</span> filePath)</span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>      )</span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>  })</span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>globMatch</code> function supports three wildcard patterns,
+consistent with the permission system's glob matcher (Chapter 15):</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Matches</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>*</code></td>
+<td>Any characters except <code>/</code></td>
+<td><code>src/*.ts</code> matches <code>src/app.ts</code> but not
+<code>src/utils/app.ts</code></td>
+</tr>
+<tr>
+<td><code>**</code></td>
+<td>Any characters including <code>/</code></td>
+<td><code>src/**</code> matches <code>src/a/b/c.ts</code></td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>Exactly one character</td>
+<td><code>?.ts</code> matches <code>a.ts</code> but not
+<code>ab.ts</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="injection-into-system-prompt">Injection into System Prompt</h3>
+<p>Auto-activated skills are injected into the system prompt alongside
+explicitly invoked skills. The system prompt builder calls
+<code>formatSystemPromptSection()</code> to produce an XML listing:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">formatSystemPromptSection</span>(registry<span class="op">:</span> SkillRegistry)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> invocable <span class="op">=</span> registry<span class="op">.</span><span class="at">skills</span><span class="op">.</span><span class="fu">filter</span>(s <span class="kw">=&gt;</span> s<span class="op">.</span><span class="at">userInvocable</span>)</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (invocable<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="st">&#39;&#39;</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> output <span class="op">=</span> <span class="st">&#39;&lt;available_skills&gt;</span><span class="sc">\n</span><span class="st">&#39;</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> skill <span class="kw">of</span> invocable) {</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>    output <span class="op">+=</span> <span class="st">&#39;&lt;skill&gt;</span><span class="sc">\n</span><span class="st">&#39;</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>    output <span class="op">+=</span> <span class="vs">`  &lt;name&gt;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">&lt;/name&gt;</span><span class="sc">\n</span><span class="vs">`</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (skill<span class="op">.</span><span class="at">description</span>) {</span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>      output <span class="op">+=</span> <span class="vs">`  &lt;description&gt;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">description</span><span class="sc">}</span><span class="vs">&lt;/description&gt;</span><span class="sc">\n</span><span class="vs">`</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>    output <span class="op">+=</span> <span class="vs">`  &lt;location&gt;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">source</span><span class="sc">}</span><span class="vs">&lt;/location&gt;</span><span class="sc">\n</span><span class="vs">`</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (skill<span class="op">.</span><span class="at">context</span> <span class="op">===</span> <span class="st">&#39;fork&#39;</span>) {</span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>      output <span class="op">+=</span> <span class="st">&#39;  &lt;context&gt;fork&lt;/context&gt;</span><span class="sc">\n</span><span class="st">&#39;</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (skill<span class="op">.</span><span class="at">argumentHint</span>) {</span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>      output <span class="op">+=</span> <span class="vs">`  &lt;argument-hint&gt;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">argumentHint</span><span class="sc">}</span><span class="vs">&lt;/argument-hint&gt;</span><span class="sc">\n</span><span class="vs">`</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (skill<span class="op">.</span><span class="at">allowedTools</span>) {</span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a>      output <span class="op">+=</span> <span class="vs">`  &lt;allowed-tools&gt;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">allowedTools</span><span class="op">.</span><span class="fu">join</span>(<span class="st">&#39;, &#39;</span>)<span class="sc">}</span><span class="vs">&lt;/allowed-tools&gt;</span><span class="sc">\n</span><span class="vs">`</span></span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb20-22"><a href="#cb20-22" aria-hidden="true" tabindex="-1"></a>    output <span class="op">+=</span> <span class="st">&#39;&lt;/skill&gt;</span><span class="sc">\n</span><span class="st">&#39;</span></span>
+<span id="cb20-23"><a href="#cb20-23" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb20-24"><a href="#cb20-24" aria-hidden="true" tabindex="-1"></a>  output <span class="op">+=</span> <span class="st">&#39;&lt;/available_skills&gt;&#39;</span></span>
+<span id="cb20-25"><a href="#cb20-25" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> output</span>
+<span id="cb20-26"><a href="#cb20-26" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The XML-like format was chosen because LLMs reliably parse
+angle-bracket structures. Each skill entry includes: name, description,
+source (project/user/managed/plugin/bundled), context mode, argument
+hint, and allowed tools. This gives the LLM enough information to decide
+when to suggest a skill to the user or auto-activate one based on the
+conversation context.</p>
+<h3 id="auto-activation-vs-auto-invocation">Auto-Activation vs.
+Auto-Invocation</h3>
+<p>There is a subtle but important distinction:</p>
+<ul>
+<li><strong>Auto-activation</strong> means the skill's content is
+injected into the system prompt when relevant files are in context. The
+LLM sees the skill's instructions and follows them.</li>
+<li><strong>Auto-invocation</strong> means the LLM decides to "call" the
+skill as if the user typed the slash command. This is controlled by
+<code>disable-model-invocation</code>.</li>
+</ul>
+<p>A skill with <code>paths: ["src/api/**"]</code> and
+<code>disable-model-invocation: false</code> will both auto-activate
+(its instructions appear in the prompt when API files are active) and be
+auto-invocable (the LLM can decide to "run" the skill based on
+conversation context). Setting
+<code>disable-model-invocation: true</code> allows auto-activation but
+prevents auto-invocation — the instructions are available but the LLM
+cannot trigger the full skill workflow independently.</p>
+<hr />
+<h2 id="208-argument-substitution-and-token-estimation">20.8 Argument
+Substitution and Token Estimation</h2>
+<h3 id="argument-substitution">Argument Substitution</h3>
+<p>When a user types <code>/pr-summary 42</code>, the system splits the
+input into <code>(name: "pr-summary", args: "42")</code>:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">parseSlashCommand</span>(input<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> [<span class="dt">string</span><span class="op">,</span> <span class="dt">string</span>] <span class="op">|</span> <span class="dt">null</span> {</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> trimmed <span class="op">=</span> input<span class="op">.</span><span class="fu">trim</span>()</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>trimmed<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;/&#39;</span>) <span class="op">||</span> trimmed<span class="op">.</span><span class="at">length</span> <span class="op">&lt;=</span> <span class="dv">1</span>) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> withoutSlash <span class="op">=</span> trimmed<span class="op">.</span><span class="fu">slice</span>(<span class="dv">1</span>)</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> spaceIndex <span class="op">=</span> withoutSlash<span class="op">.</span><span class="fu">indexOf</span>(<span class="st">&#39; &#39;</span>)</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (spaceIndex <span class="op">===</span> <span class="op">-</span><span class="dv">1</span>) {</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> [withoutSlash<span class="op">,</span> <span class="st">&#39;&#39;</span>]  <span class="co">// No arguments</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> [</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    withoutSlash<span class="op">.</span><span class="fu">slice</span>(<span class="dv">0</span><span class="op">,</span> spaceIndex)<span class="op">,</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    withoutSlash<span class="op">.</span><span class="fu">slice</span>(spaceIndex <span class="op">+</span> <span class="dv">1</span>)<span class="op">.</span><span class="fu">trim</span>()<span class="op">,</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>  ]</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The arguments string is then substituted into the skill body via
+<code>replaceAll('$ARGUMENTS', args)</code>. This is a simple string
+replacement — no escaping, no regex, no template syntax. If
+<code>$ARGUMENTS</code> appears multiple times in the skill body, each
+occurrence is replaced. This is intentional: a PR summary skill might
+need the PR number in the diff command, the review section, and the link
+section.</p>
+<h3 id="slash-command-dispatch">Slash Command Dispatch</h3>
+<p>The full dispatch pipeline:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">executeSlashCommand</span>(</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  registry<span class="op">:</span> SkillRegistry<span class="op">,</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  input<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> SlashCommandResult <span class="op">|</span> <span class="dt">null</span> {</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> parsed <span class="op">=</span> <span class="fu">parseSlashCommand</span>(input)</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>parsed) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> [name<span class="op">,</span> args] <span class="op">=</span> parsed</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Lookup: exact match first, then case-insensitive fallback</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> skill <span class="op">=</span> registry<span class="op">.</span><span class="fu">findByName</span>(name) <span class="op">??</span> registry<span class="op">.</span><span class="fu">findByNameCI</span>(name)</span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>skill) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Check invocability</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>skill<span class="op">.</span><span class="at">userInvocable</span>) {</span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>      skillName<span class="op">:</span> skill<span class="op">.</span><span class="at">name</span><span class="op">,</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>      resolvedBody<span class="op">:</span> <span class="st">&#39;&#39;</span><span class="op">,</span></span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>      isFork<span class="op">:</span> <span class="kw">false</span><span class="op">,</span></span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>      error<span class="op">:</span> <span class="vs">`Skill &#39;</span><span class="sc">${</span>skill<span class="op">.</span><span class="at">name</span><span class="sc">}</span><span class="vs">&#39; is not user-invocable`</span><span class="op">,</span></span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Resolve body with injection cache</span></span>
+<span id="cb22-25"><a href="#cb22-25" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> resolvedBody <span class="op">=</span> <span class="fu">resolveBody</span>(skill<span class="op">,</span> args<span class="op">,</span> registry<span class="op">.</span><span class="at">injectCache</span>)</span>
+<span id="cb22-26"><a href="#cb22-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-27"><a href="#cb22-27" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb22-28"><a href="#cb22-28" aria-hidden="true" tabindex="-1"></a>    skillName<span class="op">:</span> skill<span class="op">.</span><span class="at">name</span><span class="op">,</span></span>
+<span id="cb22-29"><a href="#cb22-29" aria-hidden="true" tabindex="-1"></a>    resolvedBody<span class="op">,</span></span>
+<span id="cb22-30"><a href="#cb22-30" aria-hidden="true" tabindex="-1"></a>    isFork<span class="op">:</span> skill<span class="op">.</span><span class="at">context</span> <span class="op">===</span> <span class="st">&#39;fork&#39;</span><span class="op">,</span></span>
+<span id="cb22-31"><a href="#cb22-31" aria-hidden="true" tabindex="-1"></a>    agentType<span class="op">:</span> skill<span class="op">.</span><span class="at">agent</span><span class="op">,</span></span>
+<span id="cb22-32"><a href="#cb22-32" aria-hidden="true" tabindex="-1"></a>    allowedTools<span class="op">:</span> skill<span class="op">.</span><span class="at">allowedTools</span><span class="op">,</span></span>
+<span id="cb22-33"><a href="#cb22-33" aria-hidden="true" tabindex="-1"></a>    model<span class="op">:</span> skill<span class="op">.</span><span class="at">model</span><span class="op">,</span></span>
+<span id="cb22-34"><a href="#cb22-34" aria-hidden="true" tabindex="-1"></a>    error<span class="op">:</span> <span class="dt">null</span><span class="op">,</span></span>
+<span id="cb22-35"><a href="#cb22-35" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb22-36"><a href="#cb22-36" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The lookup order — exact match first, then case-insensitive —
+prevents ambiguity. If you have skills named <code>PR</code> and
+<code>pr</code>, exact match differentiates them. But if you only have
+<code>pr-summary</code> and the user types <code>/PR-Summary</code>, the
+case-insensitive fallback catches it. This matches how most command-line
+tools handle case: prefer exact, fall back to insensitive.</p>
+<h3 id="the-slashcommandresult">The SlashCommandResult</h3>
+<p>The result struct carries everything the caller needs:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SlashCommandResult {</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>  skillName<span class="op">:</span> <span class="dt">string</span>          <span class="co">// For logging and display</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  resolvedBody<span class="op">:</span> <span class="dt">string</span>       <span class="co">// The fully-materialized prompt text</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  isFork<span class="op">:</span> <span class="dt">boolean</span>            <span class="co">// Spawn subagent or inject inline?</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  agentType<span class="op">?:</span> <span class="dt">string</span>         <span class="co">// Which agent type for fork mode</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  allowedTools<span class="op">?:</span> <span class="dt">string</span>[]    <span class="co">// Tool restrictions for the skill</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>  model<span class="op">?:</span> <span class="dt">string</span>             <span class="co">// Model override</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  error<span class="op">?:</span> <span class="dt">string</span>             <span class="co">// Non-null if dispatch failed</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The caller (the command dispatch system, as we will cover in Chapter
+22) uses this struct to either inject the resolved body into the current
+conversation (for inline skills) or spawn a subagent with the
+appropriate model and tool restrictions (for fork skills).</p>
+<h3 id="token-estimation-for-skills">Token Estimation for Skills</h3>
+<p>Skills consume context window tokens. A skill with a large body —
+especially one with dynamic injections that expand to thousands of lines
+of diff output — can consume a significant fraction of the available
+context. The system estimates token consumption before injection:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">estimateSkillTokens</span>(resolvedBody<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Rough estimate: 1 token per 4 characters for English text</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Adjusted for code: 1 token per 3.5 characters</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> charCount <span class="op">=</span> resolvedBody<span class="op">.</span><span class="at">length</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> hasCode <span class="op">=</span> resolvedBody<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;```&#39;</span>) <span class="op">||</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    resolvedBody<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;diff --git&#39;</span>)</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> charsPerToken <span class="op">=</span> hasCode <span class="op">?</span> <span class="fl">3.5</span> <span class="op">:</span> <span class="fl">4.0</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">ceil</span>(charCount <span class="op">/</span> charsPerToken)</span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">shouldTruncateSkill</span>(</span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>  resolvedBody<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>  contextBudget<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>  usedTokens<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> { truncate<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> maxChars<span class="op">:</span> <span class="dt">number</span> } {</span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> estimated <span class="op">=</span> <span class="fu">estimateSkillTokens</span>(resolvedBody)</span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> available <span class="op">=</span> contextBudget <span class="op">-</span> usedTokens</span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> skillBudget <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">floor</span>(available <span class="op">*</span> <span class="fl">0.3</span>)  <span class="co">// Skills get max 30% of remaining</span></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (estimated <span class="op">&lt;=</span> skillBudget) {</span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { truncate<span class="op">:</span> <span class="kw">false</span><span class="op">,</span> maxChars<span class="op">:</span> resolvedBody<span class="op">.</span><span class="at">length</span> }</span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Truncate to fit</span></span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> charsPerToken <span class="op">=</span> resolvedBody<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;```&#39;</span>) <span class="op">?</span> <span class="fl">3.5</span> <span class="op">:</span> <span class="fl">4.0</span></span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> maxChars <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">floor</span>(skillBudget <span class="op">*</span> charsPerToken)</span>
+<span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { truncate<span class="op">:</span> <span class="kw">true</span><span class="op">,</span> maxChars }</span>
+<span id="cb24-28"><a href="#cb24-28" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The 30% budget cap prevents a single skill from consuming the entire
+context window. This is especially important for skills like
+<code>/pr-summary</code> where the injected diff can be tens of
+thousands of lines. When truncation is needed, the system truncates from
+the end of the resolved body and appends a
+<code>(truncated — showing first N characters)</code> marker so the LLM
+knows it is working with partial data.</p>
+<p>This connects directly to the token estimation system we built in
+Chapter 7. The character-based estimate is intentionally approximate —
+it avoids the cost of running the actual tokenizer for a quick
+should-we-truncate decision. As we discussed in Chapter 7, the actual
+tokenizer is only invoked when precise counts matter (API calls, context
+window boundary decisions). For skill injection, the estimate is
+sufficient.</p>
+<hr />
+<h2 id="209-the-skill-auto-improvement-engine">20.9 The Skill
+Auto-Improvement Engine</h2>
+<p>The auto-improvement engine is a background system that analyzes
+conversation turns and proposes updates to skill files. This is the
+system that makes skills get better over time without manual
+intervention.</p>
+<h3 id="architecture">Architecture</h3>
+<p>The engine lives in <code>skills/improvement.rs</code> (797 lines)
+and consists of four components:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SkillAnalyzer</code></td>
+<td>Main orchestrator. Analyzes turn batches and collects
+suggestions.</td>
+</tr>
+<tr>
+<td><code>SkillMetrics</code></td>
+<td>Per-skill success/failure tracking with rolling window.</td>
+</tr>
+<tr>
+<td><code>SkillUpdate</code></td>
+<td>A proposed change to a skill file (add, modify, or remove a
+section).</td>
+</tr>
+<tr>
+<td>Four detection heuristics</td>
+<td>Pattern matchers that identify improvement opportunities.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="metrics-tracking">Metrics Tracking</h3>
+<p>Every skill invocation is recorded:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SkillMetrics {</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  skillName<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  invocations<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  successes<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  failures<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>  lastUpdated<span class="op">:</span> <span class="bu">Date</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>  recentOutcomes<span class="op">:</span> <span class="dt">boolean</span>[]  <span class="co">// Rolling window of 50</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">recordOutcome</span>(metrics<span class="op">:</span> SkillMetrics<span class="op">,</span> success<span class="op">:</span> <span class="dt">boolean</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>  metrics<span class="op">.</span><span class="at">invocations</span><span class="op">++</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (success) metrics<span class="op">.</span><span class="at">successes</span><span class="op">++</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">else</span> metrics<span class="op">.</span><span class="at">failures</span><span class="op">++</span></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>  metrics<span class="op">.</span><span class="at">recentOutcomes</span><span class="op">.</span><span class="fu">unshift</span>(success)</span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (metrics<span class="op">.</span><span class="at">recentOutcomes</span><span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">50</span>) {</span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a>    metrics<span class="op">.</span><span class="at">recentOutcomes</span><span class="op">.</span><span class="at">length</span> <span class="op">=</span> <span class="dv">50</span>  <span class="co">// Truncate</span></span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>  metrics<span class="op">.</span><span class="at">lastUpdated</span> <span class="op">=</span> <span class="kw">new</span> <span class="bu">Date</span>()</span>
+<span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Metrics are persisted to <code>.claude/skill_metrics/*.json</code> —
+one file per skill. The rolling window of 50 outcomes provides
+recency-weighted data: a skill that failed its last 5 invocations after
+45 successes has a 90% overall success rate but a 0% recent success
+rate. Both signals matter.</p>
+<h3 id="the-four-detection-heuristics">The Four Detection
+Heuristics</h3>
+<p>The engine runs four independent heuristics over batches of
+conversation turns:</p>
+<p><strong>1. Repeated Tool Failures</strong></p>
+<p>Triggers when the same tool fails two or more times within a batch of
+5 turns:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">detectRepeatedFailures</span>(turns<span class="op">:</span> Turn[])<span class="op">:</span> SkillUpdate[] {</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> failCounts <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">number</span><span class="op">&gt;</span>()</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> turn <span class="kw">of</span> turns) {</span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> call <span class="kw">of</span> turn<span class="op">.</span><span class="at">toolCalls</span>) {</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="op">!</span>call<span class="op">.</span><span class="at">success</span>) {</span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>        failCounts<span class="op">.</span><span class="fu">set</span>(call<span class="op">.</span><span class="at">name</span><span class="op">,</span> (failCounts<span class="op">.</span><span class="fu">get</span>(call<span class="op">.</span><span class="at">name</span>) <span class="op">??</span> <span class="dv">0</span>) <span class="op">+</span> <span class="dv">1</span>)</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> updates<span class="op">:</span> SkillUpdate[] <span class="op">=</span> []</span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [tool<span class="op">,</span> count] <span class="kw">of</span> failCounts) {</span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (count <span class="op">&gt;=</span> <span class="dv">2</span>) {</span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>      updates<span class="op">.</span><span class="fu">push</span>({</span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>        section<span class="op">:</span> <span class="st">&#39;## Error Handling&#39;</span><span class="op">,</span></span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>        changeType<span class="op">:</span> <span class="st">&#39;add&#39;</span><span class="op">,</span></span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>        content<span class="op">:</span> <span class="vs">`When </span><span class="sc">\`${</span>tool<span class="sc">}\`</span><span class="vs"> fails, retry with corrected `</span> <span class="op">+</span></span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>          <span class="vs">`arguments or use an alternative tool.`</span><span class="op">,</span></span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a>        confidence<span class="op">:</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">min</span>(<span class="fl">0.6</span> <span class="op">+</span> count <span class="op">*</span> <span class="fl">0.1</span><span class="op">,</span> <span class="fl">0.9</span>)<span class="op">,</span></span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a>        reason<span class="op">:</span> <span class="vs">`Tool &#39;</span><span class="sc">${</span>tool<span class="sc">}</span><span class="vs">&#39; failed </span><span class="sc">${</span>count<span class="sc">}</span><span class="vs"> times in recent turns`</span><span class="op">,</span></span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>      })</span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb26-23"><a href="#cb26-23" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-24"><a href="#cb26-24" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> updates</span>
+<span id="cb26-25"><a href="#cb26-25" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Confidence scales from 0.7 (2 failures) to 0.9 (3+ failures). Only
+the 3+ case reaches the auto-apply threshold of 0.85.</p>
+<p><strong>2. Undocumented Tool Usage</strong></p>
+<p>Triggers when a tool is used three or more times in a batch but is
+not mentioned in any skill's body:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">detectUndocumentedTools</span>(</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  turns<span class="op">:</span> Turn[]<span class="op">,</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>  skills<span class="op">:</span> Skill[]<span class="op">,</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> SkillUpdate[] {</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> toolUsage <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">number</span><span class="op">&gt;</span>()</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> turn <span class="kw">of</span> turns) {</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> call <span class="kw">of</span> turn<span class="op">.</span><span class="at">toolCalls</span>) {</span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (call<span class="op">.</span><span class="at">success</span>) {</span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>        toolUsage<span class="op">.</span><span class="fu">set</span>(call<span class="op">.</span><span class="at">name</span><span class="op">,</span> (toolUsage<span class="op">.</span><span class="fu">get</span>(call<span class="op">.</span><span class="at">name</span>) <span class="op">??</span> <span class="dv">0</span>) <span class="op">+</span> <span class="dv">1</span>)</span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> documented <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;</span>()</span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> skill <span class="kw">of</span> skills) {</span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Extract tool names mentioned in skill body</span></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> mentions <span class="op">=</span> skill<span class="op">.</span><span class="at">bodyRaw</span><span class="op">.</span><span class="fu">match</span>(<span class="ss">/`</span><span class="sc">(\w+)</span><span class="ss">`/g</span>) <span class="op">??</span> []</span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> m <span class="kw">of</span> mentions) documented<span class="op">.</span><span class="fu">add</span>(m<span class="op">.</span><span class="fu">slice</span>(<span class="dv">1</span><span class="op">,</span> <span class="op">-</span><span class="dv">1</span>))</span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> updates<span class="op">:</span> SkillUpdate[] <span class="op">=</span> []</span>
+<span id="cb27-22"><a href="#cb27-22" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> [tool<span class="op">,</span> count] <span class="kw">of</span> toolUsage) {</span>
+<span id="cb27-23"><a href="#cb27-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (count <span class="op">&gt;=</span> <span class="dv">3</span> <span class="op">&amp;&amp;</span> <span class="op">!</span>documented<span class="op">.</span><span class="fu">has</span>(tool)) {</span>
+<span id="cb27-24"><a href="#cb27-24" aria-hidden="true" tabindex="-1"></a>      updates<span class="op">.</span><span class="fu">push</span>({</span>
+<span id="cb27-25"><a href="#cb27-25" aria-hidden="true" tabindex="-1"></a>        section<span class="op">:</span> <span class="st">&#39;## Tools&#39;</span><span class="op">,</span></span>
+<span id="cb27-26"><a href="#cb27-26" aria-hidden="true" tabindex="-1"></a>        changeType<span class="op">:</span> <span class="st">&#39;add&#39;</span><span class="op">,</span></span>
+<span id="cb27-27"><a href="#cb27-27" aria-hidden="true" tabindex="-1"></a>        content<span class="op">:</span> <span class="vs">`Consider using </span><span class="sc">\`${</span>tool<span class="sc">}\`</span><span class="vs"> for related tasks.`</span><span class="op">,</span></span>
+<span id="cb27-28"><a href="#cb27-28" aria-hidden="true" tabindex="-1"></a>        confidence<span class="op">:</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">min</span>(<span class="fl">0.5</span> <span class="op">+</span> count <span class="op">*</span> <span class="fl">0.05</span><span class="op">,</span> <span class="fl">0.8</span>)<span class="op">,</span></span>
+<span id="cb27-29"><a href="#cb27-29" aria-hidden="true" tabindex="-1"></a>        reason<span class="op">:</span> <span class="vs">`Tool &#39;</span><span class="sc">${</span>tool<span class="sc">}</span><span class="vs">&#39; used </span><span class="sc">${</span>count<span class="sc">}</span><span class="vs"> times but not documented`</span><span class="op">,</span></span>
+<span id="cb27-30"><a href="#cb27-30" aria-hidden="true" tabindex="-1"></a>      })</span>
+<span id="cb27-31"><a href="#cb27-31" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb27-32"><a href="#cb27-32" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb27-33"><a href="#cb27-33" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> updates</span>
+<span id="cb27-34"><a href="#cb27-34" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Max confidence: 0.8. This never auto-applies — it always requires
+human review.</p>
+<p><strong>3. Long No-Tool Turns</strong></p>
+<p>Triggers when an assistant turn exceeds 2,000 characters with zero
+tool calls:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">detectLongNoToolTurns</span>(turns<span class="op">:</span> Turn[])<span class="op">:</span> SkillUpdate[] {</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> updates<span class="op">:</span> SkillUpdate[] <span class="op">=</span> []</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> turn <span class="kw">of</span> turns) {</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (turn<span class="op">.</span><span class="at">role</span> <span class="op">===</span> <span class="st">&#39;assistant&#39;</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>        turn<span class="op">.</span><span class="at">content</span><span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">2000</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>        turn<span class="op">.</span><span class="at">toolCalls</span><span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>        turn<span class="op">.</span><span class="at">activeSkill</span>) {</span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>      updates<span class="op">.</span><span class="fu">push</span>({</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>        section<span class="op">:</span> <span class="st">&#39;## Output Examples&#39;</span><span class="op">,</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>        changeType<span class="op">:</span> <span class="st">&#39;add&#39;</span><span class="op">,</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>        content<span class="op">:</span> <span class="st">&#39;Include a concrete output example to guide format.&#39;</span><span class="op">,</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>        confidence<span class="op">:</span> <span class="fl">0.55</span><span class="op">,</span></span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>        reason<span class="op">:</span> <span class="st">&#39;Assistant produced long text without tool use — may need structure&#39;</span><span class="op">,</span></span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>      })</span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> updates</span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Fixed confidence of 0.55. This is a weak signal — sometimes long text
+output is exactly what the skill intended.</p>
+<p><strong>4. Missing Section References</strong></p>
+<p>Detects when assistant turns reference section headings that may not
+exist in the skill file:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">detectMissingSectionRefs</span>(</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  turns<span class="op">:</span> Turn[]<span class="op">,</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>  skills<span class="op">:</span> Skill[]<span class="op">,</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> SkillUpdate[] {</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> updates<span class="op">:</span> SkillUpdate[] <span class="op">=</span> []</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> turn <span class="kw">of</span> turns) {</span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (turn<span class="op">.</span><span class="at">role</span> <span class="op">!==</span> <span class="st">&#39;assistant&#39;</span> <span class="op">||</span> <span class="op">!</span>turn<span class="op">.</span><span class="at">activeSkill</span>) <span class="cf">continue</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> skill <span class="op">=</span> skills<span class="op">.</span><span class="fu">find</span>(s <span class="kw">=&gt;</span> s<span class="op">.</span><span class="at">name</span> <span class="op">===</span> turn<span class="op">.</span><span class="at">activeSkill</span>)</span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>skill) <span class="cf">continue</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> headingRefs <span class="op">=</span> turn<span class="op">.</span><span class="at">content</span><span class="op">.</span><span class="fu">match</span>(<span class="ss">/## </span><span class="sc">\w[\w\s]+</span><span class="ss">/g</span>) <span class="op">??</span> []</span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> ref <span class="kw">of</span> headingRefs) {</span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="op">!</span>skill<span class="op">.</span><span class="at">bodyRaw</span><span class="op">.</span><span class="fu">includes</span>(ref)) {</span>
+<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a>        updates<span class="op">.</span><span class="fu">push</span>({</span>
+<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a>          section<span class="op">:</span> ref<span class="op">.</span><span class="fu">trim</span>()<span class="op">,</span></span>
+<span id="cb29-16"><a href="#cb29-16" aria-hidden="true" tabindex="-1"></a>          changeType<span class="op">:</span> <span class="st">&#39;add&#39;</span><span class="op">,</span></span>
+<span id="cb29-17"><a href="#cb29-17" aria-hidden="true" tabindex="-1"></a>          content<span class="op">:</span> <span class="vs">`(Section referenced in output but not defined in skill)`</span><span class="op">,</span></span>
+<span id="cb29-18"><a href="#cb29-18" aria-hidden="true" tabindex="-1"></a>          confidence<span class="op">:</span> <span class="fl">0.45</span><span class="op">,</span></span>
+<span id="cb29-19"><a href="#cb29-19" aria-hidden="true" tabindex="-1"></a>          reason<span class="op">:</span> <span class="vs">`Assistant referenced &#39;</span><span class="sc">${</span>ref<span class="sc">}</span><span class="vs">&#39; which does not exist in skill`</span><span class="op">,</span></span>
+<span id="cb29-20"><a href="#cb29-20" aria-hidden="true" tabindex="-1"></a>        })</span>
+<span id="cb29-21"><a href="#cb29-21" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb29-22"><a href="#cb29-22" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb29-23"><a href="#cb29-23" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb29-24"><a href="#cb29-24" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> updates</span>
+<span id="cb29-25"><a href="#cb29-25" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Fixed confidence of 0.45 — the weakest signal. Section headings in
+assistant output may be entirely appropriate without being in the skill
+template.</p>
+<h3 id="deduplication-and-auto-apply">Deduplication and Auto-Apply</h3>
+<p>When multiple heuristics produce updates targeting the same
+<code>(file, section)</code>, the higher-confidence update wins:</p>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">deduplicateUpdates</span>(updates<span class="op">:</span> SkillUpdate[])<span class="op">:</span> SkillUpdate[] {</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> seen <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">number</span><span class="op">&gt;</span>()  <span class="co">// key -&gt; index in result</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> result<span class="op">:</span> SkillUpdate[] <span class="op">=</span> []</span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> update <span class="kw">of</span> updates) {</span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> key <span class="op">=</span> <span class="vs">`</span><span class="sc">${</span>update<span class="op">.</span><span class="at">skillFile</span><span class="sc">}</span><span class="vs">::</span><span class="sc">${</span>update<span class="op">.</span><span class="at">section</span><span class="sc">}</span><span class="vs">`</span></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> existingIndex <span class="op">=</span> seen<span class="op">.</span><span class="fu">get</span>(key)</span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (existingIndex <span class="op">!==</span> <span class="kw">undefined</span>) {</span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (update<span class="op">.</span><span class="at">confidence</span> <span class="op">&gt;</span> result[existingIndex]<span class="op">.</span><span class="at">confidence</span>) {</span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>        result[existingIndex] <span class="op">=</span> update  <span class="co">// Higher confidence wins</span></span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>      seen<span class="op">.</span><span class="fu">set</span>(key<span class="op">,</span> result<span class="op">.</span><span class="at">length</span>)</span>
+<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>      result<span class="op">.</span><span class="fu">push</span>(update)</span>
+<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb30-17"><a href="#cb30-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> result</span>
+<span id="cb30-18"><a href="#cb30-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>After deduplication, updates with confidence &gt;= 0.85 are
+auto-applied:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> AUTO_APPLY_CONFIDENCE <span class="op">=</span> <span class="fl">0.85</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">analyzeAndApply</span>(</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>  turns<span class="op">:</span> Turn[]<span class="op">,</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>  skills<span class="op">:</span> Skill[]<span class="op">,</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>  autoApply<span class="op">:</span> <span class="dt">boolean</span><span class="op">,</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> SkillUpdate[] {</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> updates <span class="op">=</span> [</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span><span class="fu">detectRepeatedFailures</span>(turns)<span class="op">,</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span><span class="fu">detectUndocumentedTools</span>(turns<span class="op">,</span> skills)<span class="op">,</span></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span><span class="fu">detectLongNoToolTurns</span>(turns)<span class="op">,</span></span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span><span class="fu">detectMissingSectionRefs</span>(turns<span class="op">,</span> skills)<span class="op">,</span></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>  ]</span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a>  updates <span class="op">=</span> <span class="fu">deduplicateUpdates</span>(updates)</span>
+<span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (autoApply) {</span>
+<span id="cb31-18"><a href="#cb31-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> update <span class="kw">of</span> updates) {</span>
+<span id="cb31-19"><a href="#cb31-19" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (update<span class="op">.</span><span class="at">confidence</span> <span class="op">&gt;=</span> AUTO_APPLY_CONFIDENCE) {</span>
+<span id="cb31-20"><a href="#cb31-20" aria-hidden="true" tabindex="-1"></a>        <span class="fu">applyUpdate</span>(update)</span>
+<span id="cb31-21"><a href="#cb31-21" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb31-22"><a href="#cb31-22" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb31-23"><a href="#cb31-23" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb31-24"><a href="#cb31-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-25"><a href="#cb31-25" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> updates</span>
+<span id="cb31-26"><a href="#cb31-26" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Given the four heuristics' confidence ranges, only
+<code>detectRepeatedFailures</code> with 3+ failures can reach the
+auto-apply threshold. This is a deliberately conservative design —
+automatic skill modification should be rare and high-confidence.</p>
+<h3 id="skill-ranking">Skill Ranking</h3>
+<p>The metrics enable ranking skills by effectiveness:</p>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MIN_INVOCATIONS_FOR_RANKING <span class="op">=</span> <span class="dv">3</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">rankSkills</span>(</span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>  metrics<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> SkillMetrics<span class="op">&gt;,</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Array</span><span class="op">&lt;</span>{ name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> successRate<span class="op">:</span> <span class="dt">number</span> }<span class="op">&gt;</span> {</span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> rankable <span class="op">=</span> [<span class="op">...</span>metrics<span class="op">.</span><span class="fu">values</span>()]</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">filter</span>(m <span class="kw">=&gt;</span> m<span class="op">.</span><span class="at">invocations</span> <span class="op">&gt;=</span> MIN_INVOCATIONS_FOR_RANKING)</span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">map</span>(m <span class="kw">=&gt;</span> ({</span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>      name<span class="op">:</span> m<span class="op">.</span><span class="at">skillName</span><span class="op">,</span></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>      successRate<span class="op">:</span> m<span class="op">.</span><span class="at">successes</span> <span class="op">/</span> m<span class="op">.</span><span class="at">invocations</span><span class="op">,</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>    }))</span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">sort</span>((a<span class="op">,</span> b) <span class="kw">=&gt;</span> b<span class="op">.</span><span class="at">successRate</span> <span class="op">-</span> a<span class="op">.</span><span class="at">successRate</span>)</span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> rankable</span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Skills with fewer than 3 invocations are excluded — there is not
+enough data for a meaningful ranking. This ranking can be exposed
+through a <code>/skills stats</code> command to help users identify
+skills that need improvement.</p>
+<hr />
+<h2 id="2010-putting-it-all-together-skill-lifecycle">20.10 Putting It
+All Together: Skill Lifecycle</h2>
+<p>Here is the complete lifecycle of a skill, from creation to
+improvement:</p>
+<pre><code>1. AUTHORING
+   User creates .claude/skills/my-skill/SKILL.md
+   with YAML frontmatter and markdown body
+          |
+          v
+2. LOADING
+   SkillRegistry::load() scans all 5 sources
+   Parses frontmatter, validates, deduplicates by name
+   Project skills shadow user skills
+          |
+          v
+3. REGISTRATION
+   Skills injected into system prompt (&lt;available_skills&gt; XML)
+   Auto-activating skills matched against active file paths
+   Slash commands registered for user-invocable skills
+          |
+          v
+4. INVOCATION
+   User types /my-skill args
+   OR LLM auto-triggers based on description match
+   OR file path matches auto-activate trigger
+          |
+          v
+5. RESOLUTION
+   $ARGUMENTS replaced throughout body
+   !`command` directives executed (cached)
+   Token estimation, truncation if needed
+          |
+          v
+6. EXECUTION
+   Inline: resolved body injected into conversation
+   Fork: subagent spawned with model/tool overrides
+          |
+          v
+7. TRACKING
+   SkillMetrics records success/failure outcome
+   Rolling window of 50 recent outcomes maintained
+          |
+          v
+8. IMPROVEMENT
+   SkillAnalyzer runs 4 heuristics over turn batches
+   High-confidence updates auto-applied to SKILL.md
+   Lower-confidence suggestions presented to user</code></pre>
+<h3 id="integration-points">Integration Points</h3>
+<p>The skill system does not exist in isolation. It connects to nearly
+every other system we have built:</p>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>Integration</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Query Loop</strong> (Chapter 4)</td>
+<td>Resolved skill body is injected as a user message or system
+context</td>
+</tr>
+<tr>
+<td><strong>Tool System</strong> (Chapter 8)</td>
+<td><code>allowed-tools</code> field restricts available tools during
+skill execution</td>
+</tr>
+<tr>
+<td><strong>Permission System</strong> (Chapter 15)</td>
+<td>Tool restrictions from skills are evaluated alongside permission
+rules</td>
+</tr>
+<tr>
+<td><strong>Hook System</strong> (Chapter 18)</td>
+<td>Skills can reference hooks, and hooks can inspect skill
+invocations</td>
+</tr>
+<tr>
+<td><strong>Subagent System</strong> (Chapter 13)</td>
+<td><code>context: fork</code> skills spawn subagents with model and
+tool overrides</td>
+</tr>
+<tr>
+<td><strong>Token Estimation</strong> (Chapter 7)</td>
+<td>Skill body size is estimated to prevent context window overflow</td>
+</tr>
+<tr>
+<td><strong>System Prompt</strong> (Chapter 25)</td>
+<td>Skills are listed in the system prompt for LLM awareness</td>
+</tr>
+<tr>
+<td><strong>MCP</strong> (Chapter 15)</td>
+<td>MCP servers can register dynamic skills via the skill builder
+protocol</td>
+</tr>
+<tr>
+<td><strong>Memory</strong> (Chapter 23)</td>
+<td>The <code>remember</code> skill writes to persistent memory
+storage</td>
+</tr>
+<tr>
+<td><strong>Configuration</strong> (Chapter 21)</td>
+<td>Feature flag <code>skill_improvement</code> gates the
+auto-improvement engine</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2
+id="2011-building-your-own-skill-system-implementation-checklist">20.11
+Building Your Own Skill System: Implementation Checklist</h2>
+<p>If you are building an AI CLI agent and want to implement a skill
+system, here is the prioritized order:</p>
+<h3 id="phase-1-minimal-viable-skills">Phase 1: Minimal Viable
+Skills</h3>
+<ol type="1">
+<li><strong>File-based loading</strong> from one directory. Parse
+<code>SKILL.md</code> files with simple key-value frontmatter.</li>
+<li><strong>Slash command dispatch.</strong> Parse
+<code>/name args</code>, look up skill, inject body into
+conversation.</li>
+<li><strong><code>$ARGUMENTS</code> substitution.</strong> Simple
+<code>replaceAll</code>.</li>
+<li>Three bundled skills: <code>verify</code>, <code>simplify</code>,
+and one domain-specific skill for your users.</li>
+</ol>
+<h3 id="phase-2-multi-source-and-injection">Phase 2: Multi-Source and
+Injection</h3>
+<ol start="5" type="1">
+<li><strong>Two-directory loading</strong> with project shadowing user.
+Add the <code>seenNames</code> deduplication.</li>
+<li><strong>Dynamic context injection</strong>
+(<code>!`command`</code>). Add the inject cache.</li>
+<li><strong>Auto-activation</strong> via <code>paths</code> globs.
+Inject matching skills into system prompt.</li>
+<li><strong>Token estimation</strong> to prevent skills from consuming
+the entire context.</li>
+</ol>
+<h3 id="phase-3-advanced-features">Phase 3: Advanced Features</h3>
+<ol start="9" type="1">
+<li><strong>MCP skill builders</strong> for dynamic skill
+registration.</li>
+<li><strong>Fork mode</strong> for skills that spawn subagents.</li>
+<li><strong>Auto-improvement engine</strong> with metrics and
+heuristics.</li>
+<li><strong>Plugin skills</strong> via the marketplace system.</li>
+<li><strong>Managed skills</strong> via organization policy.</li>
+</ol>
+<p>Each phase is independently shippable. Phase 1 gives you a working
+skill system in a few hundred lines. Phase 2 adds the power features.
+Phase 3 adds the enterprise and ecosystem features.</p>
+<hr />
+<h2 id="2012-key-takeaways">20.12 Key Takeaways</h2>
+<p><strong>Skills are the user-facing extensibility layer.</strong>
+While hooks (Chapter 18-19) provide automation guardrails and MCP
+(Chapter 15) provides tool extensibility, skills provide workflow
+extensibility. They are the mechanism through which domain knowledge
+enters the agent without code changes.</p>
+<p><strong>The loading pipeline's priority ordering is the foundation of
+trust.</strong> Project skills override user skills, managed skills
+override plugin skills, and the shadowing-by-name mechanism prevents
+conflicts. Get this ordering wrong and users lose confidence in the
+system.</p>
+<p><strong>Dynamic injection is the most powerful feature — and the most
+dangerous.</strong> The <code>!`command`</code> syntax turns static
+skill prompts into dynamic, context-aware instructions. The 5-second
+timeout, sentinel strings for failures, and the SHA-256 inject cache are
+the safety nets. If you are building your own agent, this is the feature
+to implement carefully and audit regularly.</p>
+<p><strong>The frontmatter parser deliberately avoids a YAML
+dependency.</strong> This is not laziness — it is a deliberate
+restriction of the configuration surface. The 100-line parser handles
+the exact subset needed (key-value pairs and simple lists) and produces
+skill-specific error messages. Full YAML support would invite complexity
+that confuses skill authors.</p>
+<p><strong>Auto-improvement is conservative by design.</strong> Only one
+of the four heuristics can reach the auto-apply confidence threshold,
+and only in cases of repeated tool failures. The system errs heavily
+toward human review over automated modification. Skills are
+user-authored artifacts — the system should suggest improvements, not
+silently rewrite them.</p>
+<p><strong>Token estimation gates skill injection.</strong> The 30%
+budget cap prevents a single skill from monopolizing the context window.
+This is especially important for skills with dynamic injections that can
+expand to thousands of lines. Without this cap, a
+<code>/pr-summary</code> on a large PR would leave no room for the LLM
+to think.</p>
+<p>The skill system, combined with the configuration system we will
+build in Chapter 21 and the command system in Chapter 22, completes the
+picture of how an AI agent becomes configurable and extensible without
+source code changes. Together, they transform a powerful but rigid
+engine into a tool that adapts to each user's workflow.</p>
+</div>
+</body>
+</html>

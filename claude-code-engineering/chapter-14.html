@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 14: The Task Management System — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-14-the-task-management-system">Chapter 14: The Task
+Management System</h1>
+<p>Managing parallel work requires more than spawning agents — it
+requires tracking what each agent is doing, what they've completed,
+what's blocked, and what's waiting to be claimed. Claude Code addresses
+this with two architecturally independent task systems: an in-memory
+system for tracking background computations (shell processes, running
+agents) and a file-based system for coordinating work items across team
+members. Understanding why these systems are separate — and how they
+interact — is essential for building any multi-agent coordination
+layer.</p>
+<hr />
+<h2 id="141-two-task-systems-two-purposes">14.1 Two Task Systems, Two
+Purposes</h2>
+<p>The most important architectural insight about Claude Code's task
+management is that it is not one system — it is two.</p>
+<h3 id="background-tasks-in-memory">Background Tasks (In-Memory)</h3>
+<p>The first system tracks running computations in
+<code>AppState.tasks</code>. These are shell processes, running agents,
+remote sessions, and MCP monitors:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> TaskType <span class="op">=</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;local_bash&#39;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;local_agent&#39;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;remote_agent&#39;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;in_process_teammate&#39;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;local_workflow&#39;</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;monitor_mcp&#39;</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;dream&#39;</span></span></code></pre></div>
+<p>Background tasks have five states:
+<code>pending → running → completed | failed | killed</code>. They live
+only in memory and die with the process. Their purpose is UI rendering —
+showing the user what's running, how long it's been active, and
+providing kill/view controls.</p>
+<h3 id="user-facing-tasks-file-based">User-Facing Tasks
+(File-Based)</h3>
+<p>The second system stores work items as individual JSON files on disk
+at <code>utils/tasks.ts</code> (862 lines). These represent todo-list
+entries visible through the <code>TaskCreate</code>,
+<code>TaskUpdate</code>, <code>TaskGet</code>, and <code>TaskList</code>
+tools:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> TASK_STATUSES <span class="op">=</span> [<span class="st">&#39;pending&#39;</span><span class="op">,</span> <span class="st">&#39;in_progress&#39;</span><span class="op">,</span> <span class="st">&#39;completed&#39;</span>] <span class="im">as</span> <span class="kw">const</span></span></code></pre></div>
+<p>User-facing tasks have three states (no <code>failed</code> or
+<code>killed</code>), persist across process restarts, and support
+cross-process coordination through file locking. Their purpose is team
+coordination — when multiple Claude instances run in parallel (swarm
+mode), they share a task list through the filesystem.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Background Tasks</th>
+<th>User-Facing Tasks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Storage</td>
+<td>In-memory <code>AppState</code></td>
+<td>JSON files on disk</td>
+</tr>
+<tr>
+<td>Concurrency</td>
+<td>React state updates</td>
+<td>File locking (<code>proper-lockfile</code>)</td>
+</tr>
+<tr>
+<td>Lifecycle</td>
+<td>5 states (pending→running→completed/failed/killed)</td>
+<td>3 states (pending→in_progress→completed)</td>
+</tr>
+<tr>
+<td>Cross-process</td>
+<td>Single process only</td>
+<td>Shared via filesystem</td>
+</tr>
+<tr>
+<td>Purpose</td>
+<td>Track running computations</td>
+<td>Coordinate team work items</td>
+</tr>
+<tr>
+<td>ID Format</td>
+<td>Type prefix + 8 random chars</td>
+<td>Sequential integers</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="142-background-task-infrastructure">14.2 Background Task
+Infrastructure</h2>
+<h3 id="task-id-generation">Task ID Generation</h3>
+<p>Each task type gets a single-character prefix for visual
+identification at <code>Task.ts:78-106</code>:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> TASK_ID_PREFIXES<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span><span class="op">&gt;</span> <span class="op">=</span> {</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  local_bash<span class="op">:</span> <span class="st">&#39;b&#39;</span><span class="op">,</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  local_agent<span class="op">:</span> <span class="st">&#39;a&#39;</span><span class="op">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  remote_agent<span class="op">:</span> <span class="st">&#39;r&#39;</span><span class="op">,</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  in_process_teammate<span class="op">:</span> <span class="st">&#39;t&#39;</span><span class="op">,</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  local_workflow<span class="op">:</span> <span class="st">&#39;w&#39;</span><span class="op">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  monitor_mcp<span class="op">:</span> <span class="st">&#39;m&#39;</span><span class="op">,</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  dream<span class="op">:</span> <span class="st">&#39;d&#39;</span><span class="op">,</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> TASK_ID_ALPHABET <span class="op">=</span> <span class="st">&#39;0123456789abcdefghijklmnopqrstuvwxyz&#39;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">generateTaskId</span>(type<span class="op">:</span> TaskType)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> prefix <span class="op">=</span> <span class="fu">getTaskIdPrefix</span>(<span class="kw">type</span>)</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> bytes <span class="op">=</span> <span class="fu">randomBytes</span>(<span class="dv">8</span>)</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> id <span class="op">=</span> prefix</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">let</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">8</span><span class="op">;</span> i<span class="op">++</span>) {</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    id <span class="op">+=</span> TASK_ID_ALPHABET[bytes[i]<span class="op">!</span> <span class="op">%</span> TASK_ID_ALPHABET<span class="op">.</span><span class="at">length</span>]</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> id</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>IDs use 8 random characters from a 36-character alphabet, yielding
+~2.8 trillion combinations. This isn't just about uniqueness — the
+comment explicitly notes this is "sufficient to resist brute-force
+symlink attacks" since task IDs appear in file paths. A predictable task
+ID could let a sandboxed attacker pre-create symlinks at the expected
+output path.</p>
+<p>The prefix convention enables quick identification in logs and the UI
+— seeing <code>a7f3k2p1</code> immediately tells you it's an agent task,
+while <code>b9x2m4q8</code> is a shell command.</p>
+<h3 id="task-state-base">Task State Base</h3>
+<p>Every background task shares a common state shape at
+<code>Task.ts:44-57</code>:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> TaskStateBase <span class="op">=</span> {</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> TaskType</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  status<span class="op">:</span> TaskStatus</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  toolUseId<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  startTime<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  endTime<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>  totalPausedMs<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  outputFile<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>  outputOffset<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>  notified<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>outputOffset</code> tracks how much of the output file the
+UI has already displayed — enabling incremental output rendering without
+re-reading the entire file on each frame. The <code>notified</code> flag
+prevents duplicate notifications when a task completes.</p>
+<h3 id="terminal-status-detection">Terminal Status Detection</h3>
+<p>The <code>isTerminalTaskStatus()</code> function at lines 27-29
+guards against common multi-agent bugs:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">isTerminalTaskStatus</span>(status<span class="op">:</span> TaskStatus)<span class="op">:</span> <span class="dt">boolean</span> {</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> status <span class="op">===</span> <span class="st">&#39;completed&#39;</span> <span class="op">||</span> status <span class="op">===</span> <span class="st">&#39;failed&#39;</span> <span class="op">||</span> status <span class="op">===</span> <span class="st">&#39;killed&#39;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This guard prevents injecting messages into dead teammates, evicting
+finished tasks from <code>AppState</code>, and running cleanup on tasks
+that are still active.</p>
+<h3 id="the-backgroundforeground-distinction">The Background/Foreground
+Distinction</h3>
+<p>At <code>tasks/types.ts:37-46</code>, a subtlety: not every running
+task is a "background" task:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">isBackgroundTask</span>(task<span class="op">:</span> TaskState)<span class="op">:</span> task <span class="kw">is</span> BackgroundTaskState {</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (task<span class="op">.</span><span class="at">status</span> <span class="op">!==</span> <span class="st">&#39;running&#39;</span> <span class="op">&amp;&amp;</span> task<span class="op">.</span><span class="at">status</span> <span class="op">!==</span> <span class="st">&#39;pending&#39;</span>) <span class="cf">return</span> <span class="kw">false</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="st">&#39;isBackgrounded&#39;</span> <span class="kw">in</span> task <span class="op">&amp;&amp;</span> task<span class="op">.</span><span class="at">isBackgrounded</span> <span class="op">===</span> <span class="kw">false</span>) <span class="cf">return</span> <span class="kw">false</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">true</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>A task is "background" only if it's running/pending AND not
+explicitly foregrounded. When the user views a task's output in
+real-time, <code>isBackgrounded</code> is set to <code>false</code>,
+excluding it from the background task indicator even though it's still
+running.</p>
+<hr />
+<h2 id="143-the-task-output-system">14.3 The Task Output System</h2>
+<h3 id="disk-output-architecture">Disk Output Architecture</h3>
+<p>Task output is written to disk through <code>DiskTaskOutput</code> at
+<code>utils/task/diskOutput.ts</code> (451 lines), a carefully
+engineered async write queue:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">class</span> DiskTaskOutput {</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  #path<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  #fileHandle<span class="op">:</span> FileHandle <span class="op">|</span> <span class="dt">null</span> <span class="op">=</span> <span class="kw">null</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  #queue<span class="op">:</span> <span class="dt">string</span>[] <span class="op">=</span> []</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  #bytesWritten <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  #capped <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>  #flushPromise<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> <span class="op">|</span> <span class="dt">null</span> <span class="op">=</span> <span class="kw">null</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">append</span>(content<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="kw">this</span><span class="op">.</span>#<span class="at">capped</span>) <span class="cf">return</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span>#<span class="at">bytesWritten</span> <span class="op">+=</span> content<span class="op">.</span><span class="at">length</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="kw">this</span><span class="op">.</span>#<span class="at">bytesWritten</span> <span class="op">&gt;</span> MAX_TASK_OUTPUT_BYTES) {</span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>      <span class="kw">this</span><span class="op">.</span>#<span class="at">capped</span> <span class="op">=</span> <span class="kw">true</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>      <span class="kw">this</span><span class="op">.</span>#<span class="at">queue</span><span class="op">.</span><span class="fu">push</span>(</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`</span><span class="sc">\n</span><span class="vs">[output truncated: exceeded </span><span class="sc">${</span>MAX_TASK_OUTPUT_BYTES_DISPLAY<span class="sc">}</span><span class="vs">]</span><span class="sc">\n</span><span class="vs">`</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>      )</span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span>#<span class="at">queue</span><span class="op">.</span><span class="fu">push</span>(content)</span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span>#<span class="fu">scheduleDrain</span>()</span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The design uses a flat array as a write queue processed by a single
+drain loop. This avoids the memory retention problem of chained
+<code>.then()</code> closures where every queued write captures its data
+until the entire chain resolves. With a flat array, completed writes are
+immediately eligible for garbage collection.</p>
+<p>The 5GB cap (<code>MAX_TASK_OUTPUT_BYTES</code>) prevents runaway
+processes from filling the disk. When the cap is hit, a truncation
+message is appended and all further writes are silently dropped.</p>
+<h3 id="symlink-attack-prevention">Symlink Attack Prevention</h3>
+<p>Task output files are opened with <code>O_NOFOLLOW</code> at lines
+17-21:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> O_NOFOLLOW <span class="op">=</span> fsConstants<span class="op">.</span><span class="at">O_NOFOLLOW</span> <span class="op">??</span> <span class="dv">0</span></span></code></pre></div>
+<p>Without this flag, an attacker in the sandbox could create a symlink
+from a task output path to an arbitrary system file. When Claude Code
+writes task output, it would follow the symlink and overwrite the
+target. With <code>O_NOFOLLOW</code>, <code>open()</code> fails with
+<code>ELOOP</code> on symlinks, preventing the attack.</p>
+<h3 id="session-scoped-output-directory">Session-Scoped Output
+Directory</h3>
+<p>The output directory is memoized at first access:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _taskOutputDir<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">undefined</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getTaskOutputDir</span>()<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (_taskOutputDir <span class="op">===</span> <span class="kw">undefined</span>) {</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    _taskOutputDir <span class="op">=</span> <span class="fu">join</span>(<span class="fu">getProjectTempDir</span>()<span class="op">,</span> <span class="fu">getSessionId</span>()<span class="op">,</span> <span class="st">&#39;tasks&#39;</span>)</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> _taskOutputDir</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This memoization is a deliberate correctness choice. The
+<code>/clear</code> command calls <code>regenerateSessionId()</code>,
+but existing <code>DiskTaskOutput</code> instances still hold
+old-session paths. If the directory were recomputed on every call,
+<code>open()</code> would fail with <code>ENOENT</code> on old paths. By
+capturing once, all task output paths remain stable throughout the
+process lifetime.</p>
+<h3 id="symlink-optimization-for-agent-tasks">Symlink Optimization for
+Agent Tasks</h3>
+<p>Agent tasks use <code>initTaskOutputAsSymlink()</code> instead of
+<code>initTaskOutput()</code>. This creates a symlink from the task
+output path to the agent's transcript file — the transcript IS the
+output:</p>
+<pre><code>tasks/a12345678.output -&gt; subagents/a12345678/transcript.jsonl</code></pre>
+<p>This avoids duplicating large agent transcripts on disk (which can
+grow to hundreds of megabytes for long-running agents) while maintaining
+the same <code>TaskOutput</code> read interface. Any consumer that reads
+the output path gets the transcript transparently. The symlink itself is
+protected by the same <code>O_NOFOLLOW</code> semantics when the host
+process reads — ensuring that even if an attacker creates a chain of
+symlinks, the system fails safely with <code>ELOOP</code>.</p>
+<h3 id="the-flush-promise-pattern">The Flush Promise Pattern</h3>
+<p>External code needs to know when all pending writes are on disk.
+<code>DiskTaskOutput</code> exposes this through a flush promise:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>#flushPromise<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> <span class="op">|</span> <span class="dt">null</span> <span class="op">=</span> <span class="kw">null</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>#flushResolve<span class="op">:</span> (() <span class="kw">=&gt;</span> <span class="dt">void</span>) <span class="op">|</span> <span class="dt">null</span> <span class="op">=</span> <span class="kw">null</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="fu">flush</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="kw">this</span><span class="op">.</span>#<span class="at">queue</span><span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span> <span class="op">&amp;&amp;</span> <span class="op">!</span><span class="kw">this</span><span class="op">.</span>#<span class="at">draining</span>) <span class="cf">return</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span><span class="kw">this</span><span class="op">.</span>#<span class="at">flushPromise</span>) {</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span>#<span class="at">flushPromise</span> <span class="op">=</span> <span class="kw">new</span> <span class="bu">Promise</span>(resolve <span class="kw">=&gt;</span> {</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">this</span><span class="op">.</span>#<span class="at">flushResolve</span> <span class="op">=</span> resolve</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">this</span><span class="op">.</span>#<span class="at">flushPromise</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The drain loop resolves the flush promise when the queue empties.
+Three callers depend on this:</p>
+<ol type="1">
+<li><strong>Test teardown</strong>: Drain before <code>rmSync</code> of
+temp directories. Without flushing, a voided async write could resume
+after teardown deletes the directory, causing unhandled
+<code>ENOENT</code> rejections — a flaky test pattern that's notoriously
+hard to debug because the failure appears in an unrelated test.</li>
+<li><strong>Task completion</strong>: Ensure all output is persisted
+before the UI reads the final result. A race between the completion
+notification and the last write would show truncated output.</li>
+<li><strong>Task eviction</strong>: Ensure writes finish before
+unlinking the output file. Without this, <code>unlink()</code> could
+remove the file while the drain loop still holds an open file handle —
+the writes succeed (Unix keeps the inode alive) but the data is lost
+because no path points to the inode anymore.</li>
+</ol>
+<h3 id="byte-counting-approximation">Byte Counting Approximation</h3>
+<p>The <code>#bytesWritten</code> counter uses
+<code>content.length</code>, which counts UTF-16 code units rather than
+UTF-8 bytes. This undercounts by up to ~3x for multi-byte characters.
+The engineering team accepted this imprecision because:</p>
+<ul>
+<li>The 5GB cap is a coarse disk-fill guard, not a precise quota</li>
+<li>The alternative (<code>Buffer.byteLength()</code>) allocates a
+buffer for every append — unacceptable on the hot path</li>
+<li>A 3x error means the cap triggers between 1.7GB and 5GB actual disk
+usage — both are acceptable limits for preventing runaway processes</li>
+</ul>
+<h3 id="write-mode-selection">Write Mode Selection</h3>
+<p><code>DiskTaskOutput</code> supports two creation modes, chosen based
+on the task type:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">initTaskOutput</span>(taskId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> DiskTaskOutput {</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> path <span class="op">=</span> <span class="fu">getTaskOutputPath</span>(taskId)</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">// O_EXCL prevents overwriting existing files</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">openSync</span>(path<span class="op">,</span> fsConstants<span class="op">.</span><span class="at">O_WRONLY</span> <span class="op">|</span> fsConstants<span class="op">.</span><span class="at">O_CREAT</span> <span class="op">|</span> fsConstants<span class="op">.</span><span class="at">O_EXCL</span>)</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">new</span> <span class="fu">DiskTaskOutput</span>(path)</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">initTaskOutputAsSymlink</span>(</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>  taskId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> targetPath<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> outputPath <span class="op">=</span> <span class="fu">getTaskOutputPath</span>(taskId)</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">symlinkSync</span>(targetPath<span class="op">,</span> outputPath)</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>O_EXCL</code> flag in <code>initTaskOutput()</code> is a
+safety measure: if a file already exists at the output path (perhaps
+from a previous task that reused an ID before the high water mark was
+implemented), creation fails rather than silently overwriting. This
+prevents data loss from concurrent tasks.</p>
+<h3 id="pending-operations-tracking">Pending Operations Tracking</h3>
+<p>At lines 76-87, a subtle pattern for test reliability:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> _pendingOps <span class="op">=</span> <span class="kw">new</span> <span class="bu">Set</span><span class="op">&lt;</span><span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">unknown</span><span class="op">&gt;&gt;</span>()</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">track</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(p<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>T<span class="op">&gt;</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>T<span class="op">&gt;</span> {</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  _pendingOps<span class="op">.</span><span class="fu">add</span>(p)</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">void</span> p<span class="op">.</span><span class="fu">finally</span>(() <span class="kw">=&gt;</span> _pendingOps<span class="op">.</span><span class="fu">delete</span>(p))<span class="op">.</span><span class="fu">catch</span>(() <span class="kw">=&gt;</span> {})</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> p</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">waitForPendingWrites</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> (_pendingOps<span class="op">.</span><span class="at">size</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="bu">Promise</span><span class="op">.</span><span class="fu">allSettled</span>([<span class="op">...</span>_pendingOps])</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This tracks fire-and-forget write promises so tests can drain them
+before teardown. Without this, a voided async write could resume after
+test teardown has deleted the temp directory, causing unhandled
+<code>ENOENT</code> rejections — a flaky test pattern that is
+notoriously hard to debug because the failure appears in an unrelated
+test.</p>
+<h3 id="drain-loop-architecture">Drain Loop Architecture</h3>
+<p>The <code>DiskTaskOutput.#scheduleDrain()</code> method implements a
+cooperative write loop:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>#<span class="fu">scheduleDrain</span>()<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="kw">this</span><span class="op">.</span>#<span class="at">draining</span>) <span class="cf">return</span>  <span class="co">// Already draining</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">this</span><span class="op">.</span>#<span class="at">draining</span> <span class="op">=</span> <span class="kw">true</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">void</span> <span class="kw">this</span><span class="op">.</span>#<span class="fu">drain</span>()</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> #<span class="fu">drain</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">try</span> {</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="kw">this</span><span class="op">.</span>#<span class="at">fileHandle</span>) {</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>      <span class="kw">this</span><span class="op">.</span>#<span class="at">fileHandle</span> <span class="op">=</span> <span class="cf">await</span> <span class="fu">open</span>(<span class="kw">this</span><span class="op">.</span>#<span class="at">path</span><span class="op">,</span> <span class="st">&#39;a&#39;</span><span class="op">,</span> O_NOFOLLOW)</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> (<span class="kw">this</span><span class="op">.</span>#<span class="at">queue</span><span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> chunk <span class="op">=</span> <span class="kw">this</span><span class="op">.</span>#<span class="at">queue</span><span class="op">.</span><span class="fu">shift</span>()<span class="op">!</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>      <span class="cf">await</span> <span class="kw">this</span><span class="op">.</span>#<span class="at">fileHandle</span><span class="op">.</span><span class="fu">write</span>(chunk)</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">finally</span> {</span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span>#<span class="at">draining</span> <span class="op">=</span> <span class="kw">false</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Check if more data arrived during the write</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="kw">this</span><span class="op">.</span>#<span class="at">queue</span><span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) <span class="kw">this</span><span class="op">.</span>#<span class="fu">scheduleDrain</span>()</span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The single-drain pattern ensures only one write operation is
+in-flight at a time, preventing interleaved writes from corrupting the
+output. New data that arrives during a write is queued and processed on
+the next drain cycle.</p>
+<hr />
+<h2 id="144-user-facing-task-crud">14.4 User-Facing Task CRUD</h2>
+<h3 id="signal-based-update-notifications">Signal-Based Update
+Notifications</h3>
+<p>Every mutation in the task system broadcasts a signal at
+<code>utils/tasks.ts:18-67</code>:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> tasksUpdated <span class="op">=</span> <span class="fu">createSignal</span>()</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">notifyTasksUpdated</span>()<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">try</span> {</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    tasksUpdated<span class="op">.</span><span class="fu">emit</span>()</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">catch</span> {</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Ignore listener errors — task mutations must not fail</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> onTasksUpdated <span class="op">=</span> tasksUpdated<span class="op">.</span><span class="at">subscribe</span></span></code></pre></div>
+<p>Every CRUD function calls <code>notifyTasksUpdated()</code> after
+writing to disk. The signal is process-local — cross-process
+coordination relies on filesystem watching via
+<code>useTaskListWatcher</code>. The try/catch around
+<code>emit()</code> is a defensive pattern: a buggy listener should
+never prevent a task mutation from completing.</p>
+<h3 id="task-schema">Task Schema</h3>
+<p>The schema at <code>utils/tasks.ts:76-89</code> defines the
+user-visible task shape:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> TaskSchema <span class="op">=</span> <span class="fu">lazySchema</span>(() <span class="kw">=&gt;</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  z<span class="op">.</span><span class="fu">object</span>({</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    id<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    subject<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    description<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>    activeForm<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>    owner<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    status<span class="op">:</span> <span class="fu">TaskStatusSchema</span>()<span class="op">,</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    blocks<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>())<span class="op">,</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>    blockedBy<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>())<span class="op">,</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>    metadata<span class="op">:</span> z<span class="op">.</span><span class="fu">record</span>(z<span class="op">.</span><span class="fu">string</span>()<span class="op">,</span> z<span class="op">.</span><span class="fu">unknown</span>())<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>  })<span class="op">,</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>The <code>activeForm</code> field enables rich UI integration — when
+a task is <code>in_progress</code>, its <code>activeForm</code> text
+(e.g., "Running tests") appears in the spinner, giving the user a
+real-time sense of what work is happening.</p>
+<h3 id="file-based-storage">File-Based Storage</h3>
+<p>Tasks are stored as individual JSON files:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getTaskPath</span>(taskListId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> taskId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">join</span>(</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">getTasksDir</span>(taskListId)<span class="op">,</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="vs">`</span><span class="sc">${</span><span class="fu">sanitizePathComponent</span>(taskId)<span class="sc">}</span><span class="vs">.json`</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>sanitizePathComponent()</code> function strips everything
+except <code>[a-zA-Z0-9_-]</code> to prevent path traversal attacks — a
+task ID of <code>../../etc/passwd</code> is sanitized to
+<code>etcpasswd</code>.</p>
+<h3 id="file-locking-strategy">File Locking Strategy</h3>
+<p>Two locking granularities serve different operations:</p>
+<p><strong>List-level lock</strong> (<code>.lock</code> file in task
+directory): Used by <code>createTask()</code>,
+<code>resetTaskList()</code>, and <code>claimTaskWithBusyCheck()</code>.
+Required when operations need to read the full task list atomically —
+for example, creating a task needs to find the highest existing ID.</p>
+<p><strong>Task-level lock</strong> (the JSON file itself): Used by
+<code>updateTask()</code> and basic <code>claimTask()</code>. Allows
+concurrent updates to different tasks without serializing on the entire
+list.</p>
+<p>The lock retry configuration is sized for ~10+ concurrent agents:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> LOCK_OPTIONS <span class="op">=</span> {</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  retries<span class="op">:</span> {</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    retries<span class="op">:</span> <span class="dv">30</span><span class="op">,</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    minTimeout<span class="op">:</span> <span class="dv">5</span><span class="op">,</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>    maxTimeout<span class="op">:</span> <span class="dv">100</span><span class="op">,</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Each critical section does
+<code>readdir + N*readFile + writeFile</code> (~50-100ms on slow disks).
+With 30 retries and exponential backoff (5-100ms), the last caller in a
+10-way race gets ~2.6 seconds total wait — enough for all agents to
+serialize through.</p>
+<h3 id="task-creation">Task Creation</h3>
+<p>The <code>createTask()</code> function at lines 284-308 acquires the
+list-level lock, finds the highest existing ID, increments, and
+writes:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">createTask</span>(</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  taskListId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> taskData<span class="op">:</span> <span class="bu">Omit</span><span class="op">&lt;</span>Task<span class="op">,</span> <span class="st">&#39;id&#39;</span><span class="op">&gt;</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;</span> {</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> lockPath <span class="op">=</span> <span class="cf">await</span> <span class="fu">ensureTaskListLockFile</span>(taskListId)</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> release <span class="op">=</span> <span class="cf">await</span> lockfile<span class="op">.</span><span class="fu">lock</span>(lockPath<span class="op">,</span> LOCK_OPTIONS)</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">try</span> {</span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> highestId <span class="op">=</span> <span class="cf">await</span> <span class="fu">findHighestTaskId</span>(taskListId)</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> id <span class="op">=</span> <span class="bu">String</span>(highestId <span class="op">+</span> <span class="dv">1</span>)</span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> task<span class="op">:</span> Task <span class="op">=</span> { id<span class="op">,</span> <span class="op">...</span>taskData }</span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">writeFile</span>(<span class="fu">getTaskPath</span>(taskListId<span class="op">,</span> id)<span class="op">,</span> <span class="fu">jsonStringify</span>(task<span class="op">,</span> <span class="kw">null</span><span class="op">,</span> <span class="dv">2</span>))</span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">notifyTasksUpdated</span>()</span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> id</span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">finally</span> {</span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">release</span>()</span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="id-reuse-prevention">ID Reuse Prevention</h3>
+<p>The high water mark pattern at lines 92-131 prevents a subtle
+bug:</p>
+<ol type="1">
+<li>Create tasks 1, 2, 3</li>
+<li>Delete task 3</li>
+<li>Reset the task list</li>
+<li><strong>Without high water mark</strong>: Next task would be ID 1
+(highest from files = 0)</li>
+<li><strong>With high water mark</strong>: Next task is ID 4 (mark
+stored 3 before deletion)</li>
+</ol>
+<p>This matters because external references to task IDs — in mailbox
+messages, agent transcripts, and user notes — would break if IDs were
+recycled.</p>
+<h3 id="task-dependencies">Task Dependencies</h3>
+<p>The <code>blockTask()</code> function creates bidirectional blocking
+relationships:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">blockTask</span>(</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  taskListId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> fromTaskId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> toTaskId<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">boolean</span><span class="op">&gt;</span> {</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">// A blocks B: fromTask.blocks += [toTaskId]</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// B blockedBy A: toTask.blockedBy += [fromTaskId]</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>When a task is deleted, reference cleanup cascades — the deleted
+task's ID is removed from all other tasks' <code>blocks</code> and
+<code>blockedBy</code> arrays. This prevents dangling references that
+would permanently block dependent tasks.</p>
+<h3 id="task-claiming">Task Claiming</h3>
+<p>Atomic task claiming with comprehensive failure reporting at lines
+541-612:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> ClaimTaskResult <span class="op">=</span> {</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  success<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">?:</span> <span class="st">&#39;task_not_found&#39;</span> <span class="op">|</span> <span class="st">&#39;already_claimed&#39;</span> <span class="op">|</span> <span class="st">&#39;already_resolved&#39;</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>         <span class="op">|</span> <span class="st">&#39;blocked&#39;</span> <span class="op">|</span> <span class="st">&#39;agent_busy&#39;</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  task<span class="op">?:</span> Task</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  busyWithTasks<span class="op">?:</span> <span class="dt">string</span>[]</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>  blockedByTasks<span class="op">?:</span> <span class="dt">string</span>[]</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>claimTaskWithBusyCheck()</code> variant uses a list-level
+lock to atomically verify both the task state and whether the claiming
+agent already owns other open tasks:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">claimTaskWithBusyCheck</span>(</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  taskListId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> taskId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> claimantAgentId<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ClaimTaskResult<span class="op">&gt;</span> {</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> lockPath <span class="op">=</span> <span class="cf">await</span> <span class="fu">ensureTaskListLockFile</span>(taskListId)</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> release <span class="op">=</span> <span class="cf">await</span> lockfile<span class="op">.</span><span class="fu">lock</span>(lockPath<span class="op">,</span> LOCK_OPTIONS)</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> allTasks <span class="op">=</span> <span class="cf">await</span> <span class="fu">listTasks</span>(taskListId)</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> agentOpenTasks <span class="op">=</span> allTasks<span class="op">.</span><span class="fu">filter</span>(</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>    t <span class="kw">=&gt;</span> t<span class="op">.</span><span class="at">status</span> <span class="op">!==</span> <span class="st">&#39;completed&#39;</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>      <span class="op">&amp;&amp;</span> t<span class="op">.</span><span class="at">owner</span> <span class="op">===</span> claimantAgentId</span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>      <span class="op">&amp;&amp;</span> t<span class="op">.</span><span class="at">id</span> <span class="op">!==</span> taskId</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (agentOpenTasks<span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>      success<span class="op">:</span> <span class="kw">false</span><span class="op">,</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>      reason<span class="op">:</span> <span class="st">&#39;agent_busy&#39;</span><span class="op">,</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>      busyWithTasks<span class="op">:</span> agentOpenTasks<span class="op">.</span><span class="fu">map</span>(t <span class="kw">=&gt;</span> t<span class="op">.</span><span class="at">id</span>)</span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... proceed with claim under the same lock</span></span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This prevents TOCTOU race conditions where two instances of the same
+agent try to claim different tasks simultaneously. Without the
+list-level lock, agent A could check "am I busy?" (no), while agent B
+simultaneously checks "am I busy?" (also no), and both claim tasks —
+leaving one agent overcommitted.</p>
+<h3 id="task-list-reset">Task List Reset</h3>
+<p>The <code>resetTaskList()</code> function at lines 147-188 deletes
+all task files while preserving the high water mark:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">resetTaskList</span>(taskListId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> lockPath <span class="op">=</span> <span class="cf">await</span> <span class="fu">ensureTaskListLockFile</span>(taskListId)</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  release <span class="op">=</span> <span class="cf">await</span> lockfile<span class="op">.</span><span class="fu">lock</span>(lockPath<span class="op">,</span> LOCK_OPTIONS)</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> currentHighest <span class="op">=</span> <span class="cf">await</span> <span class="fu">findHighestTaskIdFromFiles</span>(taskListId)</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (currentHighest <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> existingMark <span class="op">=</span> <span class="cf">await</span> <span class="fu">readHighWaterMark</span>(taskListId)</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (currentHighest <span class="op">&gt;</span> existingMark) {</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>      <span class="cf">await</span> <span class="fu">writeHighWaterMark</span>(taskListId<span class="op">,</span> currentHighest)</span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Delete all .json files (skip hidden files like .highwatermark, .lock)</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> file <span class="kw">of</span> files) {</span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (file<span class="op">.</span><span class="fu">endsWith</span>(<span class="st">&#39;.json&#39;</span>) <span class="op">&amp;&amp;</span> <span class="op">!</span>file<span class="op">.</span><span class="fu">startsWith</span>(<span class="st">&#39;.&#39;</span>)) {</span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>      <span class="cf">await</span> <span class="fu">unlink</span>(<span class="fu">join</span>(dir<span class="op">,</span> file))</span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The hidden file convention (<code>.highwatermark</code>,
+<code>.lock</code>) ensures administrative files survive task list
+resets. Only user-visible task JSON files are deleted.</p>
+<h3 id="task-list-identity">Task List Identity</h3>
+<p>The task list ID determines which task list a process
+reads/writes:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getTaskListId</span>()<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">CLAUDE_CODE_TASK_LIST_ID</span>) <span class="cf">return</span> it</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> teammateCtx <span class="op">=</span> <span class="fu">getTeammateContext</span>()</span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (teammateCtx) <span class="cf">return</span> teammateCtx<span class="op">.</span><span class="at">teamName</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">getTeamName</span>() <span class="op">||</span> leaderTeamName <span class="op">||</span> <span class="fu">getSessionId</span>()</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Five levels of priority ensure all team members share the same list,
+whether they're in-process teammates, tmux-based parallel sessions, or
+iTerm2-spawned instances.</p>
+<hr />
+<h2 id="145-agent-status-and-team-coordination">14.5 Agent Status and
+Team Coordination</h2>
+<h3 id="agent-status-tracking">Agent Status Tracking</h3>
+<p>Beyond individual task CRUD, the task system provides team-level
+status tracking through <code>getAgentStatuses()</code> at lines
+763-798:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> AgentStatus <span class="op">=</span> {</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  agentId<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  agentType<span class="op">?:</span> <span class="dt">string</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  status<span class="op">:</span> <span class="st">&#39;idle&#39;</span> <span class="op">|</span> <span class="st">&#39;busy&#39;</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>  currentTasks<span class="op">:</span> <span class="dt">string</span>[]  <span class="co">// task IDs the agent owns</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">getAgentStatuses</span>(</span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>  teamName<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>AgentStatus[] <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;</span> {</span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> teamData <span class="op">=</span> <span class="cf">await</span> <span class="fu">readTeamMembers</span>(teamName)</span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>teamData) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> taskListId <span class="op">=</span> <span class="fu">sanitizeName</span>(teamName)</span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> allTasks <span class="op">=</span> <span class="cf">await</span> <span class="fu">listTasks</span>(taskListId)</span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Group unresolved tasks by owner</span></span>
+<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> unresolvedTasksByOwner <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">string</span>[]<span class="op">&gt;</span>()</span>
+<span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> task <span class="kw">of</span> allTasks) {</span>
+<span id="cb25-21"><a href="#cb25-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (task<span class="op">.</span><span class="at">status</span> <span class="op">!==</span> <span class="st">&#39;completed&#39;</span> <span class="op">&amp;&amp;</span> task<span class="op">.</span><span class="at">owner</span>) {</span>
+<span id="cb25-22"><a href="#cb25-22" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> existing <span class="op">=</span> unresolvedTasksByOwner<span class="op">.</span><span class="fu">get</span>(task<span class="op">.</span><span class="at">owner</span>) <span class="op">||</span> []</span>
+<span id="cb25-23"><a href="#cb25-23" aria-hidden="true" tabindex="-1"></a>      existing<span class="op">.</span><span class="fu">push</span>(task<span class="op">.</span><span class="at">id</span>)</span>
+<span id="cb25-24"><a href="#cb25-24" aria-hidden="true" tabindex="-1"></a>      unresolvedTasksByOwner<span class="op">.</span><span class="fu">set</span>(task<span class="op">.</span><span class="at">owner</span><span class="op">,</span> existing)</span>
+<span id="cb25-25"><a href="#cb25-25" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb25-26"><a href="#cb25-26" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-27"><a href="#cb25-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-28"><a href="#cb25-28" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> teamData<span class="op">.</span><span class="at">members</span><span class="op">.</span><span class="fu">map</span>(member <span class="kw">=&gt;</span> {</span>
+<span id="cb25-29"><a href="#cb25-29" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Check both name (new) and agentId (legacy) for backward compat</span></span>
+<span id="cb25-30"><a href="#cb25-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> tasksByName <span class="op">=</span> unresolvedTasksByOwner<span class="op">.</span><span class="fu">get</span>(member<span class="op">.</span><span class="at">name</span>) <span class="op">||</span> []</span>
+<span id="cb25-31"><a href="#cb25-31" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> tasksById <span class="op">=</span> unresolvedTasksByOwner<span class="op">.</span><span class="fu">get</span>(member<span class="op">.</span><span class="at">agentId</span>) <span class="op">||</span> []</span>
+<span id="cb25-32"><a href="#cb25-32" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> currentTasks <span class="op">=</span> <span class="fu">uniq</span>([<span class="op">...</span>tasksByName<span class="op">,</span> <span class="op">...</span>tasksById])</span>
+<span id="cb25-33"><a href="#cb25-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb25-34"><a href="#cb25-34" aria-hidden="true" tabindex="-1"></a>      agentId<span class="op">:</span> member<span class="op">.</span><span class="at">agentId</span><span class="op">,</span></span>
+<span id="cb25-35"><a href="#cb25-35" aria-hidden="true" tabindex="-1"></a>      name<span class="op">:</span> member<span class="op">.</span><span class="at">name</span><span class="op">,</span></span>
+<span id="cb25-36"><a href="#cb25-36" aria-hidden="true" tabindex="-1"></a>      agentType<span class="op">:</span> member<span class="op">.</span><span class="at">agentType</span><span class="op">,</span></span>
+<span id="cb25-37"><a href="#cb25-37" aria-hidden="true" tabindex="-1"></a>      status<span class="op">:</span> currentTasks<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span> <span class="op">?</span> <span class="st">&#39;idle&#39;</span> <span class="op">:</span> <span class="st">&#39;busy&#39;</span><span class="op">,</span></span>
+<span id="cb25-38"><a href="#cb25-38" aria-hidden="true" tabindex="-1"></a>      currentTasks<span class="op">,</span></span>
+<span id="cb25-39"><a href="#cb25-39" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb25-40"><a href="#cb25-40" aria-hidden="true" tabindex="-1"></a>  })</span>
+<span id="cb25-41"><a href="#cb25-41" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The backward compatibility pattern here is instructive. Early
+versions of the team system used <code>agentId</code> as the task
+ownership key; newer versions use <code>member.name</code>. By checking
+both fields and deduplicating with <code>uniq()</code>, the function
+handles teams that contain a mix of old and new-format ownership
+references. This is the kind of migration-safe code you need when your
+data persists on disk and different versions of the software may have
+written it.</p>
+<p>The <code>idle</code>/<code>busy</code> distinction drives the team
+coordinator's work allocation. When the coordinator sees idle teammates,
+it can assign new tasks. When all teammates are busy, it waits for
+completion signals rather than queuing more work — a backpressure
+mechanism that prevents task pile-up.</p>
+<h3 id="teammate-cleanup-on-exit">Teammate Cleanup on Exit</h3>
+<p>When a teammate exits — whether through graceful shutdown or
+termination — its unfinished tasks must be reclaimed. The
+<code>unassignTeammateTasks()</code> function at lines 818-860 handles
+this:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">unassignTeammateTasks</span>(</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>  teamName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  teammateId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  teammateName<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span> <span class="st">&#39;terminated&#39;</span> <span class="op">|</span> <span class="st">&#39;shutdown&#39;</span><span class="op">,</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>UnassignTasksResult<span class="op">&gt;</span> {</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> tasks <span class="op">=</span> <span class="cf">await</span> <span class="fu">listTasks</span>(teamName)</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> unresolvedAssignedTasks <span class="op">=</span> tasks<span class="op">.</span><span class="fu">filter</span>(</span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>    t <span class="kw">=&gt;</span> t<span class="op">.</span><span class="at">status</span> <span class="op">!==</span> <span class="st">&#39;completed&#39;</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>      <span class="op">&amp;&amp;</span> (t<span class="op">.</span><span class="at">owner</span> <span class="op">===</span> teammateId <span class="op">||</span> t<span class="op">.</span><span class="at">owner</span> <span class="op">===</span> teammateName)<span class="op">,</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Unassign each task and reset status to pending</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (<span class="kw">const</span> task <span class="kw">of</span> unresolvedAssignedTasks) {</span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">await</span> <span class="fu">updateTask</span>(teamName<span class="op">,</span> task<span class="op">.</span><span class="at">id</span><span class="op">,</span> {</span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>      owner<span class="op">:</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>      status<span class="op">:</span> <span class="st">&#39;pending&#39;</span><span class="op">,</span></span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Build notification message</span></span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> actionVerb <span class="op">=</span> reason <span class="op">===</span> <span class="st">&#39;terminated&#39;</span></span>
+<span id="cb26-23"><a href="#cb26-23" aria-hidden="true" tabindex="-1"></a>    <span class="op">?</span> <span class="st">&#39;was terminated&#39;</span></span>
+<span id="cb26-24"><a href="#cb26-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">:</span> <span class="st">&#39;has shut down&#39;</span></span>
+<span id="cb26-25"><a href="#cb26-25" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> notificationMessage <span class="op">=</span> <span class="vs">`</span><span class="sc">${</span>teammateName<span class="sc">}</span><span class="vs"> </span><span class="sc">${</span>actionVerb<span class="sc">}</span><span class="vs">.`</span></span>
+<span id="cb26-26"><a href="#cb26-26" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (unresolvedAssignedTasks<span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb26-27"><a href="#cb26-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> taskList <span class="op">=</span> unresolvedAssignedTasks</span>
+<span id="cb26-28"><a href="#cb26-28" aria-hidden="true" tabindex="-1"></a>      <span class="op">.</span><span class="fu">map</span>(t <span class="kw">=&gt;</span> <span class="vs">`#</span><span class="sc">${</span>t<span class="op">.</span><span class="at">id</span><span class="sc">}</span><span class="vs"> &quot;</span><span class="sc">${</span>t<span class="op">.</span><span class="at">subject</span><span class="sc">}</span><span class="vs">&quot;`</span>)</span>
+<span id="cb26-29"><a href="#cb26-29" aria-hidden="true" tabindex="-1"></a>      <span class="op">.</span><span class="fu">join</span>(<span class="st">&#39;, &#39;</span>)</span>
+<span id="cb26-30"><a href="#cb26-30" aria-hidden="true" tabindex="-1"></a>    notificationMessage <span class="op">+=</span></span>
+<span id="cb26-31"><a href="#cb26-31" aria-hidden="true" tabindex="-1"></a>      <span class="vs">` </span><span class="sc">${</span>unresolvedAssignedTasks<span class="op">.</span><span class="at">length</span><span class="sc">}</span><span class="vs"> task(s) were unassigned: </span><span class="sc">${</span>taskList<span class="sc">}</span><span class="vs">.`</span></span>
+<span id="cb26-32"><a href="#cb26-32" aria-hidden="true" tabindex="-1"></a>    notificationMessage <span class="op">+=</span></span>
+<span id="cb26-33"><a href="#cb26-33" aria-hidden="true" tabindex="-1"></a>      <span class="vs">` Use TaskList to check availability and TaskUpdate to reassign.`</span></span>
+<span id="cb26-34"><a href="#cb26-34" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-35"><a href="#cb26-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-36"><a href="#cb26-36" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb26-37"><a href="#cb26-37" aria-hidden="true" tabindex="-1"></a>    unassignedTasks<span class="op">:</span> unresolvedAssignedTasks<span class="op">.</span><span class="fu">map</span>(t <span class="kw">=&gt;</span> ({</span>
+<span id="cb26-38"><a href="#cb26-38" aria-hidden="true" tabindex="-1"></a>      id<span class="op">:</span> t<span class="op">.</span><span class="at">id</span><span class="op">,</span></span>
+<span id="cb26-39"><a href="#cb26-39" aria-hidden="true" tabindex="-1"></a>      subject<span class="op">:</span> t<span class="op">.</span><span class="at">subject</span><span class="op">,</span></span>
+<span id="cb26-40"><a href="#cb26-40" aria-hidden="true" tabindex="-1"></a>    }))<span class="op">,</span></span>
+<span id="cb26-41"><a href="#cb26-41" aria-hidden="true" tabindex="-1"></a>    notificationMessage<span class="op">,</span></span>
+<span id="cb26-42"><a href="#cb26-42" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-43"><a href="#cb26-43" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Two key design choices here:</p>
+<p><strong>Tasks reset to <code>pending</code>, not just
+unowned.</strong> An <code>in_progress</code> task with no owner would
+confuse the auto-claiming logic — is it available or being worked on? By
+resetting to <code>pending</code>, the task re-enters the normal claim
+pipeline and appears as available work in
+<code>useTaskListWatcher</code>.</p>
+<p><strong>The notification message includes actionable
+instructions.</strong> Rather than just saying "tasks were unassigned,"
+the message tells the coordinator exactly what to do next: use
+<code>TaskList</code> to see availability, use <code>TaskUpdate</code>
+to reassign. This pattern — embedding the next action in the
+notification — is borrowed from runbook-style operations and
+significantly reduces the cognitive load on the receiving agent.</p>
+<h3 id="default-task-list-id">Default Task List ID</h3>
+<p>For standalone task mode (no team context), a hardcoded fallback:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> DEFAULT_TASKS_MODE_TASK_LIST_ID <span class="op">=</span> <span class="st">&#39;tasklist&#39;</span></span></code></pre></div>
+<p>This allows the task tools to function even when no team is active. A
+single user can create and track tasks without the overhead of team
+coordination. The task list is still file-based and persists across
+sessions.</p>
+<hr />
+<h2 id="146-task-retrieval-and-schema-migration">14.6 Task Retrieval and
+Schema Migration</h2>
+<h3 id="reading-tasks-with-migration">Reading Tasks with Migration</h3>
+<p>The <code>getTask()</code> function at lines 310-350 does more than
+simple file I/O — it handles schema migration for tasks created by older
+versions:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">getTask</span>(</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  taskListId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> taskId<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>Task <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;</span> {</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> path <span class="op">=</span> <span class="fu">getTaskPath</span>(taskListId<span class="op">,</span> taskId)</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">try</span> {</span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> content <span class="op">=</span> <span class="cf">await</span> <span class="fu">readFile</span>(path<span class="op">,</span> <span class="st">&#39;utf-8&#39;</span>)</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> data <span class="op">=</span> <span class="fu">jsonParse</span>(content) <span class="im">as</span> { status<span class="op">?:</span> <span class="dt">string</span> }</span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">// TEMPORARY: Migrate old status names (Anthropic-internal)</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">USER_TYPE</span> <span class="op">===</span> <span class="st">&#39;ant&#39;</span>) {</span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (data<span class="op">.</span><span class="at">status</span> <span class="op">===</span> <span class="st">&#39;open&#39;</span>) data<span class="op">.</span><span class="at">status</span> <span class="op">=</span> <span class="st">&#39;pending&#39;</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>      <span class="cf">else</span> <span class="cf">if</span> (data<span class="op">.</span><span class="at">status</span> <span class="op">===</span> <span class="st">&#39;resolved&#39;</span>) data<span class="op">.</span><span class="at">status</span> <span class="op">=</span> <span class="st">&#39;completed&#39;</span></span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">else</span> <span class="cf">if</span> ([<span class="st">&#39;planning&#39;</span><span class="op">,</span> <span class="st">&#39;implementing&#39;</span><span class="op">,</span> <span class="st">&#39;reviewing&#39;</span><span class="op">,</span> <span class="st">&#39;verifying&#39;</span>]</span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span><span class="fu">includes</span>(data<span class="op">.</span><span class="at">status</span> <span class="im">as</span> <span class="dt">string</span>))</span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>        data<span class="op">.</span><span class="at">status</span> <span class="op">=</span> <span class="st">&#39;in_progress&#39;</span></span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> parsed <span class="op">=</span> <span class="fu">TaskSchema</span>()<span class="op">.</span><span class="fu">safeParse</span>(data)</span>
+<span id="cb28-19"><a href="#cb28-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>parsed<span class="op">.</span><span class="at">success</span>) {</span>
+<span id="cb28-20"><a href="#cb28-20" aria-hidden="true" tabindex="-1"></a>      <span class="fu">logForDebugging</span>(</span>
+<span id="cb28-21"><a href="#cb28-21" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`[Tasks] Task </span><span class="sc">${</span>taskId<span class="sc">}</span><span class="vs"> failed schema validation: </span><span class="sc">${</span>parsed<span class="op">.</span><span class="at">error</span><span class="op">.</span><span class="at">message</span><span class="sc">}</span><span class="vs">`</span></span>
+<span id="cb28-22"><a href="#cb28-22" aria-hidden="true" tabindex="-1"></a>      )</span>
+<span id="cb28-23"><a href="#cb28-23" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb28-24"><a href="#cb28-24" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb28-25"><a href="#cb28-25" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> parsed<span class="op">.</span><span class="at">data</span></span>
+<span id="cb28-26"><a href="#cb28-26" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">catch</span> (e) {</span>
+<span id="cb28-27"><a href="#cb28-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> code <span class="op">=</span> <span class="fu">getErrnoCode</span>(e)</span>
+<span id="cb28-28"><a href="#cb28-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (code <span class="op">===</span> <span class="st">&#39;ENOENT&#39;</span>) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb28-29"><a href="#cb28-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">throw</span> e</span>
+<span id="cb28-30"><a href="#cb28-30" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb28-31"><a href="#cb28-31" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The migration logic reveals an evolutionary design decision. The
+original task system had 6 statuses (<code>open</code>,
+<code>planning</code>, <code>implementing</code>,
+<code>reviewing</code>, <code>verifying</code>, <code>resolved</code>),
+reflecting a waterfall-like workflow. The system was simplified to 3
+statuses (<code>pending</code>, <code>in_progress</code>,
+<code>completed</code>) — the granular statuses didn't provide enough
+value to justify the complexity, and they confused agents that tried to
+transition through all stages sequentially instead of just doing the
+work.</p>
+<p>The migration is guarded behind <code>USER_TYPE === 'ant'</code>
+(Anthropic-internal) because only internal users had data with old
+status names. External users never saw the 6-status system, so the
+migration code doesn't run for them. This pattern — environment-gated
+migrations — allows the team to ship breaking schema changes without
+affecting external users.</p>
+<p>The <code>ENOENT</code> catch on reads is essential for eventual
+consistency in multi-process environments. Between the time
+<code>listTasks()</code> reads the directory and <code>getTask()</code>
+reads the individual file, another process could have deleted the task.
+Returning <code>null</code> instead of throwing propagates the deletion
+gracefully.</p>
+<hr />
+<h2 id="147-task-tools">14.7 Task Tools</h2>
+<h3 id="taskcreatetool">TaskCreateTool</h3>
+<p>Creates tasks with <code>pending</code> status and empty dependency
+arrays. Integrates with the hook system —
+<code>executeTaskCreatedHooks</code> fires after creation, and if a hook
+blocks (exit code 2), the task is deleted. This enables enterprise
+policies that validate task content before allowing creation.</p>
+<h3 id="taskupdatetool">TaskUpdateTool</h3>
+<p>The most complex task tool at 406 lines. Beyond basic field updates,
+it implements several behaviors:</p>
+<ul>
+<li><strong>Pseudo-status <code>deleted</code></strong>: Calling with
+<code>status: 'deleted'</code> triggers <code>deleteTask()</code> —
+there is no <code>deleted</code> status in the schema, it's an action
+masquerading as a state</li>
+<li><strong>Auto-ownership</strong>: When a teammate marks a task
+<code>in_progress</code> without specifying an owner, it auto-assigns
+itself</li>
+<li><strong>Mailbox notification</strong>: Ownership changes trigger
+<code>writeToMailbox()</code> to notify the new owner</li>
+<li><strong>Verification nudge</strong>: When 3+ tasks are all marked
+<code>completed</code> without running verification, prompts the agent
+to consider quality checking — a soft guardrail that balances
+productivity with rigor</li>
+<li><strong>Hook integration</strong>:
+<code>executeTaskCompletedHooks</code> fires on completion, allowing
+hooks to verify or validate before the transition is finalized</li>
+</ul>
+<h3 id="tasklisttool">TaskListTool</h3>
+<p>Lists all tasks with two filtering behaviors:</p>
+<ul>
+<li>Tasks with metadata keys prefixed with <code>_internal</code> are
+hidden</li>
+<li>The <code>blockedBy</code> array is filtered to show only unresolved
+blockers (pending/in_progress tasks), so completed blockers don't appear
+as active constraints</li>
+</ul>
+<h3 id="taskstoptool">TaskStopTool</h3>
+<p>Stops running background tasks by ID. Validates the task exists and
+is in a running state, then delegates to the task-type-specific
+<code>kill()</code> implementation — each task type knows how to
+terminate itself (aborting an HTTP request is different from killing a
+shell process).</p>
+<hr />
+<h2 id="148-the-task-list-watcher">14.8 The Task List Watcher</h2>
+<p>The <code>useTaskListWatcher</code> hook at
+<code>hooks/useTaskListWatcher.ts</code> (221 lines) bridges the
+file-based task system with React's rendering lifecycle. This is where
+the pull-based work distribution model comes to life.</p>
+<h3 id="filesystem-watching">Filesystem Watching</h3>
+<p>The watcher uses <code>fs.watch</code> on the task directory:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> watcher <span class="op">=</span> <span class="fu">watch</span>(tasksDir<span class="op">,</span> { persistent<span class="op">:</span> <span class="kw">false</span> }<span class="op">,</span> (eventType) <span class="kw">=&gt;</span> {</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Debounce: ignore events within 1 second of last read</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> lastReadTime <span class="op">&lt;</span> DEBOUNCE_MS) <span class="cf">return</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>  lastReadTime <span class="op">=</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>()</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">refreshTasks</span>()</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>})</span></code></pre></div>
+<p>The 1-second debounce is critical for preventing thundering herd
+effects. When a coordinator creates 10 tasks in rapid succession, each
+<code>writeFile</code> triggers a filesystem event. Without debounce,
+the watcher would read the task list 10 times — and 10 agents would all
+try to claim the same first task simultaneously. With debounce, one read
+captures all 10 tasks, and the claiming logic distributes them
+efficiently.</p>
+<p>The <code>persistent: false</code> option ensures the watcher doesn't
+keep the process alive. Without this, a stale watcher would prevent
+graceful shutdown — the Node.js event loop would never drain because the
+filesystem watcher holds an active handle.</p>
+<h3 id="auto-claim-logic">Auto-Claim Logic</h3>
+<p>When the watcher detects new tasks, it runs the auto-claim
+algorithm:</p>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">tryClaimNextTask</span>(tasks<span class="op">:</span> Task[])<span class="op">:</span> Task <span class="op">|</span> <span class="dt">null</span> {</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> claimable <span class="op">=</span> tasks<span class="op">.</span><span class="fu">filter</span>(</span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>    t <span class="kw">=&gt;</span> t<span class="op">.</span><span class="at">status</span> <span class="op">===</span> <span class="st">&#39;pending&#39;</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>      <span class="op">&amp;&amp;</span> <span class="op">!</span>t<span class="op">.</span><span class="at">owner</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>      <span class="op">&amp;&amp;</span> t<span class="op">.</span><span class="at">blockedBy</span><span class="op">.</span><span class="fu">every</span>(blockerIsResolved)</span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (claimable<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Claim the first available (lowest ID = oldest)</span></span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> target <span class="op">=</span> claimable[<span class="dv">0</span>]</span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> result <span class="op">=</span> <span class="cf">await</span> <span class="fu">claimTaskWithBusyCheck</span>(</span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>    taskListId<span class="op">,</span> target<span class="op">.</span><span class="at">id</span><span class="op">,</span> agentId</span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (result<span class="op">.</span><span class="at">success</span>) <span class="cf">return</span> result<span class="op">.</span><span class="at">task</span></span>
+<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">null</span>  <span class="co">// Another agent claimed it first</span></span>
+<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The oldest-first ordering (lowest ID) ensures fairness — tasks are
+processed in creation order. If the claim fails because another agent
+got there first (TOCTOU race), the function returns null and the watcher
+tries again on the next filesystem event.</p>
+<h3 id="prompt-generation">Prompt Generation</h3>
+<p>Claimed tasks are converted to natural language prompts and submitted
+through the <code>onSubmitTask</code> callback:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">formatTaskAsPrompt</span>(task<span class="op">:</span> Task)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> prompt <span class="op">=</span> <span class="vs">`Work on task #</span><span class="sc">${</span>task<span class="op">.</span><span class="at">id</span><span class="sc">}</span><span class="vs">: </span><span class="sc">${</span>task<span class="op">.</span><span class="at">subject</span><span class="sc">}\n\n</span><span class="vs">`</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  prompt <span class="op">+=</span> task<span class="op">.</span><span class="at">description</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (task<span class="op">.</span><span class="at">blockedBy</span><span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>    prompt <span class="op">+=</span> <span class="vs">`</span><span class="sc">\n\n</span><span class="vs">Note: This task was blocked by tasks </span><span class="sc">${</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>      task<span class="op">.</span><span class="at">blockedBy</span><span class="op">.</span><span class="fu">join</span>(<span class="st">&#39;, &#39;</span>)</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>    <span class="sc">}</span><span class="vs"> which are now resolved.`</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> prompt</span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This makes claimed tasks appear as if the user typed them — the agent
+receives a normal prompt through the standard query pipeline and
+processes the task using its full capabilities. The dependency context
+(which blockers were resolved) helps the agent understand the sequencing
+and potentially leverage work done by the blocking tasks.</p>
+<h3 id="react-ref-stability">React Ref Stability</h3>
+<p>The hook uses React refs to stabilize unstable props, working around
+a known Bun <code>PathWatcherManager</code> deadlock:</p>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> onSubmitTaskRef <span class="op">=</span> <span class="fu">useRef</span>(onSubmitTask)</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>onSubmitTaskRef<span class="op">.</span><span class="at">current</span> <span class="op">=</span> onSubmitTask</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a><span class="co">// In the effect, use the ref, not the prop</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>onSubmitTaskRef<span class="op">.</span><span class="fu">current</span>(<span class="fu">formatTaskAsPrompt</span>(task))</span></code></pre></div>
+<p>Without refs, the effect would re-run on every render (because the
+callback prop is a new function each time), which would re-create the
+filesystem watcher, which triggers a Bun-specific deadlock in
+<code>PathWatcherManager</code> when watchers are rapidly created and
+destroyed. The ref pattern avoids this by keeping the same effect
+instance and just updating the callback it calls.</p>
+<hr />
+<h2 id="149-integration-points">14.9 Integration Points</h2>
+<h3 id="with-the-agent-system-chapter-13">With the Agent System (Chapter
+13)</h3>
+<p><code>registerAsyncAgent()</code> creates <code>LocalAgentTask</code>
+entries in <code>AppState.tasks</code>. The lifecycle functions
+<code>completeAsyncAgent()</code>, <code>failAsyncAgent()</code>, and
+<code>killAsyncAgent()</code> transition background task states.
+<code>TaskStop</code> triggers agent abort via
+<code>AbortController</code>.</p>
+<h3 id="with-the-hook-system-chapter-10">With the Hook System (Chapter
+10)</h3>
+<p><code>executeTaskCreatedHooks</code> and
+<code>executeTaskCompletedHooks</code> fire at task lifecycle
+boundaries. Hooks can block task creation (rejecting invalid tasks) or
+completion (requiring verification before marking done).</p>
+<h3 id="with-the-mailbox-system-chapter-13">With the Mailbox System
+(Chapter 13)</h3>
+<p>Ownership changes trigger mailbox notifications. When a task is
+reassigned, the new owner receives a message with the task subject and
+description, enabling them to pick up work without polling the task
+list.</p>
+<hr />
+<h2 id="1410-engineering-patterns">14.10 Engineering Patterns</h2>
+<p><strong>Dual-system separation</strong>: In-memory state for fast UI
+rendering, file-based persistence for cross-process coordination. The
+two systems share naming conventions but are architecturally
+independent, each optimized for its use case. This is a common pattern
+in distributed systems — the coordination substrate has different
+requirements than the execution substrate.</p>
+<p><strong>High water mark for monotonic IDs</strong>: Prevents ID
+recycling that would break external references. A simple counter in a
+hidden file, read during creation and updated during deletion. The cost
+is one extra file read per creation — negligible compared to the file
+locking overhead.</p>
+<p><strong>Bidirectional dependency cleanup</strong>: Deleting a task
+cascades through all other tasks'
+<code>blocks</code>/<code>blockedBy</code> arrays. Without this cleanup,
+deleted tasks would become phantom blockers that permanently prevent
+dependent tasks from being claimed. The cascade is O(N) in the number of
+tasks, but N is bounded by team size.</p>
+<p><strong>Verification nudge over enforcement</strong>: The
+3-task-completion nudge prompts rather than blocks. This respects agent
+autonomy while guarding against careless bulk completion — a pattern
+applicable to any system where you want guardrails without hard stops.
+The threshold (3 tasks) was chosen empirically: a single completion is
+probably fine, but batch-completing many tasks suggests the agent may be
+cutting corners.</p>
+<p><strong>Pull-based work distribution</strong>: Agents watch the task
+list and claim work autonomously rather than being assigned tasks by a
+coordinator. This removes the coordinator as a bottleneck and allows
+agents to self-organize based on their capabilities and availability.
+The 1-second debounce in <code>useTaskListWatcher</code> prevents
+thundering herd effects while keeping response times fast.</p>
+<p><strong>Polymorphic kill, nothing else</strong>: The
+<code>Task</code> interface has been stripped to a single method:</p>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> Task <span class="op">=</span> {</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> TaskType</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">kill</span>(taskId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> setAppState<span class="op">:</span> SetAppState)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The comment in the source explains: "spawn/render were never called
+polymorphically (removed in #22546). All six kill implementations use
+only setAppState." This is an example of the codebase evolving toward
+simplicity — what started as a rich interface was trimmed to only the
+method that actually varied across task types. The lesson: don't design
+interfaces speculatively. Start minimal and add methods when you have
+concrete callers.</p>
+<p><strong>Environment-gated schema migration</strong>: The
+<code>getTask()</code> status migration is guarded behind
+<code>USER_TYPE === 'ant'</code>. This allows the team to ship breaking
+schema changes to internal users (who had data in the old format)
+without affecting external users (who never saw the old format). When
+you have different user populations with different data histories,
+conditional migration is cleaner than universal migration that no-ops
+for most users.</p>
+<p><strong>Signal-based notification with defensive catches</strong>:
+Every task mutation fires <code>notifyTasksUpdated()</code> wrapped in a
+try/catch. A buggy listener should never prevent a task mutation from
+completing. This is a general principle for event systems: mutations are
+more important than notifications. If you must choose, lose the
+notification, not the data.</p>
+<hr />
+<h2 id="summary">Summary</h2>
+<p>The task management system provides the coordination substrate for
+multi-agent work in Claude Code. The dual-system architecture —
+in-memory for background computation tracking, file-based for team work
+coordination — reflects the reality that different coordination patterns
+require different storage and concurrency models.</p>
+<p>For engineers building multi-agent systems, the key takeaway is that
+task management is fundamentally a distributed systems problem. File
+locking, ID monotonicity, reference cleanup, and TOCTOU prevention are
+not academic concerns — they're practical necessities when 10+ agents
+compete for work items on a shared filesystem. The patterns here (high
+water marks, bidirectional dependency cleanup, auto-claiming with busy
+checks, teammate cleanup on exit) are individually simple but essential
+in combination — each one prevents a specific class of bugs that would
+be nearly impossible to reproduce in single-process testing but would
+surface immediately under concurrent agent load.</p>
+<p>The cleanup and migration patterns are equally important. A
+team-based system must handle teammates disappearing (crashes, timeouts,
+resource limits), data schema evolution (old status names persisting on
+disk), and backward compatibility (agentId vs. name ownership formats).
+These are the unglamorous parts of distributed system engineering, but
+they're what separate a prototype from a production system.</p>
+<p>In Chapter 15, we examine the MCP integration layer — the system that
+extends Claude Code's capabilities by connecting to external servers
+through the Model Context Protocol, adding tools, resources, and prompts
+from any language runtime.</p>
+</div>
+</body>
+</html>

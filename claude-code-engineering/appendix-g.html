@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Appendix G: Permission Modes & Rule Syntax Reference — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="appendix-g-permission-modes--rule-syntax-reference">Appendix G:
+Permission Modes &amp; Rule Syntax Reference</h1>
+<h2 id="the-permission-system">The Permission System</h2>
+<p>Claude Code's permission system is the primary safety boundary
+between the AI agent and your system. Every tool invocation -- every
+file read, every bash command, every file write -- passes through the
+permission evaluator before execution. Understanding the permission
+model is not optional for production use; it is the difference between
+an agent that works safely unattended and one that deletes your home
+directory because you typed "clean up."</p>
+<p>This appendix is the complete reference for permission modes, rule
+syntax, evaluation order, and rule source priority. For the
+architectural discussion of why the permission system works this way,
+see Chapter 7.</p>
+<hr />
+<h2 id="the-6-permission-modes">The 6 Permission Modes</h2>
+<p>When Claude Code launches, it operates in exactly one permission
+mode. The mode determines the default behavior when no explicit rule
+matches a tool invocation.</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Flag</th>
+<th>Default Behavior</th>
+<th>Use Case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>default</strong></td>
+<td>(none)</td>
+<td>Prompt user for every unmatched tool call</td>
+<td>Interactive development. You see and approve each action.</td>
+</tr>
+<tr>
+<td><strong>auto</strong></td>
+<td><code>--auto</code></td>
+<td>Auto-approve all unmatched tool calls</td>
+<td>CI/CD pipelines, scripted workflows, headless execution. Trusts the
+agent fully for operations not explicitly denied.</td>
+</tr>
+<tr>
+<td><strong>bypass</strong></td>
+<td><code>--bypass</code></td>
+<td>Skip all permission checks entirely</td>
+<td>Internal Anthropic testing only. Not available in external builds
+(gated by <code>PERMISSION_BYPASS_MODE</code> flag).</td>
+</tr>
+<tr>
+<td><strong>acceptEdits</strong></td>
+<td><code>--accept-edits</code></td>
+<td>Auto-approve file reads and edits; prompt for bash commands and
+other tools</td>
+<td>When you trust the agent to modify files but want to review shell
+commands. Good for refactoring sessions.</td>
+</tr>
+<tr>
+<td><strong>dontAsk</strong></td>
+<td><code>--dont-ask</code></td>
+<td>Auto-approve all tool calls silently (no prompts, no logging)</td>
+<td>Embedded usage where the host application manages trust. Differs
+from <code>auto</code> in that it suppresses all permission UI.</td>
+</tr>
+<tr>
+<td><strong>plan</strong></td>
+<td><code>--plan</code></td>
+<td>Block all write operations (edits, bash, file writes). Allow all
+reads.</td>
+<td>Read-only exploration. The agent can investigate and plan but cannot
+change anything. Used by <code>/plan</code> command.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mode-selection-priority">Mode Selection Priority</h3>
+<p>If multiple mode signals conflict, the highest priority wins:</p>
+<ol type="1">
+<li><strong>CLI flag</strong> (<code>--auto</code>, <code>--plan</code>,
+etc.) -- highest priority</li>
+<li><strong>Environment variable</strong>
+(<code>CLAUDE_PERMISSION_MODE=auto</code>)</li>
+<li><strong>Settings file</strong>
+(<code>"permissionMode": "auto"</code> in settings.json)</li>
+<li><strong>Default</strong> -- <code>default</code> mode (interactive
+prompting)</li>
+</ol>
+<h3 id="mode-transitions-within-a-session">Mode Transitions Within a
+Session</h3>
+<p>The <code>/plan</code> command temporarily switches to plan mode
+within an active session. When the plan is complete and the user says
+"execute," the session returns to its original mode. This is the only
+supported mid-session mode transition.</p>
+<hr />
+<h2 id="rule-syntax">Rule Syntax</h2>
+<p>Permission rules use the format <code>Tool(pattern)</code> where
+<code>Tool</code> is a tool name and <code>pattern</code> is a glob that
+matches against the tool's input.</p>
+<h3 id="basic-syntax">Basic Syntax</h3>
+<pre><code>Tool(pattern)</code></pre>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Description</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Tool</code></td>
+<td>The tool name exactly as registered</td>
+<td><code>Bash</code>, <code>Read</code>, <code>Edit</code>,
+<code>Write</code>, <code>Glob</code>, <code>Grep</code>,
+<code>WebFetch</code>, <code>WebSearch</code>,
+<code>NotebookEdit</code>, <code>mcp__servername__toolname</code></td>
+</tr>
+<tr>
+<td><code>pattern</code></td>
+<td>Glob pattern matched against the tool's primary input</td>
+<td>File path for Read/Edit/Write, command string for Bash, URL for
+WebFetch</td>
+</tr>
+</tbody>
+</table>
+<h3 id="glob-pattern-reference">Glob Pattern Reference</h3>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Matches</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>*</code></td>
+<td>Any characters within a single path segment</td>
+<td><code>Bash(git *)</code> matches <code>git status</code>,
+<code>git diff HEAD</code></td>
+</tr>
+<tr>
+<td><code>**</code></td>
+<td>Any characters across path segments</td>
+<td><code>Read(./**/*.env)</code> matches <code>.env</code>,
+<code>config/.env</code>, <code>deploy/staging/.env</code></td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>Any single character</td>
+<td><code>Read(./?.json)</code> matches <code>a.json</code> but not
+<code>ab.json</code></td>
+</tr>
+<tr>
+<td><code>{a,b}</code></td>
+<td>Alternation</td>
+<td><code>Bash({git,gh} *)</code> matches <code>git status</code> and
+<code>gh pr view</code></td>
+</tr>
+<tr>
+<td><code>[abc]</code></td>
+<td>Character class</td>
+<td><code>Read(./config[123].json)</code> matches
+<code>config1.json</code>, <code>config2.json</code></td>
+</tr>
+<tr>
+<td><code>[!abc]</code></td>
+<td>Negated character class</td>
+<td><code>Read(./[!.]*)</code> matches files not starting with
+<code>.</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="concrete-rule-examples">Concrete Rule Examples</h3>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allow&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(git *)&quot;</span><span class="ot">,</span>                    <span class="er">//</span> <span class="er">All</span> <span class="er">git</span> <span class="er">subcommands</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(gh *)&quot;</span><span class="ot">,</span>                     <span class="er">//</span> <span class="er">All</span> <span class="er">GitHub</span> <span class="er">CLI</span> <span class="er">commands</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(python -m pytest *)&quot;</span><span class="ot">,</span>       <span class="er">//</span> <span class="er">Pytest</span> <span class="er">with</span> <span class="er">any</span> <span class="er">arguments</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(ruff *)&quot;</span><span class="ot">,</span>                   <span class="er">//</span> <span class="er">Ruff</span> <span class="er">linter</span> <span class="er">and</span> <span class="er">formatter</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(npm test)&quot;</span><span class="ot">,</span>                 <span class="er">//</span> <span class="er">Exact</span> <span class="er">command</span> <span class="er">match</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(ls *)&quot;</span><span class="ot">,</span>                     <span class="er">//</span> <span class="er">List</span> <span class="er">directories</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(cat *)&quot;</span><span class="ot">,</span>                    <span class="er">//</span> <span class="er">Read</span> <span class="er">file</span> <span class="er">contents</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Read(./**)&quot;</span><span class="ot">,</span>                     <span class="er">//</span> <span class="er">Read</span> <span class="er">any</span> <span class="er">file</span> <span class="er">in</span> <span class="er">the</span> <span class="er">project</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Edit(./**/*.py)&quot;</span><span class="ot">,</span>                <span class="er">//</span> <span class="er">Edit</span> <span class="er">any</span> <span class="er">Python</span> <span class="er">file</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Write(./**/*.md)&quot;</span><span class="ot">,</span>               <span class="er">//</span> <span class="er">Write</span> <span class="er">any</span> <span class="er">Markdown</span> <span class="er">file</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Grep(./**)&quot;</span><span class="ot">,</span>                     <span class="er">//</span> <span class="er">Search</span> <span class="er">any</span> <span class="er">file</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Glob(./**)&quot;</span><span class="ot">,</span>                     <span class="er">//</span> <span class="er">Glob</span> <span class="er">any</span> <span class="er">path</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;WebSearch(*)&quot;</span><span class="ot">,</span>                   <span class="er">//</span> <span class="er">Any</span> <span class="er">web</span> <span class="er">search</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;WebFetch(https://docs.*/**)&quot;</span><span class="ot">,</span>    <span class="er">//</span> <span class="er">Fetch</span> <span class="er">from</span> <span class="er">documentation</span> <span class="er">sites</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;mcp__copilot-mem__*(*)&quot;</span>          <span class="er">//</span> <span class="er">All</span> <span class="er">copilot-mem</span> <span class="er">MCP</span> <span class="er">tools</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;deny&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Read(./.env)&quot;</span><span class="ot">,</span>                   <span class="er">//</span> <span class="er">Never</span> <span class="er">read</span> <span class="er">.env</span> <span class="er">files</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Read(./.env.*)&quot;</span><span class="ot">,</span>                 <span class="er">//</span> <span class="er">Never</span> <span class="er">read</span> <span class="er">.env.local</span><span class="ot">,</span> <span class="er">.env.production</span><span class="ot">,</span> <span class="er">etc.</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Read(./**/credentials*)&quot;</span><span class="ot">,</span>        <span class="er">//</span> <span class="er">Never</span> <span class="er">read</span> <span class="er">credential</span> <span class="er">files</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Read(./**/*.pem)&quot;</span><span class="ot">,</span>               <span class="er">//</span> <span class="er">Never</span> <span class="er">read</span> <span class="er">private</span> <span class="er">keys</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Read(./**/token.json)&quot;</span><span class="ot">,</span>          <span class="er">//</span> <span class="er">Never</span> <span class="er">read</span> <span class="er">token</span> <span class="er">files</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(rm -rf *)&quot;</span><span class="ot">,</span>                 <span class="er">//</span> <span class="er">Never</span> <span class="er">recursive</span> <span class="er">force</span> <span class="er">delete</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(DROP TABLE *)&quot;</span><span class="ot">,</span>             <span class="er">//</span> <span class="er">Never</span> <span class="er">drop</span> <span class="er">database</span> <span class="er">tables</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(git push --force *)&quot;</span><span class="ot">,</span>       <span class="er">//</span> <span class="er">Never</span> <span class="er">force</span> <span class="er">push</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(curl * | bash)&quot;</span><span class="ot">,</span>            <span class="er">//</span> <span class="er">Never</span> <span class="er">pipe</span> <span class="er">curl</span> <span class="er">to</span> <span class="er">bash</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Write(./.env*)&quot;</span>                  <span class="er">//</span> <span class="er">Never</span> <span class="er">write</span> <span class="er">to</span> <span class="er">env</span> <span class="er">files</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="pattern-matching-details">Pattern Matching Details</h3>
+<p>Pattern matching is <strong>case-sensitive</strong> on all platforms.
+The match is performed against the <strong>entire</strong> tool input,
+not a substring. <code>Bash(git *)</code> matches
+<code>git status</code> but does not match <code>sudo git status</code>
+because the pattern must match from the start.</p>
+<p>For Bash commands, the pattern matches against the exact command
+string that will be executed. For file operations (Read, Edit, Write,
+Glob, Grep), the pattern matches against the file path argument. Paths
+are normalized to use forward slashes before matching, even on
+Windows.</p>
+<hr />
+<h2 id="evaluation-order">Evaluation Order</h2>
+<p>When a tool invocation occurs, the permission evaluator processes
+rules in this order:</p>
+<pre><code>1. DENY rules    →  If any deny rule matches  →  BLOCK (tool does not execute)
+2. ASK rules     →  If any ask rule matches   →  PROMPT user for approval
+3. ALLOW rules   →  If any allow rule matches  →  APPROVE (tool executes)
+4. MODE DEFAULT  →  No rule matched            →  Apply permission mode default</code></pre>
+<p>This is a <strong>first-match-wins within each tier</strong> system,
+but tiers are evaluated strictly in deny-ask-allow order. A deny rule
+always overrides an allow rule, even if the allow rule is more
+specific.</p>
+<h3 id="practical-implications">Practical implications</h3>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allow&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;Bash(git *)&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;deny&quot;</span><span class="fu">:</span>  <span class="ot">[</span><span class="st">&quot;Bash(git push --force *)&quot;</span><span class="ot">]</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>This configuration allows all git commands <strong>except</strong>
+force push. The deny rule fires first, blocking
+<code>git push --force main</code> before the allow rule for
+<code>Bash(git *)</code> is ever evaluated.</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allow&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;Read(./**)&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;deny&quot;</span><span class="fu">:</span>  <span class="ot">[</span><span class="st">&quot;Read(./.env)&quot;</span><span class="ot">]</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>This allows reading any project file except <code>.env</code>. Even
+though <code>Read(./.**)</code> is a superset that includes
+<code>.env</code>, the deny tier evaluates first.</p>
+<h3 id="the-ask-tier">The "ask" tier</h3>
+<p>The <code>ask</code> tier is implicit in <code>default</code> mode --
+any tool call not matching <code>allow</code> or <code>deny</code> falls
+through to "ask the user." You can also create explicit ask rules to
+force prompting for specific operations even in <code>auto</code>
+mode:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;ask&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(rm *)&quot;</span><span class="ot">,</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Bash(git push *)&quot;</span><span class="ot">,</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;Write(./**/config*)&quot;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>In <code>auto</code> mode, these three patterns will still prompt the
+user while everything else auto-approves.</p>
+<hr />
+<h2 id="rule-sources--priority">Rule Sources &amp; Priority</h2>
+<p>Permission rules are loaded from 8 sources, evaluated in priority
+order. Higher-priority sources override lower ones. Within the same
+source, <code>deny</code> still beats <code>allow</code> per the
+evaluation order above.</p>
+<table>
+<thead>
+<tr>
+<th>Priority</th>
+<th>Source</th>
+<th>Location</th>
+<th>Who Controls</th>
+<th>Overridable?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 (highest)</td>
+<td><strong>Built-in safety</strong></td>
+<td>Hardcoded in binary</td>
+<td>Anthropic</td>
+<td>No</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>Managed settings</strong></td>
+<td>Organization MDM/endpoint</td>
+<td>Organization admin</td>
+<td>No</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>CLI flags</strong></td>
+<td><code>--allowedTools</code>, <code>--deniedTools</code></td>
+<td>User (per invocation)</td>
+<td>--</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>Environment</strong></td>
+<td><code>CLAUDE_ALLOWED_TOOLS</code>,
+<code>CLAUDE_DENIED_TOOLS</code></td>
+<td>User / CI pipeline</td>
+<td>--</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>User settings</strong></td>
+<td><code>~/.claude/settings.json</code></td>
+<td>User (global)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>User local</strong></td>
+<td><code>~/.claude/settings.local.json</code></td>
+<td>User (global, gitignored)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>Project settings</strong></td>
+<td><code>.claude/settings.json</code></td>
+<td>Team (committed to repo)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>8 (lowest)</td>
+<td><strong>Project local</strong></td>
+<td><code>.claude/settings.local.json</code></td>
+<td>User (per-project, gitignored)</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<h3 id="source-details">Source Details</h3>
+<p><strong>Built-in safety (Priority 1):</strong> The binary contains a
+hardcoded deny list that cannot be overridden by any configuration. This
+blocks catastrophic commands like <code>rm -rf /</code>,
+<code>mkfs</code>, <code>dd if=/dev/zero of=/dev/sda</code>, and a
+curated set of destructive patterns. These rules exist even in
+<code>bypass</code> mode.</p>
+<p><strong>Managed settings (Priority 2):</strong> Organizations can
+deploy a managed settings file via MDM (macOS), Group Policy (Windows),
+or a configuration endpoint. These rules enforce organizational policy
+-- for example, denying access to production databases or requiring
+approval for outbound network requests. Users cannot override managed
+rules.</p>
+<p><strong>CLI flags (Priority 3):</strong> The
+<code>--allowedTools</code> and <code>--deniedTools</code> flags accept
+comma-separated rule patterns:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">claude</span> <span class="at">--allowedTools</span> <span class="st">&quot;Bash(npm *),Read(./src/**)&quot;</span> <span class="at">--deniedTools</span> <span class="st">&quot;Bash(rm *)&quot;</span></span></code></pre></div>
+<p><strong>Environment variables (Priority 4):</strong> Same syntax as
+CLI flags, useful for CI/CD:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">CLAUDE_ALLOWED_TOOLS</span><span class="op">=</span><span class="st">&quot;Bash(npm *),Bash(git *)&quot;</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">CLAUDE_DENIED_TOOLS</span><span class="op">=</span><span class="st">&quot;Bash(rm *),Write(./.env*)&quot;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">claude</span> <span class="at">--auto</span></span></code></pre></div>
+<p><strong>User settings (Priority 5-6):</strong>
+<code>~/.claude/settings.json</code> is your global configuration.
+<code>settings.local.json</code> is the gitignored override for personal
+preferences. The local file is where power users put
+<code>Bash(*)</code> to auto-approve all bash commands.</p>
+<p><strong>Project settings (Priority 7-8):</strong>
+<code>.claude/settings.json</code> is committed to the repo and shared
+with the team. It defines the team's agreed-upon permission baseline.
+<code>.claude/settings.local.json</code> is gitignored for per-developer
+overrides.</p>
+<h3 id="resolution-example">Resolution Example</h3>
+<p>Given these settings files:</p>
+<pre><code># Managed (org policy)
+deny: Bash(curl * | sh)
+
+# User settings (~/.claude/settings.json)
+allow: Bash(*)
+
+# Project settings (.claude/settings.json)
+deny: Bash(rm -rf *)
+allow: Bash(git *), Bash(npm *)
+
+# Project local (.claude/settings.local.json)  
+allow: Bash(rm ./tmp/*)</code></pre>
+<p>For <code>rm -rf /tmp/cache</code>:</p>
+<ol type="1">
+<li>Built-in safety: no match for this specific pattern</li>
+<li>Managed: no match</li>
+<li>Project deny <code>Bash(rm -rf *)</code>: <strong>MATCH --
+BLOCKED</strong></li>
+</ol>
+<p>The user's <code>Bash(*)</code> allow and the project local's
+<code>Bash(rm ./tmp/*)</code> allow never get evaluated because the
+project deny fires at a higher tier.</p>
+<p>For <code>curl https://example.com | sh</code>:</p>
+<ol type="1">
+<li>Built-in safety: no match</li>
+<li>Managed deny <code>Bash(curl * | sh)</code>: <strong>MATCH --
+BLOCKED</strong></li>
+</ol>
+<p>The user's <code>Bash(*)</code> cannot override the managed
+policy.</p>
+<hr />
+<h2 id="common-permission-configurations">Common Permission
+Configurations</h2>
+<h3 id="minimal-security-conscious-team">Minimal (security-conscious
+team)</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permissions&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;allow&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(git status)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(git diff *)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(git log *)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(python -m pytest *)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(ruff *)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./**)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Grep(./**)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Glob(./**)&quot;</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;deny&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./.env*)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./**/*.pem)&quot;</span><span class="ot">,</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./**/credentials*)&quot;</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>Everything else prompts. The agent can read code, search, and run
+tests without interruption. Git writes, file edits, and arbitrary bash
+require approval.</p>
+<h3 id="balanced-solo-developer">Balanced (solo developer)</h3>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permissions&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;allow&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(git *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(gh *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(python *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(npm *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(ruff *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(ls *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(cat *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./**)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Edit(./**)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Write(./**)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Grep(./**)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Glob(./**)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;WebSearch(*)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;WebFetch(*)&quot;</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;deny&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./.env*)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(rm -rf *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(git push --force *)&quot;</span><span class="ot">,</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Write(./.env*)&quot;</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>Most development operations auto-approve. Destructive operations and
+secret access are denied.</p>
+<h3 id="cicd-pipeline">CI/CD Pipeline</h3>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permissionMode&quot;</span><span class="fu">:</span> <span class="st">&quot;auto&quot;</span><span class="fu">,</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permissions&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;deny&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(git push *)&quot;</span><span class="ot">,</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(rm -rf *)&quot;</span><span class="ot">,</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./.env*)&quot;</span><span class="ot">,</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;WebFetch(*)&quot;</span><span class="ot">,</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;WebSearch(*)&quot;</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>Auto mode with explicit denials for network access, destructive
+commands, and secrets. The agent can read, analyze, test, and report but
+cannot push, delete, or exfiltrate.</p>
+<h3 id="power-user-personal-local">Power User (personal local)</h3>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permissions&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;allow&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Bash(*)&quot;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;deny&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./.env*)&quot;</span><span class="ot">,</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Read(./**/*.pem)&quot;</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>In <code>settings.local.json</code> (gitignored). Auto-approves all
+bash commands. The deny rules still protect secrets because deny always
+evaluates before allow.</p>
+</div>
+</body>
+</html>

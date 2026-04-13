@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 35: The Bridge — Remote Sessions — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-35-the-bridge--remote-sessions">Chapter 35: The Bridge —
+Remote Sessions</h1>
+<p>A CLI agent that only runs on the machine in front of you is a tool.
+A CLI agent that runs anywhere — on a headless server, inside a
+container, across a fleet of development machines — is infrastructure.
+The bridge is the layer that makes that transformation possible.</p>
+<p>In the preceding chapters we built a complete local agent: it reads
+prompts, invokes tools, streams responses, manages context, and persists
+sessions. But local operation imposes constraints that matter in
+practice. You cannot SSH into a remote build server and get a full
+interactive Claude Code session without forwarding your terminal. An IDE
+extension running in VS Code cannot spawn a child process that is also a
+full agent conversation without a protocol for message exchange. A CI/CD
+pipeline cannot spin up thirty parallel agent sessions to review every
+file in a monorepo without a session management layer that handles
+concurrency, authentication, and resource limits.</p>
+<p>The bridge solves all three problems with a single architecture. It
+is a daemon that exposes the agent over two transports — HTTP REST for
+request/response operations and WebSocket for real-time streaming —
+manages session lifecycles with configurable timeouts, authenticates
+connections using HMAC-SHA256 tokens, and enforces concurrency limits to
+prevent runaway resource consumption. The implementation spans nine
+modules and roughly 9,600 lines of Rust, making it one of the largest
+subsystems in the codebase. This chapter dissects every piece.</p>
+<hr />
+<h2 id="351-why-a-bridge-exists">35.1 Why a Bridge Exists</h2>
+<p>The simplest architecture for a CLI agent is a process that reads
+from stdin and writes to stdout. That is how the REPL works, and it is
+sufficient for interactive terminal use. But three forces push the
+architecture toward a network-accessible daemon.</p>
+<p><strong>IDE integration.</strong> VS Code, Cursor, and JetBrains all
+need to communicate with the agent programmatically. They cannot use a
+raw terminal — they need structured JSON messages with typed fields for
+tool calls, streaming deltas, diagnostic forwarding, and file
+synchronization. The REPL bridge (<code>repl_bridge.rs</code>) provides
+this over stdin/stdout using a Content-Length framed protocol inspired
+by the Language Server Protocol. But stdin/stdout ties the agent to the
+editor's child process lifecycle. If the editor crashes, the agent dies.
+If the user wants to keep a session running across editor restarts, they
+need a daemon.</p>
+<p><strong>Remote execution.</strong> When the agent runs on a remote
+server — inside a Docker container, on a cloud VM, behind a bastion host
+— the user's local terminal or IDE needs to reach it over the network.
+The bridge API (<code>bridge_api.rs</code>) exposes a REST interface on
+<code>127.0.0.1:19876</code> by default, with optional TLS, that lets
+any HTTP client create sessions, send messages, and poll for output.</p>
+<p><strong>Multi-session concurrency.</strong> A single user might want
+parallel sessions for different tasks. A team CI system might need
+dozens of concurrent sessions reviewing PRs. The session manager
+(<code>session_manager.rs</code>) and remote session pool
+(<code>remote_session.rs</code>) provide the concurrency infrastructure:
+lifecycle state machines, capacity tracking, garbage collection, and
+session pooling with pre-warming.</p>
+<p>Together these modules form a layered architecture:</p>
+<pre><code>┌─────────────────────────────────────────────────────────────┐
+│                      Client Layer                            │
+│  Terminal │ VS Code │ Cursor │ IntelliJ │ HTTP Client │ CI  │
+└─────────┬──────────┬────────┬──────────┬────────────┬───────┘
+          │          │        │          │            │
+          ▼          ▼        ▼          ▼            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Transport Layer                            │
+│  stdin/stdout (REPL)  │  HTTP REST  │  WebSocket (real-time) │
+└─────────┬─────────────┴──────┬──────┴──────────┬────────────┘
+          │                    │                  │
+          ▼                    ▼                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Protocol Layer                             │
+│  Content-Length framing │ JSON-RPC 2.0 │ Binary RCBM framing │
+└─────────────────────────────────┬───────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Session Management                         │
+│  SessionManager  │  RemoteSessionPool  │  BridgeApi          │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Agent SDK Layer                             │
+│  SdkSession  │  SdkMessage  │  Permission  │  Hook Events   │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+<p>Each layer knows only about its immediate neighbors. The transport
+layer does not know whether a message is a tool call or a heartbeat. The
+session manager does not know which transport delivered a message. This
+separation is what allows the same session to be accessed from an IDE
+over stdin/stdout and from a web UI over HTTP simultaneously.</p>
+<hr />
+<h2 id="352-the-module-map">35.2 The Module Map</h2>
+<p>Before diving into individual modules, here is what each file in
+<code>src/bridge/</code> does and how they relate:</p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Lines</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mod.rs</code></td>
+<td>120</td>
+<td>Shared constants, <code>BridgeError</code> enum, protocol
+version</td>
+</tr>
+<tr>
+<td><code>repl_bridge.rs</code></td>
+<td>1,765</td>
+<td>IDE bridge protocol: Content-Length framing, session multiplexing,
+file sync</td>
+</tr>
+<tr>
+<td><code>bridge_api.rs</code></td>
+<td>983</td>
+<td>HTTP REST API: session CRUD, message send/receive, health check</td>
+</tr>
+<tr>
+<td><code>remote_core.rs</code></td>
+<td>1,087</td>
+<td>WebSocket server: HMAC-SHA256 auth, heartbeat monitoring, connection
+handling</td>
+</tr>
+<tr>
+<td><code>remote_session.rs</code></td>
+<td>1,142</td>
+<td>Session pool: pre-warming, acquire/release, upstream proxy
+relay</td>
+</tr>
+<tr>
+<td><code>session_manager.rs</code></td>
+<td>1,155</td>
+<td>Lifecycle state machine: create/destroy, GC, direct connect, proxy
+relay</td>
+</tr>
+<tr>
+<td><code>agent_sdk.rs</code></td>
+<td>1,365</td>
+<td>SDK wire protocol: NDJSON messages, permission model, hook events,
+cost tracking</td>
+</tr>
+<tr>
+<td><code>ide_bridge.rs</code></td>
+<td>1,089</td>
+<td>IDE integration: text edits, diagnostics, cursor/selection sync,
+JSON-RPC</td>
+</tr>
+<tr>
+<td><code>messaging.rs</code></td>
+<td>908</td>
+<td>Binary wire format: RCBM framing, deflate compression, SHA-256
+checksums</td>
+</tr>
+</tbody>
+</table>
+<p>The dependency graph flows downward: <code>bridge_api</code> and
+<code>remote_core</code> import from <code>mod.rs</code>.
+<code>session_manager</code> imports from <code>remote_core</code>.
+<code>messaging</code> imports from <code>remote_core</code>.
+<code>agent_sdk</code> is largely standalone. <code>ide_bridge</code> is
+standalone. <code>repl_bridge</code> imports from
+<code>mod.rs</code>.</p>
+<hr />
+<h2 id="353-the-repl-bridge--ide-protocol">35.3 The REPL Bridge — IDE
+Protocol</h2>
+<p>The REPL bridge is the oldest transport in the system. It predates
+the HTTP API and WebSocket server. Its design reflects a specific
+constraint: the IDE spawns the agent as a child process and communicates
+over the process's stdin/stdout. There is no TCP connection, no DNS
+resolution, no TLS handshake — just pipes.</p>
+<h3 id="message-framing">Message Framing</h3>
+<p>The protocol uses Content-Length framing, identical to LSP:</p>
+<pre><code>Content-Length: 142\r\n
+\r\n
+{&quot;kind&quot;:&quot;request&quot;,&quot;id&quot;:&quot;1&quot;,&quot;method&quot;:&quot;message/send&quot;,&quot;params&quot;:{&quot;content&quot;:&quot;hello&quot;}}</code></pre>
+<p>The <code>frame_message</code> function in
+<code>repl_bridge.rs</code> serializes a <code>BridgeMessage</code> to
+JSON, measures the byte length, and prepends the header:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> frame_message(msg<span class="op">:</span> <span class="op">&amp;</span>BridgeMessage) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span> BridgeError<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> body <span class="op">=</span> <span class="pp">serde_json::</span>to_string(msg)<span class="op">?;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> body<span class="op">.</span>len() <span class="op">&gt;</span> MAX_PAYLOAD_SIZE <span class="op">{</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">Err</span>(<span class="pp">BridgeError::</span>PayloadTooLarge <span class="op">{</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>            size<span class="op">:</span> body<span class="op">.</span>len()<span class="op">,</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>            max<span class="op">:</span> MAX_PAYLOAD_SIZE<span class="op">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(<span class="pp">format!</span>(<span class="st">&quot;Content-Length: {}</span><span class="sc">\r\n\r\n</span><span class="st">{}&quot;</span><span class="op">,</span> body<span class="op">.</span>len()<span class="op">,</span> body)</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>into_bytes())</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The maximum payload size is 8 MiB, defined in <code>mod.rs</code>.
+This is not arbitrary — it is large enough to carry the full content of
+a large source file in a tool result, but small enough to prevent a
+misbehaving client from sending a multi-gigabyte payload that exhausts
+memory.</p>
+<h3 id="message-types">Message Types</h3>
+<p>Every bridge message has a <code>kind</code> field that determines
+its role in the protocol:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> MessageKind <span class="op">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    Request<span class="op">,</span>       <span class="co">// Client → server, expects a response</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    Response<span class="op">,</span>      <span class="co">// Server → client, paired with a request ID</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    Notification<span class="op">,</span>  <span class="co">// One-way, no response</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    Event<span class="op">,</span>         <span class="co">// Streaming data, no response</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This four-type taxonomy mirrors JSON-RPC 2.0, which is not a
+coincidence — the IDE bridge module (<code>ide_bridge.rs</code>) speaks
+actual JSON-RPC while the REPL bridge uses a simplified variant. The
+distinction matters for flow control: requests block the sender until a
+response arrives, while notifications and events are
+fire-and-forget.</p>
+<p>A <code>BridgeMessage</code> includes structural validation:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> validate(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">,</span> BridgeError<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>kind <span class="op">{</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">MessageKind::</span>Request <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="kw">self</span><span class="op">.</span>id<span class="op">.</span>is_none() <span class="op">{</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> <span class="cn">Err</span>(<span class="pp">BridgeError::</span>InvalidMessage(</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;request must have an id&quot;</span><span class="op">.</span>into()<span class="op">,</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>                ))<span class="op">;</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="kw">self</span><span class="op">.</span>method<span class="op">.</span>is_none() <span class="op">{</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> <span class="cn">Err</span>(<span class="pp">BridgeError::</span>InvalidMessage(</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;request must have a method&quot;</span><span class="op">.</span>into()<span class="op">,</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>                ))<span class="op">;</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ... similar for Response, Notification, Event</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This validation runs on every inbound message before it reaches any
+handler. Messages that fail validation are rejected with a structured
+error response, not silently dropped. This is critical for debugging: a
+client sending malformed messages gets immediate feedback rather than
+mysterious silence.</p>
+<h3 id="session-multiplexing">Session Multiplexing</h3>
+<p>The REPL bridge supports multiple concurrent sessions over a single
+stdin/stdout connection. Each message carries an optional
+<code>session_id</code> field. When present, the server routes the
+message to the corresponding <code>BridgeSession</code>. When absent, it
+routes to the default session created during the handshake.</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> BridgeSession <span class="op">{</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> created_at<span class="op">:</span> DateTime<span class="op">&lt;</span>Utc<span class="op">&gt;,</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> last_active<span class="op">:</span> DateTime<span class="op">&lt;</span>Utc<span class="op">&gt;,</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> model<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> turn_count<span class="op">:</span> <span class="dt">u32</span><span class="op">,</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> total_cost<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    config<span class="op">:</span> SessionConfig<span class="op">,</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>ConversationMessage<span class="op">&gt;,</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    open_files<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>    event_tx<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="pp">mpsc::</span>UnboundedSender<span class="op">&lt;</span>StreamEvent<span class="op">&gt;&gt;,</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Each session maintains its own conversation history, cost
+accumulator, and set of open files. The <code>open_files</code> map is
+populated by file sync events from the IDE — when the user opens, edits,
+or closes a file, the IDE sends a <code>file/sync</code> notification
+that updates the map. This means the agent always knows which files the
+user is currently looking at, enabling context-aware assistance without
+the user explicitly saying "look at this file."</p>
+<h3 id="the-handshake">The Handshake</h3>
+<p>Every connection starts with a handshake that negotiates
+capabilities:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> HandshakeRequest <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> protocol_version<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> client_name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> capabilities<span class="op">:</span> ClientCapabilities<span class="op">,</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ClientCapabilities <span class="op">{</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> streaming<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> tool_approval<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> file_sync<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> multi_session<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The server responds with its own capabilities and creates a default
+session:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> HandshakeResponse <span class="op">{</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> protocol_version<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> server_name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> capabilities<span class="op">:</span> ServerCapabilities<span class="op">,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> session_id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Version mismatches produce a warning but do not block the handshake —
+the protocol is designed for forward compatibility. A newer client can
+talk to an older server by degrading gracefully when unsupported methods
+are called.</p>
+<h3 id="streaming-events">Streaming Events</h3>
+<p>When the agent is processing a prompt, it emits streaming events that
+the IDE renders in real-time:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> StreamEvent <span class="op">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    TextDelta <span class="op">{</span> text<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    ToolStart <span class="op">{</span> tool_name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> tool_id<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    ToolEnd <span class="op">{</span> tool_id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> result<span class="op">:</span> Value<span class="op">,</span> duration_ms<span class="op">:</span> <span class="dt">u64</span> <span class="op">},</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    Thinking <span class="op">{</span> text<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    TurnComplete <span class="op">{</span> usage<span class="op">:</span> Value <span class="op">},</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="bu">Error</span> <span class="op">{</span> message<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    PermissionNeeded <span class="op">{</span> tool<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> description<span class="op">:</span> <span class="dt">String</span><span class="op">,</span> request_id<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Each session has an optional <code>event_tx</code> channel. When a
+client subscribes to streaming events (via the handshake's
+<code>streaming: true</code> capability), the bridge creates the channel
+and forwards events as they arrive. The <code>PermissionNeeded</code>
+variant is particularly interesting — it suspends agent execution until
+the IDE presents a permission prompt and the user responds. As discussed
+in Chapter 15, this is how the permission system delegates decisions to
+the UI layer.</p>
+<h3 id="the-bridgeserver">The BridgeServer</h3>
+<p>The <code>BridgeServer</code> struct ties it all together. It holds
+the session map, enforces the session limit (default 16, configurable),
+and routes incoming messages to handlers:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> route_request(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> msg<span class="op">:</span> BridgeMessage) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>BridgeMessage<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> method <span class="op">=</span> msg<span class="op">.</span>method<span class="op">.</span>as_deref()<span class="op">.</span>unwrap_or(<span class="st">&quot;&quot;</span>)<span class="op">;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> method <span class="op">{</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;handshake&quot;</span>      <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_handshake(msg<span class="op">.</span>params)<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;session/create&quot;</span>  <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_session_create(msg<span class="op">.</span>params)<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;session/list&quot;</span>    <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_session_list()<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;session/delete&quot;</span>  <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_session_delete(msg<span class="op">.</span>params)<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;session/resume&quot;</span>  <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_session_resume(msg<span class="op">.</span>params)<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;tool/execute&quot;</span>    <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_tool_execute(<span class="op">...</span>)<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;config/update&quot;</span>   <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_config_update(<span class="op">...</span>)<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;heartbeat&quot;</span>       <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="kw">self</span><span class="op">.</span>handle_heartbeat())<span class="op">,</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;message/send&quot;</span>    <span class="op">=&gt;</span> <span class="kw">self</span><span class="op">.</span>handle_message_send(<span class="op">...</span>)<span class="op">.</span><span class="kw">await</span><span class="op">,</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="pp">json!</span>(<span class="op">{</span><span class="st">&quot;error&quot;</span><span class="op">:</span> <span class="pp">format!</span>(<span class="st">&quot;unknown method: {method}&quot;</span>)<span class="op">}</span>))<span class="op">,</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The method routing is a flat <code>match</code> statement, not a
+plugin registry. This is deliberate — the protocol is small (9 methods)
+and stable. Adding a method requires changing this match arm and
+deploying a new server version, which is the right level of ceremony for
+a protocol change.</p>
+<hr />
+<h2 id="354-the-http-rest-api">35.4 The HTTP REST API</h2>
+<p>The REPL bridge works when the agent is a child process of the IDE.
+For remote access, we need an HTTP server. The bridge API
+(<code>bridge_api.rs</code>) provides a RESTful interface with seven
+endpoints:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Auth</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/v1/health</code></td>
+<td>No</td>
+<td>Server liveness and metrics</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/sessions</code></td>
+<td>Yes</td>
+<td>List all sessions</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/sessions/:id</code></td>
+<td>Yes</td>
+<td>Get session details</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/sessions</code></td>
+<td>Yes</td>
+<td>Create a new session</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/v1/sessions/:id</code></td>
+<td>Yes</td>
+<td>Delete a session</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/sessions/:id/messages</code></td>
+<td>Yes</td>
+<td>Send a message</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/sessions/:id/output</code></td>
+<td>Yes</td>
+<td>Poll for output</td>
+</tr>
+</tbody>
+</table>
+<h3 id="configuration">Configuration</h3>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> BridgeApiConfig <span class="op">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> listen_addr<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>           <span class="co">// &quot;127.0.0.1:19876&quot;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> auth_token<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span>    <span class="co">// Bearer token</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> max_sessions<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span>           <span class="co">// Default 16, max 256</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> cors_enabled<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span>            <span class="co">// Default true</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> allowed_origins<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span>  <span class="co">// [&quot;http://localhost&quot;, &quot;http://127.0.0.1&quot;]</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> tls_cert_path<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> tls_key_path<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The default listen address binds to <code>127.0.0.1</code> only — not
+<code>0.0.0.0</code>. This is a security decision. A bridge accidentally
+exposed to the network with no auth token would let anyone on the
+network create sessions and execute tools on the host. Binding to
+localhost means you must explicitly opt into network exposure via
+configuration or a reverse proxy.</p>
+<p>The validation function enforces invariants:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> validate(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">self</span><span class="op">.</span>listen_addr<span class="op">.</span>is_empty() <span class="op">{</span> <span class="pp">bail!</span>(<span class="st">&quot;listen_addr cannot be empty&quot;</span>)<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">self</span><span class="op">.</span>max_sessions <span class="op">==</span> <span class="dv">0</span> <span class="op">{</span> <span class="pp">bail!</span>(<span class="st">&quot;max_sessions must be &gt; 0&quot;</span>)<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">self</span><span class="op">.</span>max_sessions <span class="op">&gt;</span> <span class="dv">256</span> <span class="op">{</span> <span class="pp">bail!</span>(<span class="st">&quot;max_sessions too large (max 256)&quot;</span>)<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Parse and validate host:port format</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> parts<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;&amp;</span><span class="dt">str</span><span class="op">&gt;</span> <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>listen_addr<span class="op">.</span>split(<span class="ch">&#39;:&#39;</span>)<span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> parts<span class="op">.</span>len() <span class="op">!=</span> <span class="dv">2</span> <span class="op">{</span> <span class="pp">bail!</span>(<span class="st">&quot;listen_addr must be host:port&quot;</span>)<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> parts[<span class="dv">1</span>]<span class="op">.</span><span class="pp">parse::</span><span class="op">&lt;</span><span class="dt">u16</span><span class="op">&gt;</span>()<span class="op">.</span>is_err() <span class="op">{</span> <span class="pp">bail!</span>(<span class="st">&quot;listen_addr port is not valid&quot;</span>)<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The 256-session hard cap is a safety rail. Each session holds
+conversation history, an output buffer (up to 10,000 lines), and
+associated metadata. At 256 sessions, the bridge might consume several
+hundred megabytes of RAM. The cap prevents a runaway client from
+exhausting server memory.</p>
+<h3 id="authentication">Authentication</h3>
+<p>Authentication is token-based via the <code>X-RCode-Token</code>
+header:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> authenticate(api<span class="op">:</span> <span class="op">&amp;</span>BridgeApi<span class="op">,</span> token<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;&amp;</span><span class="dt">str</span><span class="op">&gt;</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="op">&amp;</span>api<span class="op">.</span>auth_token <span class="op">{</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>        <span class="cn">None</span> <span class="op">=&gt;</span> <span class="cn">true</span><span class="op">,</span>        <span class="co">// No auth configured = open</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Some</span>(expected) <span class="op">=&gt;</span> token <span class="op">==</span> <span class="cn">Some</span>(expected<span class="op">.</span>as_str())<span class="op">,</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>When no auth token is configured, all endpoints are open. This is the
+development-mode default. For production use, the operator sets
+<code>auth_token</code> in the configuration and the bridge rejects
+unauthenticated requests with a <code>401</code> response.</p>
+<p>The health check endpoint is deliberately exempted from
+authentication:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> requires_auth(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">!</span><span class="pp">matches!</span>(<span class="kw">self</span><span class="op">,</span> <span class="dt">Self</span><span class="pp">::</span>HealthCheck)</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This allows load balancers and monitoring systems to probe the bridge
+without credentials.</p>
+<h3 id="session-eviction">Session Eviction</h3>
+<p>When the session limit is reached and a new session is requested, the
+bridge does not simply reject the request. It attempts to evict the
+oldest idle session:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> create_remote_session(api<span class="op">:</span> <span class="op">&amp;</span><span class="kw">mut</span> BridgeApi<span class="op">,</span> config<span class="op">:</span> <span class="op">&amp;</span>SessionConfig) <span class="op">-&gt;</span> <span class="dt">String</span> <span class="op">{</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> api<span class="op">.</span>sessions<span class="op">.</span>len() <span class="op">&gt;=</span> api<span class="op">.</span>config<span class="op">.</span>max_sessions <span class="op">{</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> oldest_idle <span class="op">=</span> api<span class="op">.</span>sessions<span class="op">.</span>iter()</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>filter(<span class="op">|</span>(_<span class="op">,</span> s)<span class="op">|</span> s<span class="op">.</span>info<span class="op">.</span>status <span class="op">==</span> <span class="pp">SessionStatus::</span>Idle <span class="op">||</span> s<span class="op">.</span>is_expired())</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>min_by_key(<span class="op">|</span>(_<span class="op">,</span> s)<span class="op">|</span> s<span class="op">.</span>info<span class="op">.</span>last_activity)</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map(<span class="op">|</span>(id<span class="op">,</span> _)<span class="op">|</span> id<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(evict_id) <span class="op">=</span> oldest_idle <span class="op">{</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>            <span class="pp">info!</span>(<span class="st">&quot;evicting idle session &#39;{evict_id}&#39; to make room&quot;</span>)<span class="op">;</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>            api<span class="op">.</span>sessions<span class="op">.</span>remove(<span class="op">&amp;</span>evict_id)<span class="op">;</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>            <span class="pp">warn!</span>(<span class="st">&quot;max sessions reached, cannot create new session&quot;</span>)<span class="op">;</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="dt">String</span><span class="pp">::</span>new()<span class="op">;</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... create and insert new session</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The eviction policy is LRU among idle sessions. Active sessions —
+those currently processing a prompt — are never evicted. If all sessions
+are active and the limit is reached, the creation fails. This protects
+against a common failure mode: a CI system that spawns sessions but
+forgets to clean them up eventually fills the pool, and the eviction
+policy reclaims abandoned sessions automatically.</p>
+<h3 id="output-buffering">Output Buffering</h3>
+<p>Each session maintains a bounded output buffer:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> add_output(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span><span class="op">,</span> kind<span class="op">:</span> OutputKind<span class="op">,</span> content<span class="op">:</span> <span class="dt">String</span>) <span class="op">{</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> index <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>output_buffer<span class="op">.</span>len()<span class="op">;</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>output_buffer<span class="op">.</span>push(OutputLine <span class="op">{</span> index<span class="op">,</span> timestamp<span class="op">,</span> kind<span class="op">,</span> content <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">self</span><span class="op">.</span>output_buffer<span class="op">.</span>len() <span class="op">&gt;</span> MAX_OUTPUT_BUFFER <span class="op">{</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>output_buffer<span class="op">.</span>drain(<span class="op">..</span>MAX_OUTPUT_BUFFER <span class="op">/</span> <span class="dv">2</span>)<span class="op">;</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The buffer holds up to 10,000 lines. When it overflows, the oldest
+half is discarded. The <code>GET /sessions/:id/output</code> endpoint
+accepts a <code>since</code> parameter that returns only lines with an
+index greater than the given value, enabling efficient polling — the
+client remembers the last index it saw and only fetches new output.</p>
+<hr />
+<h2 id="355-the-websocket-transport">35.5 The WebSocket Transport</h2>
+<p>HTTP polling is functional but wasteful for real-time interaction.
+The remote core (<code>remote_core.rs</code>) provides a WebSocket
+server for bidirectional streaming.</p>
+<h3 id="architecture">Architecture</h3>
+<p>The WebSocket server follows a standard Tokio pattern: a TCP listener
+accepts connections, upgrades them to WebSocket, and spawns
+per-connection read/write tasks:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> start_bridge(bridge<span class="op">:</span> Arc<span class="op">&lt;</span>RemoteBridge<span class="op">&gt;</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>ShutdownHandle<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> listener <span class="op">=</span> <span class="pp">TcpListener::</span>bind(addr)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> (shutdown_tx<span class="op">,</span> <span class="kw">mut</span> shutdown_rx) <span class="op">=</span> <span class="pp">oneshot::channel::</span><span class="op">&lt;</span>()<span class="op">&gt;</span>()<span class="op">;</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    <span class="pp">tokio::</span>spawn(<span class="kw">async</span> <span class="kw">move</span> <span class="op">{</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">loop</span> <span class="op">{</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>            <span class="pp">tokio::select!</span> <span class="op">{</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>                accept_result <span class="op">=</span> listener<span class="op">.</span>accept() <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">match</span> accept_result <span class="op">{</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>                        <span class="cn">Ok</span>((stream<span class="op">,</span> peer_addr)) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>                            <span class="kw">let</span> b <span class="op">=</span> <span class="pp">Arc::</span>clone(<span class="op">&amp;</span>bridge)<span class="op">;</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>                            <span class="pp">tokio::</span>spawn(<span class="kw">async</span> <span class="kw">move</span> <span class="op">{</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>                                handle_connection(b<span class="op">,</span> stream<span class="op">,</span> peer_addr)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>                            <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a>                        <span class="op">}</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>                        <span class="cn">Err</span>(e) <span class="op">=&gt;</span> <span class="pp">error!</span>(<span class="st">&quot;accept error: {e}&quot;</span>)<span class="op">,</span></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>                    <span class="op">}</span></span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a>                _ <span class="op">=</span> <span class="op">&amp;</span><span class="kw">mut</span> shutdown_rx <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>                    <span class="pp">info!</span>(<span class="st">&quot;remote bridge shutting down&quot;</span>)<span class="op">;</span></span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Start heartbeat monitor</span></span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>    <span class="pp">tokio::</span>spawn(monitor_heartbeats(<span class="pp">Arc::</span>clone(<span class="op">&amp;</span>bridge)))<span class="op">;</span></span>
+<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(ShutdownHandle <span class="op">{</span> tx<span class="op">:</span> shutdown_tx <span class="op">}</span>)</span>
+<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>ShutdownHandle</code> pattern is worth noting. The caller
+receives a handle that, when dropped or explicitly triggered, sends a
+signal through the <code>oneshot</code> channel that breaks the accept
+loop. This provides clean shutdown without the bridge needing to know
+how it is being managed — whether from a signal handler, a test harness,
+or a higher-level orchestrator.</p>
+<h3 id="connection-handling">Connection Handling</h3>
+<p>Each connection goes through a sequence: capacity check, WebSocket
+upgrade, session registration, then split into read/write tasks:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> handle_connection(</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    bridge<span class="op">:</span> Arc<span class="op">&lt;</span>RemoteBridge<span class="op">&gt;,</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    stream<span class="op">:</span> TcpStream<span class="op">,</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    peer_addr<span class="op">:</span> SocketAddr<span class="op">,</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Reject if at capacity</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> sessions <span class="op">=</span> bridge<span class="op">.</span>sessions<span class="op">.</span>read()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> sessions<span class="op">.</span>len() <span class="op">&gt;=</span> bridge<span class="op">.</span>config<span class="op">.</span>max_sessions <span class="op">{</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="cn">Err</span>(<span class="pp">BridgeError::</span>SessionLimitReached(bridge<span class="op">.</span>config<span class="op">.</span>max_sessions)<span class="op">.</span>into())<span class="op">;</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Upgrade to WebSocket</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> ws_stream <span class="op">=</span> <span class="pp">tokio_tungstenite::</span>accept_async(stream)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> (<span class="kw">mut</span> ws_write<span class="op">,</span> <span class="kw">mut</span> ws_read) <span class="op">=</span> ws_stream<span class="op">.</span>split()<span class="op">;</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Create per-connection channel</span></span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> (tx<span class="op">,</span> <span class="kw">mut</span> rx) <span class="op">=</span> <span class="pp">mpsc::unbounded_channel::</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span>()<span class="op">;</span></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> session <span class="op">=</span> <span class="pp">RemoteSession::</span>new(tx<span class="op">,</span> peer_addr<span class="op">,</span> <span class="pp">SpawnMode::</span><span class="kw">default</span>())<span class="op">;</span></span>
+<span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... register session, spawn read/write tasks</span></span>
+<span id="cb18-22"><a href="#cb18-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The capacity check happens before the WebSocket handshake, not after.
+This is intentional — if the server is at capacity, there is no point
+completing the WebSocket upgrade, which requires reading HTTP headers
+and sending a response. Rejecting early saves both sides the
+overhead.</p>
+<h3 id="hmac-sha256-authentication">HMAC-SHA256 Authentication</h3>
+<p>The WebSocket transport uses HMAC-SHA256 token authentication rather
+than the simple bearer token used by the REST API. This is a stronger
+authentication model — the token is bound to the session ID, so a stolen
+token cannot be reused for a different session:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> authenticate_session(secret<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> session_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> secret<span class="op">.</span>is_empty() <span class="op">||</span> token<span class="op">.</span>is_empty() <span class="op">{</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="cn">Ok</span>(<span class="kw">mut</span> mac) <span class="op">=</span> <span class="pp">HmacSha256::</span>new_from_slice(secret<span class="op">.</span>as_bytes()) <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    mac<span class="op">.</span>update(session_id<span class="op">.</span>as_bytes())<span class="op">;</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="cn">Ok</span>(token_bytes) <span class="op">=</span> <span class="pp">hex::</span>decode(token) <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>    mac<span class="op">.</span>verify_slice(<span class="op">&amp;</span>token_bytes)<span class="op">.</span>is_ok()</span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>mac.verify_slice()</code> call performs constant-time
+comparison, which prevents timing attacks. An attacker who can measure
+response times cannot determine how many bytes of the token are correct
+by observing how long verification takes.</p>
+<p>Token generation is symmetric:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> generate_session_token(secret<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> session_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">String</span> <span class="op">{</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> mac <span class="op">=</span> <span class="pp">HmacSha256::</span>new_from_slice(secret<span class="op">.</span>as_bytes())</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>expect(<span class="st">&quot;HMAC accepts any key length&quot;</span>)<span class="op">;</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>    mac<span class="op">.</span>update(session_id<span class="op">.</span>as_bytes())<span class="op">;</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>    <span class="pp">hex::</span>encode(mac<span class="op">.</span>finalize()<span class="op">.</span>into_bytes())</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The flow: when a session is created, the server generates a token and
+gives it to the authorized client. The client presents this token when
+connecting over WebSocket. The server verifies it using the shared
+secret. If the secret is never transmitted over the wire — only the
+derived token is — then compromising a single token does not reveal the
+secret or enable forging tokens for other sessions.</p>
+<h3 id="heartbeat-monitoring">Heartbeat Monitoring</h3>
+<p>The bridge runs a background task that periodically checks all
+sessions for stale heartbeats:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> monitor_heartbeats(bridge<span class="op">:</span> Arc<span class="op">&lt;</span>RemoteBridge<span class="op">&gt;</span>) <span class="op">{</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> check_interval <span class="op">=</span> bridge<span class="op">.</span>config<span class="op">.</span>heartbeat_interval() <span class="op">/</span> <span class="dv">2</span><span class="op">;</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> timeout <span class="op">=</span> bridge<span class="op">.</span>config<span class="op">.</span>session_timeout()<span class="op">;</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">loop</span> <span class="op">{</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>        <span class="pp">tokio::time::</span>sleep(check_interval)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> sessions <span class="op">=</span> bridge<span class="op">.</span>sessions<span class="op">.</span>write()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> timed_out <span class="op">=</span> <span class="dt">Vec</span><span class="pp">::</span>new()<span class="op">;</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> (id<span class="op">,</span> session) <span class="kw">in</span> sessions<span class="op">.</span>iter() <span class="op">{</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> session<span class="op">.</span>is_timed_out(timeout) <span class="op">{</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>                timed_out<span class="op">.</span>push(id<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> id <span class="kw">in</span> <span class="op">&amp;</span>timed_out <span class="op">{</span></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(session) <span class="op">=</span> sessions<span class="op">.</span>get(id) <span class="op">{</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>                <span class="kw">let</span> _ <span class="op">=</span> session<span class="op">.</span>send(<span class="op">&amp;</span><span class="pp">BridgeMessage::</span>status(<span class="pp">SessionStatus::</span>Disconnected))<span class="op">;</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>            sessions<span class="op">.</span>remove(id)<span class="op">;</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The check interval is half the heartbeat interval (default: 7.5
+seconds when heartbeat is 15 seconds). This ensures that a missed
+heartbeat is detected within one heartbeat period. The session timeout
+(default: 60 seconds) allows for four consecutive missed heartbeats
+before disconnection — enough to survive a brief network hiccup or
+laptop sleep event.</p>
+<p>When a session times out, the bridge sends a
+<code>Disconnected</code> status message before removing it. This is a
+best-effort notification — if the connection is already dead, the send
+will fail silently. But if the connection is merely slow (not dead), the
+client receives a clean disconnection signal rather than an unexplained
+silence.</p>
+<h3 id="spawn-modes">Spawn Modes</h3>
+<p>The WebSocket server supports three spawn modes that control how
+agent sessions map to connections:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> SpawnMode <span class="op">{</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>    Single<span class="op">,</span>    <span class="co">// One agent session shared by all connections</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    Multi<span class="op">,</span>     <span class="co">// Each connection gets its own session (default)</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    OnDemand<span class="op">,</span>  <span class="co">// Sessions created only when a prompt arrives</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>Single</strong> mode is for scenarios where multiple UIs
+(say, a terminal and a web dashboard) need to observe and interact with
+the same agent session. Both connections see the same conversation
+history and tool output.</p>
+<p><strong>Multi</strong> mode (the default) isolates each connection.
+This is what you want for a multi-user server where each user should
+have their own context and permissions.</p>
+<p><strong>OnDemand</strong> mode delays session creation until the
+first prompt arrives. This saves resources when connections are opened
+speculatively — for example, an IDE that opens a WebSocket at startup
+but does not send a prompt until the user invokes the agent.</p>
+<hr />
+<h2 id="356-the-session-manager--lifecycle-state-machine">35.6 The
+Session Manager — Lifecycle State Machine</h2>
+<p>The session manager (<code>session_manager.rs</code>) provides a
+higher-level abstraction over raw sessions. While the REPL bridge and
+WebSocket server deal with transport-level sessions (connections,
+channels, heartbeats), the session manager deals with lifecycle-level
+sessions (state transitions, capacity tracking, garbage collection).</p>
+<h3 id="the-state-machine">The State Machine</h3>
+<p>A managed session transitions through a well-defined set of
+states:</p>
+<pre><code>Created → Connecting → Active → Processing → Idle → Disconnected
+                        ↑          ↓      ↑     │
+                        └──────────┘      │     │
+                                          └─────┘</code></pre>
+<p>The <code>validate_transition</code> function encodes every legal
+edge:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> validate_transition(from<span class="op">:</span> SessionState<span class="op">,</span> to<span class="op">:</span> SessionState) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    <span class="pp">matches!</span>(</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>        (from<span class="op">,</span> to)<span class="op">,</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>        (Created<span class="op">,</span> Connecting)</span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Connecting<span class="op">,</span> Active)</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Active<span class="op">,</span> Processing)</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Active<span class="op">,</span> Idle)</span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Processing<span class="op">,</span> Active)</span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Processing<span class="op">,</span> Idle)</span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Idle<span class="op">,</span> Active)</span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Idle<span class="op">,</span> Processing)</span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Created<span class="op">,</span> Disconnected)</span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Connecting<span class="op">,</span> Disconnected)</span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Active<span class="op">,</span> Disconnected)</span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Processing<span class="op">,</span> Disconnected)</span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>        <span class="op">|</span> (Idle<span class="op">,</span> Disconnected)</span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Several design decisions are encoded in these transitions:</p>
+<ol type="1">
+<li><strong>You cannot skip <code>Connecting</code>.</strong> Going from
+<code>Created</code> directly to <code>Active</code> is illegal. This
+forces the transport handshake to complete before the session accepts
+prompts.</li>
+<li><strong><code>Disconnected</code> is terminal.</strong> Once a
+session enters <code>Disconnected</code>, no further transitions are
+possible. The session must be destroyed and a new one created.</li>
+<li><strong>Bidirectional Processing/Idle.</strong> A session can go
+from <code>Idle</code> to <code>Processing</code> (new prompt arrives)
+and from <code>Processing</code> to <code>Idle</code> (response
+complete). It can also go from <code>Idle</code> to <code>Active</code>
+and from <code>Processing</code> to <code>Active</code>, allowing
+intermediate states during complex operations.</li>
+<li><strong>Any non-terminal state can disconnect.</strong> Network
+failures can happen at any time. The state machine does not try to
+enforce a "graceful" path to disconnection.</li>
+</ol>
+<h3 id="session-configuration">Session Configuration</h3>
+<p>Each managed session carries a configuration that defines its
+operational bounds:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> SessionConfig <span class="op">{</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> model<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> tools_allowed<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> permissions_mode<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>      <span class="co">// &quot;auto&quot;, &quot;ask&quot;, or &quot;deny&quot;</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> working_dir<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">PathBuf</span><span class="op">&gt;,</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> env_vars<span class="op">:</span> HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> timeout_secs<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span>             <span class="co">// Default 3600 (1 hour)</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> spawn_mode<span class="op">:</span> SpawnMode<span class="op">,</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> max_turns<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> label<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>permissions_mode</code> field determines how the session
+handles tool permission requests — as discussed in Chapter 15. The
+<code>max_turns</code> field provides a hard limit on conversation
+turns, preventing a runaway agent from generating unbounded output and
+cost. The <code>timeout_secs</code> field (default: 1 hour, the outline
+mentions 24 hours for some configurations) controls when the session
+auto-terminates from inactivity.</p>
+<p>Validation catches configuration errors before a session is
+created:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> validate(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> valid_modes <span class="op">=</span> [<span class="st">&quot;auto&quot;</span><span class="op">,</span> <span class="st">&quot;ask&quot;</span><span class="op">,</span> <span class="st">&quot;deny&quot;</span>]<span class="op">;</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">!</span>valid_modes<span class="op">.</span>contains(<span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>permissions_mode<span class="op">.</span>as_str()) <span class="op">{</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">bail!</span>(<span class="st">&quot;invalid permissions_mode...&quot;</span>)<span class="op">;</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(dir) <span class="op">=</span> <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>working_dir <span class="op">{</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">!</span>dir<span class="op">.</span>as_os_str()<span class="op">.</span>is_empty() <span class="op">&amp;&amp;</span> <span class="op">!</span>dir<span class="op">.</span>is_absolute() <span class="op">{</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>            <span class="pp">bail!</span>(<span class="st">&quot;working_dir must be an absolute path: {}&quot;</span><span class="op">,</span> dir<span class="op">.</span>display())<span class="op">;</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The absolute-path requirement for <code>working_dir</code> prevents a
+subtle bug: if the bridge daemon's working directory changes (e.g., due
+to a <code>cd</code> in a hook), a relative path would resolve to the
+wrong location. Absolute paths are always unambiguous.</p>
+<h3 id="garbage-collection">Garbage Collection</h3>
+<p>The session manager runs a periodic garbage collector that removes
+sessions matching three criteria:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> garbage_collect(manager<span class="op">:</span> <span class="op">&amp;</span>SessionManager) <span class="op">-&gt;</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> to_remove<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">=</span> sessions<span class="op">.</span>iter()</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>filter_map(<span class="op">|</span>(id<span class="op">,</span> session)<span class="op">|</span> <span class="op">{</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> session<span class="op">.</span>state<span class="op">.</span>is_terminal() <span class="op">{</span> <span class="cf">return</span> <span class="cn">Some</span>(id<span class="op">.</span>clone())<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> session<span class="op">.</span>idle_duration() <span class="op">&gt;</span> manager<span class="op">.</span>gc_idle_timeout <span class="op">{</span> <span class="cf">return</span> <span class="cn">Some</span>(id<span class="op">.</span>clone())<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> session<span class="op">.</span>is_expired() <span class="op">{</span> <span class="cf">return</span> <span class="cn">Some</span>(id<span class="op">.</span>clone())<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> session<span class="op">.</span>is_turn_limited() <span class="op">{</span> <span class="cf">return</span> <span class="cn">Some</span>(id<span class="op">.</span>clone())<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>            <span class="cn">None</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)</span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... remove and notify</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<ol type="1">
+<li><strong>Terminal sessions</strong> — already disconnected, just
+occupying memory.</li>
+<li><strong>Idle sessions</strong> — no activity for longer than
+<code>gc_idle_timeout</code> (default 30 minutes).</li>
+<li><strong>Expired sessions</strong> — exceeded their configured
+<code>timeout_secs</code>.</li>
+<li><strong>Turn-limited sessions</strong> — exceeded their configured
+<code>max_turns</code>.</li>
+</ol>
+<p>The GC sweep runs every 60 seconds by default. Before removing a
+session, it sends a <code>Disconnected</code> status message so the
+client knows the session was cleaned up rather than lost to a bug.</p>
+<h3 id="direct-connect-and-proxy-relay">Direct Connect and Proxy
+Relay</h3>
+<p>The session manager supports two network topologies beyond the basic
+client-server model.</p>
+<p><strong>Direct connect</strong> creates a session that represents a
+connection to another agent instance:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> direct_connect(</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>    manager<span class="op">:</span> <span class="op">&amp;</span>SessionManager<span class="op">,</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>    addr<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    token<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> config <span class="op">=</span> SessionConfig <span class="op">{</span></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>        label<span class="op">:</span> <span class="cn">Some</span>(<span class="pp">format!</span>(<span class="st">&quot;direct:{addr}&quot;</span>))<span class="op">,</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">..</span><span class="bu">Default</span><span class="pp">::</span><span class="kw">default</span>()</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> id <span class="op">=</span> create_session(manager<span class="op">,</span> config)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Transition to Connecting, validate token, store remote addr</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(id)</span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This enables agent-to-agent communication: one instance can delegate
+a subtask to another instance running on a different machine.</p>
+<p><strong>Proxy relay</strong> forwards messages through an
+intermediary:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> proxy_relay(</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>    manager<span class="op">:</span> <span class="op">&amp;</span>SessionManager<span class="op">,</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    upstream_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>    msg<span class="op">:</span> BridgeMessage<span class="op">,</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> session <span class="op">=</span> sessions<span class="op">.</span>get(upstream_id)<span class="op">?;</span></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> session<span class="op">.</span>state<span class="op">.</span>is_terminal() <span class="op">{</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>        <span class="pp">bail!</span>(<span class="st">&quot;upstream session is disconnected&quot;</span>)<span class="op">;</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>    session<span class="op">.</span>send_message(<span class="op">&amp;</span>msg)<span class="op">?;</span></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This is used when a bridge instance acts as a relay between two
+endpoints that cannot reach each other directly — for example, an IDE
+behind a corporate firewall connecting to an agent on a cloud server
+through an authentication gateway.</p>
+<hr />
+<h2 id="357-the-session-pool--pre-warming-and-reuse">35.7 The Session
+Pool — Pre-warming and Reuse</h2>
+<p>Creating a new session is not free. It involves allocating memory,
+initializing conversation state, and potentially connecting to an
+upstream agent backend. For latency-sensitive scenarios — like an IDE
+extension that needs a session immediately when the user types a command
+— this startup cost matters.</p>
+<p>The remote session pool (<code>remote_session.rs</code>) solves this
+by pre-creating idle sessions and reusing them:</p>
+<pre><code>warm_pool(4)  →  [idle] [idle] [idle] [idle]
+
+acquire()     →  [ACTIVE] [idle] [idle] [idle]    (pool hit)
+acquire()     →  [ACTIVE] [ACTIVE] [idle] [idle]  (pool hit)
+release(s1)   →  [idle] [ACTIVE] [idle] [idle]    (returned to pool)
+acquire()     →  [ACTIVE] [ACTIVE] [idle] [idle]  (pool hit, reuses s1)</code></pre>
+<h3 id="pool-operations">Pool Operations</h3>
+<p>The pool exposes four primary operations:</p>
+<p><strong>Warm</strong> — pre-create sessions:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> warm_pool(</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>    pool<span class="op">:</span> <span class="op">&amp;</span>RemoteSessionPool<span class="op">,</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>    count<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    config<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>SessionConfig<span class="op">&gt;,</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> capacity <span class="op">=</span> pool<span class="op">.</span>max_size<span class="op">.</span>saturating_sub(current_size)<span class="op">;</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> to_create <span class="op">=</span> count<span class="op">.</span>min(capacity)<span class="op">;</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> _ <span class="kw">in</span> <span class="dv">0</span><span class="op">..</span>to_create <span class="op">{</span></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> session <span class="op">=</span> <span class="pp">PoolSession::</span>new(id<span class="op">,</span> config<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>        session<span class="op">.</span>state <span class="op">=</span> <span class="pp">PoolSessionState::</span>Idle<span class="op">;</span></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>        sessions<span class="op">.</span>insert(id<span class="op">,</span> session)<span class="op">;</span></span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(created)</span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>Acquire</strong> — get a session from the pool:</p>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> acquire_session(pool<span class="op">:</span> <span class="op">&amp;</span>RemoteSessionPool) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Try pool hit (idle session, LRU ordering)</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> idle_id <span class="op">=</span> sessions<span class="op">.</span>values()</span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>filter(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>state <span class="op">==</span> <span class="pp">PoolSessionState::</span>Idle <span class="op">&amp;&amp;</span> <span class="op">!</span>s<span class="op">.</span>should_evict())</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>min_by_key(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>last_used)</span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>id<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(id) <span class="op">=</span> idle_id <span class="op">{</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>        session<span class="op">.</span>state <span class="op">=</span> <span class="pp">PoolSessionState::</span>Active<span class="op">;</span></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>        session<span class="op">.</span>use_count <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>        metrics<span class="op">.</span>pool_hits <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">Ok</span>(id)<span class="op">;</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Pool miss — create on demand</span></span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> sessions<span class="op">.</span>len() <span class="op">&lt;</span> pool<span class="op">.</span>max_size <span class="op">{</span></span>
+<span id="cb32-17"><a href="#cb32-17" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> session <span class="op">=</span> <span class="pp">PoolSession::</span>new(id<span class="op">,</span> default_config)<span class="op">;</span></span>
+<span id="cb32-18"><a href="#cb32-18" aria-hidden="true" tabindex="-1"></a>        session<span class="op">.</span>state <span class="op">=</span> <span class="pp">PoolSessionState::</span>Active<span class="op">;</span></span>
+<span id="cb32-19"><a href="#cb32-19" aria-hidden="true" tabindex="-1"></a>        metrics<span class="op">.</span>pool_misses <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb32-20"><a href="#cb32-20" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">Ok</span>(id)<span class="op">;</span></span>
+<span id="cb32-21"><a href="#cb32-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb32-22"><a href="#cb32-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-23"><a href="#cb32-23" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Exhausted</span></span>
+<span id="cb32-24"><a href="#cb32-24" aria-hidden="true" tabindex="-1"></a>    metrics<span class="op">.</span>acquisition_failures <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb32-25"><a href="#cb32-25" aria-hidden="true" tabindex="-1"></a>    <span class="pp">bail!</span>(<span class="st">&quot;Session pool exhausted&quot;</span>)<span class="op">;</span></span>
+<span id="cb32-26"><a href="#cb32-26" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>Release</strong> — return a session to the pool:</p>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> release_session(pool<span class="op">:</span> <span class="op">&amp;</span>RemoteSessionPool<span class="op">,</span> id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> session<span class="op">.</span>is_age_expired() <span class="op">{</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Too old — destroy instead of returning</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>        session<span class="op">.</span>state <span class="op">=</span> <span class="pp">PoolSessionState::</span>Destroyed<span class="op">;</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>        sessions<span class="op">.</span>remove(id)<span class="op">;</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>        metrics<span class="op">.</span>total_destroyed <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">Ok</span>(())<span class="op">;</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>    session<span class="op">.</span>state <span class="op">=</span> <span class="pp">PoolSessionState::</span>Idle<span class="op">;</span></span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>    session<span class="op">.</span>last_used <span class="op">=</span> <span class="pp">Instant::</span>now()<span class="op">;</span></span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>Evict</strong> — remove expired sessions:</p>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> evict_expired(pool<span class="op">:</span> <span class="op">&amp;</span>RemoteSessionPool) <span class="op">-&gt;</span> <span class="dt">usize</span> <span class="op">{</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> to_evict<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">=</span> sessions<span class="op">.</span>values()</span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>filter(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>should_evict())</span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>id<span class="op">.</span>clone())</span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> id <span class="kw">in</span> <span class="op">&amp;</span>to_evict <span class="op">{</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>        sessions<span class="op">.</span>remove(id)<span class="op">;</span></span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>        metrics<span class="op">.</span>total_destroyed <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>    count</span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="eviction-policy">Eviction Policy</h3>
+<p>A pooled session is eligible for eviction if either of two conditions
+is met:</p>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> should_evict(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>is_idle_expired() <span class="op">||</span> <span class="kw">self</span><span class="op">.</span>is_age_expired()</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>Idle expiry</strong> (default: 300 seconds) — the session has
+been sitting idle too long. This prevents the pool from holding sessions
+that nobody wants.</p>
+<p><strong>Age expiry</strong> (default: 3,600 seconds) — the session is
+too old regardless of use. This prevents long-lived sessions from
+accumulating stale state. When a session is released but has exceeded
+its maximum age, it is destroyed rather than returned to the pool.</p>
+<h3 id="metrics">Metrics</h3>
+<p>The pool tracks comprehensive metrics for operational visibility:</p>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> PoolMetrics <span class="op">{</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> active<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> idle<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> warming<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> total_created<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> total_destroyed<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> pool_hits<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> pool_misses<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> acquisition_failures<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> avg_session_age_secs<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> avg_use_count<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The hit/miss ratio tells you whether the pool size is adequate. A
+high miss rate means sessions are being created on demand rather than
+reused — you should increase the warm pool size. A high
+<code>acquisition_failures</code> count means the pool is undersized for
+the workload.</p>
+<h3 id="upstream-proxy">Upstream Proxy</h3>
+<p>The pool also supports relaying messages through an upstream proxy
+for scenarios where the bridge cannot directly reach the agent
+backend:</p>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> upstream_proxy(</span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>    target<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>    msg<span class="op">:</span> <span class="op">&amp;</span>BridgeMessage<span class="op">,</span></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>    config<span class="op">:</span> <span class="op">&amp;</span>UpstreamProxyConfig<span class="op">,</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>ProxyResponse<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> payload <span class="op">=</span> <span class="pp">serde_json::</span>to_string(msg)<span class="op">?;</span></span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> last_error <span class="op">=</span> <span class="cn">None</span><span class="op">;</span></span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> attempt <span class="kw">in</span> <span class="dv">0</span><span class="op">..=</span>config<span class="op">.</span>retry_count <span class="op">{</span></span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> attempt <span class="op">&gt;</span> <span class="dv">0</span> <span class="op">{</span></span>
+<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> backoff <span class="op">=</span> RETRY_BACKOFF_BASE <span class="op">*</span> <span class="dv">2u32</span><span class="op">.</span>pow(attempt <span class="op">-</span> <span class="dv">1</span>)<span class="op">;</span></span>
+<span id="cb37-11"><a href="#cb37-11" aria-hidden="true" tabindex="-1"></a>            <span class="pp">tokio::time::</span>sleep(backoff)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb37-12"><a href="#cb37-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb37-13"><a href="#cb37-13" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ... send request, check response</span></span>
+<span id="cb37-14"><a href="#cb37-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> proxy_resp<span class="op">.</span>is_success() <span class="op">||</span> <span class="op">!</span>proxy_resp<span class="op">.</span>is_retryable() <span class="op">{</span></span>
+<span id="cb37-15"><a href="#cb37-15" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="cn">Ok</span>(proxy_resp)<span class="op">;</span></span>
+<span id="cb37-16"><a href="#cb37-16" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb37-17"><a href="#cb37-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb37-18"><a href="#cb37-18" aria-hidden="true" tabindex="-1"></a>    <span class="pp">bail!</span>(<span class="st">&quot;Proxy relay failed after {} attempts&quot;</span><span class="op">,</span> config<span class="op">.</span>retry_count <span class="op">+</span> <span class="dv">1</span>)<span class="op">;</span></span>
+<span id="cb37-19"><a href="#cb37-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The retry logic implements exponential backoff (500ms, 1s, 2s) with a
+cap of 3 retries by default. Retryable status codes are <code>429</code>
+(rate limit), <code>502</code> (bad gateway), <code>503</code> (service
+unavailable), and <code>504</code> (gateway timeout). A <code>400</code>
+(bad request) is not retried because it indicates a client error that
+will not resolve by waiting.</p>
+<hr />
+<h2 id="358-the-agent-sdk-protocol">35.8 The Agent SDK Protocol</h2>
+<p>The agent SDK (<code>agent_sdk.rs</code>) defines the wire protocol
+for communicating with external AI agent processes. While the bridge's
+other modules handle transport (how messages move), the SDK module
+handles semantics (what messages mean).</p>
+<h3 id="message-types-1">Message Types</h3>
+<p>The SDK uses NDJSON (newline-delimited JSON) with a <code>type</code>
+discriminator:</p>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> SdkMessage <span class="op">{</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>    UserMessage <span class="op">{</span> content<span class="op">,</span> attachments<span class="op">,</span> conversation_id <span class="op">},</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>    AssistantMessage <span class="op">{</span> content<span class="op">,</span> thinking<span class="op">,</span> model<span class="op">,</span> usage <span class="op">},</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>    ToolUse <span class="op">{</span> id<span class="op">,</span> name<span class="op">,</span> input<span class="op">,</span> description <span class="op">},</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>    ToolResult <span class="op">{</span> id<span class="op">,</span> output<span class="op">,</span> is_error<span class="op">,</span> duration_ms <span class="op">},</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>    StatusUpdate <span class="op">{</span> status<span class="op">,</span> message<span class="op">,</span> progress <span class="op">},</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>    <span class="bu">Error</span> <span class="op">{</span> code<span class="op">,</span> message<span class="op">,</span> details<span class="op">,</span> recoverable <span class="op">},</span></span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a>    Done <span class="op">{</span> summary<span class="op">,</span> usage<span class="op">,</span> tool_uses<span class="op">,</span> duration_ms <span class="op">},</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a>    Handshake <span class="op">{</span> protocol_version<span class="op">,</span> capabilities<span class="op">,</span> agent_name<span class="op">,</span> agent_version <span class="op">},</span></span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a>    Heartbeat <span class="op">{</span> timestamp_ms<span class="op">,</span> is_pong <span class="op">},</span></span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a>    PermissionRequest <span class="op">{</span> tool_name<span class="op">,</span> operation<span class="op">,</span> resource <span class="op">},</span></span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a>    PermissionResponse <span class="op">{</span> result <span class="op">},</span></span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Eleven message types, each with a clear direction of flow:
+<code>UserMessage</code> flows host-to-agent,
+<code>AssistantMessage</code> flows agent-to-host, <code>ToolUse</code>
+flows agent-to-host (requesting permission), <code>ToolResult</code>
+flows host-to-agent (providing the result). The protocol is asymmetric
+by design — the host drives the conversation, but the agent drives tool
+selection.</p>
+<h3 id="the-permission-model">The Permission Model</h3>
+<p>When an agent wants to use a tool, it must pass a permission
+check:</p>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> check_permission(config<span class="op">:</span> <span class="op">&amp;</span>SdkConfig<span class="op">,</span> tool<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> operation<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> PermissionResult <span class="op">{</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">!</span>config<span class="op">.</span>tools<span class="op">.</span>contains(<span class="op">&amp;</span>tool<span class="op">.</span>to_string()) <span class="op">{</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="pp">PermissionResult::</span>deny(<span class="pp">format!</span>(<span class="st">&quot;Tool &#39;{}&#39; not in allowed list&quot;</span><span class="op">,</span> tool))<span class="op">;</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(allowed_ops) <span class="op">=</span> config<span class="op">.</span>permissions<span class="op">.</span>get(tool) <span class="op">{</span></span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> allowed_ops<span class="op">.</span>contains(<span class="op">&amp;</span><span class="st">&quot;*&quot;</span><span class="op">.</span>to_string()) <span class="op">{</span></span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="pp">PermissionResult::</span>allow(<span class="st">&quot;Wildcard permission&quot;</span>)<span class="op">.</span>with_rule(<span class="pp">format!</span>(<span class="st">&quot;{}:*&quot;</span><span class="op">,</span> tool))<span class="op">;</span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb39-9"><a href="#cb39-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> allowed_ops<span class="op">.</span>contains(<span class="op">&amp;</span>operation<span class="op">.</span>to_string()) <span class="op">{</span></span>
+<span id="cb39-10"><a href="#cb39-10" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="pp">PermissionResult::</span>allow(<span class="st">&quot;Explicit permission&quot;</span>)<span class="op">.</span>with_rule(<span class="pp">format!</span>(<span class="st">&quot;{}:{}&quot;</span><span class="op">,</span> tool<span class="op">,</span> operation))<span class="op">;</span></span>
+<span id="cb39-11"><a href="#cb39-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb39-12"><a href="#cb39-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="pp">PermissionResult::</span>deny(<span class="pp">format!</span>(<span class="st">&quot;Operation &#39;{}&#39; not permitted for tool &#39;{}&#39;&quot;</span><span class="op">,</span> operation<span class="op">,</span> tool))<span class="op">;</span></span>
+<span id="cb39-13"><a href="#cb39-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb39-14"><a href="#cb39-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Tool in list but no specific ops — allow all</span></span>
+<span id="cb39-15"><a href="#cb39-15" aria-hidden="true" tabindex="-1"></a>    <span class="pp">PermissionResult::</span>allow(<span class="st">&quot;Tool allowed, no operation restrictions&quot;</span>)</span>
+<span id="cb39-16"><a href="#cb39-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The permission model has three tiers. First, the tool must be in the
+<code>tools</code> list. Second, if operation-level restrictions exist,
+the specific operation must be allowed (or <code>*</code> for wildcard).
+Third, if no operation restrictions exist, all operations are permitted.
+This mirrors the permission system discussed in Chapter 15, but at the
+SDK level rather than the local agent level.</p>
+<h3 id="cost-tracking">Cost Tracking</h3>
+<p>The SDK tracks token usage and estimates cost per model:</p>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> estimate_cost(model<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> input_tokens<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span> output_tokens<span class="op">:</span> <span class="dt">u64</span>) <span class="op">-&gt;</span> <span class="dt">f64</span> <span class="op">{</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> (input_rate<span class="op">,</span> output_rate) <span class="op">=</span> <span class="cf">match</span> model <span class="op">{</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>        m <span class="cf">if</span> m<span class="op">.</span>contains(<span class="st">&quot;opus&quot;</span>) <span class="op">=&gt;</span> (<span class="dv">0.015</span><span class="op">,</span> <span class="dv">0.075</span>)<span class="op">,</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>        m <span class="cf">if</span> m<span class="op">.</span>contains(<span class="st">&quot;sonnet&quot;</span>) <span class="op">=&gt;</span> (<span class="dv">0.003</span><span class="op">,</span> <span class="dv">0.015</span>)<span class="op">,</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>        m <span class="cf">if</span> m<span class="op">.</span>contains(<span class="st">&quot;haiku&quot;</span>) <span class="op">=&gt;</span> (<span class="dv">0.00025</span><span class="op">,</span> <span class="dv">0.00125</span>)<span class="op">,</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> (DEFAULT_INPUT_TOKEN_COST<span class="op">,</span> DEFAULT_OUTPUT_TOKEN_COST)<span class="op">,</span></span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>    (input_tokens <span class="kw">as</span> <span class="dt">f64</span> <span class="op">/</span> <span class="dv">1000.0</span>) <span class="op">*</span> input_rate</span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">+</span> (output_tokens <span class="kw">as</span> <span class="dt">f64</span> <span class="op">/</span> <span class="dv">1000.0</span>) <span class="op">*</span> output_rate</span>
+<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Each <code>SdkSession</code> accumulates usage across turns via the
+<code>ModelUsage</code> struct, which auto-merges when assistant
+messages arrive. This gives operators real-time visibility into how much
+a session is costing.</p>
+<h3 id="status-state-machine">Status State Machine</h3>
+<p>The SDK session has its own status state machine, separate from the
+session manager's lifecycle states:</p>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> SdkStatus <span class="op">{</span></span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>    Initializing<span class="op">,</span></span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>    Ready<span class="op">,</span></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>    Processing<span class="op">,</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>    WaitingForPermission<span class="op">,</span></span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>    WaitingForInput<span class="op">,</span></span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>    Complete<span class="op">,</span></span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">Error</span><span class="op">,</span></span>
+<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>WaitingForPermission</code> and
+<code>WaitingForInput</code> states are unique to the SDK — they
+represent situations where the agent has paused execution and needs
+external input before continuing. This is how the bridge implements the
+interactive permission prompts and multi-turn conversations that make
+the agent feel responsive rather than batch-oriented.</p>
+<hr />
+<h2 id="359-the-binary-wire-format">35.9 The Binary Wire Format</h2>
+<p>For high-throughput scenarios — like streaming large tool results
+between bridge instances — the JSON text format used by the REPL bridge
+and REST API adds unnecessary overhead. The messaging module
+(<code>messaging.rs</code>) provides a binary wire format called RCBM
+(RCode Bridge Message).</p>
+<h3 id="frame-layout">Frame Layout</h3>
+<pre><code>┌──────────┬─────────┬───────┬────────────┬───────────────┬─────────────┐
+│ Magic(4) │ Ver.(1) │ Fl(1) │ Length(4)  │ Checksum(32)  │ Payload(N)  │
+│ &quot;RCBM&quot;   │  0x01   │ bits  │ big-endian │   SHA-256     │ JSON/defl.  │
+└──────────┴─────────┴───────┴────────────┴───────────────┴─────────────┘
+     42-byte header                               Variable payload</code></pre>
+<p>The magic bytes <code>0x52 0x43 0x42 0x4D</code> spell "RCBM" and
+allow quick protocol detection without parsing the full header. The
+version byte enables future protocol evolution. The flags byte carries
+two bits: compression and checksum presence.</p>
+<h3 id="compression">Compression</h3>
+<p>Payloads larger than 64 KB are automatically compressed using
+deflate:</p>
+<div class="sourceCode" id="cb43"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> proto<span class="op">.</span>compress <span class="op">&amp;&amp;</span> json<span class="op">.</span>len() <span class="op">&gt;</span> COMPRESSION_THRESHOLD <span class="op">{</span></span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>    payload <span class="op">=</span> compress_payload(<span class="op">&amp;</span>json)<span class="op">?;</span></span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a>    flags <span class="op">=</span> flags<span class="op">.</span>with(<span class="pp">MessageFlags::</span>COMPRESSED)<span class="op">;</span></span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This threshold is tuned for the common case: most messages (prompts,
+tool calls, status updates) are well under 64 KB and do not benefit from
+compression. But tool results that carry large file contents can easily
+be hundreds of kilobytes, and deflate typically achieves 3-5x
+compression on source code.</p>
+<h3 id="checksum-verification">Checksum Verification</h3>
+<p>When checksums are enabled (the default), the sender computes SHA-256
+over the payload (after compression, if applicable) and includes it in
+the header:</p>
+<div class="sourceCode" id="cb44"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> checksum <span class="op">=</span> <span class="cf">if</span> proto<span class="op">.</span>checksums <span class="op">{</span></span>
+<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>    flags <span class="op">=</span> flags<span class="op">.</span>with(<span class="pp">MessageFlags::</span>HAS_CHECKSUM)<span class="op">;</span></span>
+<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>    calculate_checksum(<span class="op">&amp;</span>payload)</span>
+<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a>    [<span class="dv">0u8</span><span class="op">;</span> <span class="dv">32</span>]</span>
+<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p>The receiver verifies the checksum before attempting
+deserialization:</p>
+<div class="sourceCode" id="cb45"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> header<span class="op">.</span>flags<span class="op">.</span>has_checksum() <span class="op">{</span></span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> actual <span class="op">=</span> calculate_checksum(payload)<span class="op">;</span></span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> actual <span class="op">!=</span> header<span class="op">.</span>checksum <span class="op">{</span></span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">bail!</span>(<span class="st">&quot;checksum mismatch&quot;</span>)<span class="op">;</span></span>
+<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This catches corruption from network issues, memory errors, or bugs
+in intermediate proxies. The cost is 32 bytes per message plus the time
+to compute SHA-256, which is negligible for typical message sizes.</p>
+<h3 id="sdk-translation">SDK Translation</h3>
+<p>The messaging module also provides bidirectional translation between
+<code>SdkMessage</code> (the high-level SDK type) and
+<code>BridgeMessage</code> (the wire type):</p>
+<div class="sourceCode" id="cb46"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> sdk_message_adapter(sdk_msg<span class="op">:</span> <span class="op">&amp;</span>SdkMessage) <span class="op">-&gt;</span> BridgeMessage <span class="op">{</span></span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> sdk_msg <span class="op">{</span></span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">SdkMessage::</span>UserMessage <span class="op">{</span> content<span class="op">,</span> <span class="op">..</span> <span class="op">}</span> <span class="op">=&gt;</span> <span class="pp">BridgeMessage::</span>Prompt <span class="op">{</span> content<span class="op">:</span> content<span class="op">.</span>clone() <span class="op">},</span></span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">SdkMessage::</span>ToolUse <span class="op">{</span> name<span class="op">,</span> input<span class="op">,</span> <span class="op">..</span> <span class="op">}</span> <span class="op">=&gt;</span> <span class="pp">BridgeMessage::</span>ToolCall <span class="op">{</span> name<span class="op">:</span> name<span class="op">.</span>clone()<span class="op">,</span> input<span class="op">:</span> input<span class="op">.</span>clone() <span class="op">},</span></span>
+<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ...</span></span>
+<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb46-7"><a href="#cb46-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb46-8"><a href="#cb46-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-9"><a href="#cb46-9" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> bridge_to_sdk(bridge_msg<span class="op">:</span> <span class="op">&amp;</span>BridgeMessage) <span class="op">-&gt;</span> SdkMessage <span class="op">{</span></span>
+<span id="cb46-10"><a href="#cb46-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> bridge_msg <span class="op">{</span></span>
+<span id="cb46-11"><a href="#cb46-11" aria-hidden="true" tabindex="-1"></a>        <span class="pp">BridgeMessage::</span>Prompt <span class="op">{</span> content <span class="op">}</span> <span class="op">=&gt;</span> <span class="pp">SdkMessage::</span>UserMessage <span class="op">{</span> content<span class="op">:</span> content<span class="op">.</span>clone()<span class="op">,</span> session_id<span class="op">:</span> <span class="cn">None</span> <span class="op">},</span></span>
+<span id="cb46-12"><a href="#cb46-12" aria-hidden="true" tabindex="-1"></a>        <span class="pp">BridgeMessage::</span>ToolCall <span class="op">{</span> name<span class="op">,</span> input <span class="op">}</span> <span class="op">=&gt;</span> <span class="pp">SdkMessage::</span>ToolUse <span class="op">{</span> id<span class="op">:</span> <span class="pp">Uuid::</span>new_v4()<span class="op">.</span>to_string()<span class="op">,</span> name<span class="op">:</span> name<span class="op">.</span>clone()<span class="op">,</span> input<span class="op">:</span> input<span class="op">.</span>clone() <span class="op">},</span></span>
+<span id="cb46-13"><a href="#cb46-13" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ...</span></span>
+<span id="cb46-14"><a href="#cb46-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb46-15"><a href="#cb46-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This adapter layer allows the SDK and bridge to evolve independently.
+If the SDK adds a new field to <code>UserMessage</code>, the adapter
+decides whether to propagate it or ignore it. If the bridge changes the
+structure of <code>ToolCall</code>, the adapter absorbs the change
+without affecting SDK clients.</p>
+<hr />
+<h2 id="3510-the-ide-bridge--editor-integration">35.10 The IDE Bridge —
+Editor Integration</h2>
+<p>The IDE bridge (<code>ide_bridge.rs</code>) speaks JSON-RPC 2.0 to
+editors. Unlike the REPL bridge (which uses a simplified protocol), the
+IDE bridge follows the Language Server Protocol patterns: initialization
+handshake, capability negotiation, and method-based routing.</p>
+<h3 id="editor-detection">Editor Detection</h3>
+<p>When an IDE connects, the bridge identifies it from the
+handshake:</p>
+<div class="sourceCode" id="cb47"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> from_str_loose(s<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> IdeKind <span class="op">{</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> lower <span class="op">=</span> s<span class="op">.</span>to_lowercase()<span class="op">;</span></span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> lower<span class="op">.</span>contains(<span class="st">&quot;cursor&quot;</span>) <span class="op">{</span> <span class="dt">Self</span><span class="pp">::</span>Cursor <span class="op">}</span></span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="cf">if</span> lower<span class="op">.</span>contains(<span class="st">&quot;code&quot;</span>) <span class="op">||</span> lower<span class="op">.</span>contains(<span class="st">&quot;vscode&quot;</span>) <span class="op">{</span> <span class="dt">Self</span><span class="pp">::</span>VsCode <span class="op">}</span></span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="cf">if</span> lower<span class="op">.</span>contains(<span class="st">&quot;intellij&quot;</span>) <span class="op">||</span> lower<span class="op">.</span>contains(<span class="st">&quot;idea&quot;</span>) <span class="op">{</span> <span class="dt">Self</span><span class="pp">::</span>IntelliJ <span class="op">}</span></span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="op">{</span> <span class="dt">Self</span><span class="pp">::</span>Unknown <span class="op">}</span></span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This loose matching is intentional. IDE version strings vary ("Visual
+Studio Code 1.90", "Code - Insiders", "Cursor 0.44") and the bridge
+needs to work with all of them. The <code>IdeKind</code> determines
+which adapter to use for editor-specific features.</p>
+<h3 id="editor-specific-adapters">Editor-Specific Adapters</h3>
+<p>Each IDE gets an adapter that handles its quirks:</p>
+<ul>
+<li><strong>VSCode/Cursor</strong> use <code>file://</code> URIs and
+standard LSP-style edits.</li>
+<li><strong>Cursor</strong> additionally supports annotated edits with
+AI-generated explanations.</li>
+<li><strong>IntelliJ</strong> expects <code>documentLength</code>
+alongside edits for its undo stack.</li>
+</ul>
+<div class="sourceCode" id="cb48"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> CursorAdapter <span class="op">{</span></span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> annotated_edit(uri<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> range<span class="op">:</span> Range<span class="op">,</span> new_text<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> explanation<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> Value <span class="op">{</span></span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">json!</span>(<span class="op">{</span></span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;uri&quot;</span><span class="op">:</span> uri<span class="op">,</span></span>
+<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;range&quot;</span><span class="op">:</span> range<span class="op">,</span></span>
+<span id="cb48-6"><a href="#cb48-6" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;newText&quot;</span><span class="op">:</span> new_text<span class="op">,</span></span>
+<span id="cb48-7"><a href="#cb48-7" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;annotation&quot;</span><span class="op">:</span> <span class="op">{</span> <span class="st">&quot;source&quot;</span><span class="op">:</span> <span class="st">&quot;rcode&quot;</span><span class="op">,</span> <span class="st">&quot;explanation&quot;</span><span class="op">:</span> explanation <span class="op">}</span></span>
+<span id="cb48-8"><a href="#cb48-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)</span>
+<span id="cb48-9"><a href="#cb48-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb48-10"><a href="#cb48-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This adapter pattern keeps the core bridge clean. New IDE support is
+added by implementing a new adapter struct, not by modifying the bridge
+itself.</p>
+<h3 id="bidirectional-operations">Bidirectional Operations</h3>
+<p>The IDE bridge supports operations in both directions:</p>
+<p><strong>Agent to IDE:</strong> text edits, diagnostic publishing,
+cursor/selection sync, file navigation.</p>
+<p><strong>IDE to Agent:</strong> file open/close/change notifications,
+handshake, shutdown.</p>
+<p>The method constants follow LSP naming conventions:</p>
+<div class="sourceCode" id="cb49"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">mod</span> methods <span class="op">{</span></span>
+<span id="cb49-2"><a href="#cb49-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">const</span> TEXT_EDIT_APPLY<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;textDocument/applyEdit&quot;</span><span class="op">;</span></span>
+<span id="cb49-3"><a href="#cb49-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">const</span> DIAGNOSTIC_PUBLISH<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;textDocument/publishDiagnostics&quot;</span><span class="op">;</span></span>
+<span id="cb49-4"><a href="#cb49-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">const</span> FILE_OPEN<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;textDocument/didOpen&quot;</span><span class="op">;</span></span>
+<span id="cb49-5"><a href="#cb49-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">const</span> FILE_CHANGE<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;textDocument/didChange&quot;</span><span class="op">;</span></span>
+<span id="cb49-6"><a href="#cb49-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">const</span> HANDSHAKE<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;initialize&quot;</span><span class="op">;</span></span>
+<span id="cb49-7"><a href="#cb49-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">const</span> SHUTDOWN<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;shutdown&quot;</span><span class="op">;</span></span>
+<span id="cb49-8"><a href="#cb49-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb49-9"><a href="#cb49-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This is not LSP compliance for compliance's sake. IDE extension
+authors already know these method names and the protocol patterns around
+them. By reusing the conventions, the bridge reduces the learning curve
+for anyone building a new IDE integration.</p>
+<hr />
+<h2 id="3511-security-considerations">35.11 Security Considerations</h2>
+<p>The bridge layer is the agent's attack surface. Every design decision
+in this chapter has security implications, and several are worth calling
+out explicitly.</p>
+<p><strong>Localhost binding by default.</strong> The REST API and
+WebSocket server bind to <code>127.0.0.1</code>, not
+<code>0.0.0.0</code>. Exposing to the network requires explicit
+configuration.</p>
+<p><strong>Token-based authentication.</strong> The REST API uses bearer
+tokens. The WebSocket server uses HMAC-SHA256 session tokens. Neither
+transmits the shared secret over the wire.</p>
+<p><strong>Constant-time token comparison.</strong> The HMAC
+verification in <code>remote_core.rs</code> uses
+<code>mac.verify_slice()</code>, which is constant-time. This prevents
+timing side channels.</p>
+<p><strong>Payload size limits.</strong> Every transport enforces
+maximum message sizes (4-16 MiB depending on the transport). This
+prevents denial-of-service via memory exhaustion.</p>
+<p><strong>Session limits.</strong> Hard caps on concurrent sessions
+(default 16, max 256 for REST; default 32 for WebSocket) prevent
+resource exhaustion.</p>
+<p><strong>Input validation.</strong> Every inbound message is validated
+before processing — structure validation for protocol messages, size
+validation for payloads, format validation for configuration fields like
+<code>listen_addr</code> and <code>working_dir</code>.</p>
+<p><strong>Permission propagation.</strong> The SDK permission model
+ensures that remote agents cannot invoke tools without explicit
+authorization. As discussed in Chapter 15, the permission system is the
+last line of defense against unintended tool execution.</p>
+<hr />
+<h2 id="3512-putting-it-all-together">35.12 Putting It All Together</h2>
+<p>The bridge is not one thing — it is nine modules that collaborate to
+make the agent accessible from anywhere. Here is the flow for a typical
+remote session:</p>
+<ol type="1">
+<li>The bridge daemon starts, binding the REST API on port 19876 and the
+WebSocket server on port 9100.</li>
+<li>A client creates a session via <code>POST /v1/sessions</code> with
+an auth token.</li>
+<li>The bridge returns a session ID and an HMAC token for WebSocket
+access.</li>
+<li>The client opens a WebSocket connection and authenticates with the
+session token.</li>
+<li>The client sends a <code>Prompt</code> message with the user's
+query.</li>
+<li>The bridge routes the prompt to the agent engine (discussed in
+previous chapters).</li>
+<li>The agent streams <code>TextDelta</code> events over the WebSocket
+as it generates.</li>
+<li>When the agent needs a tool, it sends a <code>ToolCall</code>
+message. The bridge checks permissions, executes the tool, and returns a
+<code>ToolResult</code>.</li>
+<li>If the tool needs user approval, the bridge sends a
+<code>PermissionNeeded</code> event and waits.</li>
+<li>The agent sends a <code>Done</code> message with usage
+statistics.</li>
+<li>If the client disconnects, the session enters <code>Idle</code>
+state. After the GC timeout, it is cleaned up.</li>
+</ol>
+<p>This flow is the same whether the client is VS Code, a web dashboard,
+a CI script, or another agent instance. The bridge does not know or care
+— it just moves messages between the transport and the engine, enforcing
+authentication, limits, and lifecycles along the way.</p>
+<p>In the next chapter, we will look at how multiple bridge instances
+coordinate in a distributed deployment, enabling features like session
+migration, load balancing, and fault-tolerant agent pools.</p>
+<hr />
+<h2 id="summary">Summary</h2>
+<ul>
+<li>The bridge enables remote access to the CLI agent over HTTP REST and
+WebSocket transports, with a REPL bridge for IDE child-process
+integration.</li>
+<li>Session management includes lifecycle state machines with validated
+transitions, garbage collection of idle/expired/turn-limited sessions,
+and configurable concurrency limits.</li>
+<li>Authentication uses HMAC-SHA256 session tokens with constant-time
+verification for WebSocket and bearer tokens for REST.</li>
+<li>The session pool pre-warms sessions for low-latency acquisition,
+tracks hit/miss metrics, and supports upstream proxy relay with
+exponential backoff retries.</li>
+<li>The binary RCBM wire format adds deflate compression for large
+payloads and SHA-256 checksums for integrity verification.</li>
+<li>The agent SDK defines an 11-message NDJSON protocol with a status
+state machine, permission model, and cost tracking.</li>
+<li>The IDE bridge speaks JSON-RPC 2.0 with editor-specific adapters for
+VS Code, Cursor, and IntelliJ.</li>
+<li>Security is defense-in-depth: localhost binding, token auth, payload
+limits, session caps, input validation, and permission propagation.</li>
+</ul>
+</div>
+</body>
+</html>

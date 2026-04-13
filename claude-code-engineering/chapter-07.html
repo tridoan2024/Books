@@ -1,0 +1,1338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 7: Token Estimation & Budget System — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-7-token-estimation--budget-system">Chapter 7: Token
+Estimation &amp; Budget System</h1>
+<p>In Chapter 6, we built the five-tier context compression pipeline
+that keeps conversations within the model's 200K token window. But that
+entire system depends on answering one question: <em>how many tokens are
+in this conversation right now?</em> Get the number wrong, and
+compaction fires too late (context overflow) or too early (wasted
+summarization). This chapter covers the 5,489 lines of token management
+infrastructure that answer that question — and the budget systems that
+use the answer to control how much the agent spends.</p>
+<p>Token management in a CLI agent is not a single function. It is a
+layered system spanning estimation, counting, budgeting, cost tracking,
+and automatic compaction triggers. The core challenge: you need token
+counts <em>before</em> the API call (to decide if compaction is needed),
+but exact counts only arrive <em>after</em> the API call (in the
+response's <code>usage</code> field). The entire architecture exists to
+bridge that gap.</p>
+<p>We will trace the token lifecycle from rough estimation through exact
+counting, then examine the two independent budget systems (client-side
+continuation and server-side pacing), the output token escalation
+strategy that saves 4-8x GPU slot capacity, the cost tracking
+infrastructure that feeds the <code>/cost</code> command, and the
+auto-compact thresholds that connect everything back to Chapter 6's
+compaction engine.</p>
+<hr />
+<h2 id="the-estimation-stack--three-layers-of-accuracy">The Estimation
+Stack — Three Layers of Accuracy</h2>
+<p>Every token count in the system comes from one of three layers, each
+trading accuracy for availability. The layers degrade gracefully: if the
+exact count fails, the system falls back to rough estimation. If rough
+estimation has no content to measure, it returns zero. The system never
+throws, never blocks, and always produces a number.</p>
+<h3 id="layer-1-the-4-byte-heuristic">Layer 1: The 4-Byte Heuristic</h3>
+<p>The simplest estimation — divide the byte length of the content by a
+constant:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/tokenEstimation.ts:203-208</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">roughTokenCountEstimation</span>(</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  content<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  bytesPerToken<span class="op">:</span> <span class="dt">number</span> <span class="op">=</span> <span class="dv">4</span><span class="op">,</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">round</span>(content<span class="op">.</span><span class="at">length</span> <span class="op">/</span> bytesPerToken)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The default 4 bytes per token comes from empirical observation of BPE
+tokenizers on English text. It is deliberately a rough average — good
+enough for threshold comparisons, wrong enough that you should never use
+it for billing. The function exists because it needs zero dependencies:
+no network, no API client, no model metadata. It works at import time,
+in tests, and during bootstrap before the API client is initialized.</p>
+<p>But 4 bytes per token is wrong for specific content types. JSON, with
+its dense punctuation of single-character tokens (<code>{</code>,
+<code>}</code>, <code>:</code>, <code>,</code>, <code>"</code>),
+tokenizes at roughly 2 bytes per token. A 10KB JSON tool result
+estimated at 4 bytes/token would read as 2,500 tokens. The actual count
+is closer to 5,000. Underestimate by 2x, and your compaction threshold
+fires 2x too late.</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/tokenEstimation.ts:215-224</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">bytesPerTokenForFileType</span>(fileExtension<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> (fileExtension) {</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;json&#39;</span><span class="op">:</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;jsonl&#39;</span><span class="op">:</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="st">&#39;jsonc&#39;</span><span class="op">:</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="dv">2</span>    <span class="co">// JSON has many single-char tokens: { } : , &quot;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="dv">4</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This fixed a real production bug. Before the adjustment, large JSON
+tool results from <code>Grep</code> and <code>Read</code> operations
+would slip past budget checks, filling the context window past the
+auto-compact threshold and triggering 413 errors from the API.</p>
+<h3 id="layer-2-block-level-estimation-for-mixed-content">Layer 2:
+Block-Level Estimation for Mixed Content</h3>
+<p>Messages in the Anthropic API are not plain strings. They are arrays
+of content blocks — text, images, documents, tool results, tool use,
+thinking blocks, and more. Each block type has different tokenization
+characteristics:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/tokenEstimation.ts:391-435</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">roughTokenCountEstimationForBlock</span>(</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  block<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> Anthropic<span class="op">.</span><span class="at">ContentBlock</span> <span class="op">|</span> Anthropic<span class="op">.</span><span class="at">ContentBlockParam</span><span class="op">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="kw">typeof</span> block <span class="op">===</span> <span class="st">&#39;string&#39;</span>) {</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block)</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;text&#39;</span>) {</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block<span class="op">.</span><span class="at">text</span>)</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;image&#39;</span> <span class="op">||</span> block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;document&#39;</span>) {</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">2000</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;tool_result&#39;</span>) {</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">roughTokenCountEstimationForContent</span>(block<span class="op">.</span><span class="at">content</span>)</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;tool_use&#39;</span>) {</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>      block<span class="op">.</span><span class="at">name</span> <span class="op">+</span> <span class="fu">jsonStringify</span>(block<span class="op">.</span><span class="at">input</span> <span class="op">??</span> {})<span class="op">,</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;thinking&#39;</span>) {</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block<span class="op">.</span><span class="at">thinking</span>)</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (block<span class="op">.</span><span class="at">type</span> <span class="op">===</span> <span class="st">&#39;redacted_thinking&#39;</span>) {</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(block<span class="op">.</span><span class="at">data</span>)</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">roughTokenCountEstimation</span>(<span class="fu">jsonStringify</span>(block))</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Two design decisions stand out:</p>
+<p><strong>Images and PDFs use a fixed 2,000-token estimate.</strong>
+The actual formula for images is <code>(width * height) / 750</code>,
+which for a max 2000x2000 image gives ~5,333 tokens. The 2,000-token
+constant is deliberately conservative — but conservative in the
+<em>right direction</em>. Overestimating triggers compaction early
+(safe). Underestimating allows context overflow (unrecoverable 413
+error). The constant also matches <code>microCompact</code>'s
+<code>IMAGE_MAX_TOKEN_SIZE</code> (from Chapter 6), so both systems
+agree on image budgets and don't fight each other.</p>
+<p><strong>Tool use blocks serialize the input to JSON.</strong> The
+model generates tool inputs as arbitrary JSON — a <code>FileEdit</code>
+call might have 5KB of replacement text. The estimation stringifies the
+input and counts it. The <code>tool_result</code> block recurses into
+its content array, which may contain text, images, or nested blocks.</p>
+<p>The fallback at the bottom (<code>jsonStringify(block)</code>)
+handles any block type the code doesn't recognize —
+<code>server_tool_use</code>, <code>web_search</code>, MCP results, or
+future block types. This is defensive programming against API evolution:
+new block types get a reasonable estimate instead of being silently
+counted as zero.</p>
+<h3 id="layer-3-api-backed-exact-counting">Layer 3: API-Backed Exact
+Counting</h3>
+<p>When you need the real number, the system calls the Anthropic
+<code>countTokens</code> API:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/tokenEstimation.ts:124-201</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">async</span> <span class="kw">function</span> <span class="fu">countMessagesTokensWithAPI</span>(</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">:</span> Anthropic<span class="op">.</span><span class="at">Beta</span><span class="op">.</span><span class="at">Messages</span><span class="op">.</span><span class="at">BetaMessageParam</span>[]<span class="op">,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  tools<span class="op">:</span> Anthropic<span class="op">.</span><span class="at">Beta</span><span class="op">.</span><span class="at">Messages</span><span class="op">.</span><span class="at">BetaToolUnion</span>[]<span class="op">,</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">number</span> <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;</span> {</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">withTokenCountVCR</span>(messages<span class="op">,</span> tools<span class="op">,</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span> {</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> model <span class="op">=</span> <span class="fu">getMainLoopModel</span>()</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> betas <span class="op">=</span> <span class="fu">getModelBetas</span>(model)</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> containsThinking <span class="op">=</span> <span class="fu">hasThinkingBlocks</span>(messages)</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="fu">getAPIProvider</span>() <span class="op">===</span> <span class="st">&#39;bedrock&#39;</span>) {</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="fu">countTokensWithBedrock</span>({</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>          model<span class="op">,</span> messages<span class="op">,</span> tools<span class="op">,</span> betas<span class="op">,</span> containsThinking<span class="op">,</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>        })</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> anthropic <span class="op">=</span> <span class="cf">await</span> <span class="fu">getAnthropicClient</span>({</span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>        maxRetries<span class="op">:</span> <span class="dv">1</span><span class="op">,</span> model<span class="op">,</span> source<span class="op">:</span> <span class="st">&#39;count_tokens&#39;</span><span class="op">,</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>      })</span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> response <span class="op">=</span> <span class="cf">await</span> anthropic<span class="op">.</span><span class="at">beta</span><span class="op">.</span><span class="at">messages</span><span class="op">.</span><span class="fu">countTokens</span>({</span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>        model<span class="op">:</span> <span class="fu">normalizeModelStringForAPI</span>(model)<span class="op">,</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>        messages<span class="op">:</span> messages<span class="op">.</span><span class="at">length</span> <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>          <span class="op">?</span> messages</span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>          <span class="op">:</span> [{ role<span class="op">:</span> <span class="st">&#39;user&#39;</span><span class="op">,</span> content<span class="op">:</span> <span class="st">&#39;foo&#39;</span> }]<span class="op">,</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>        tools<span class="op">,</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>        <span class="op">...</span>(containsThinking <span class="op">&amp;&amp;</span> {</span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>          thinking<span class="op">:</span> {</span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>            type<span class="op">:</span> <span class="st">&#39;enabled&#39;</span><span class="op">,</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>            budget_tokens<span class="op">:</span> TOKEN_COUNT_THINKING_BUDGET<span class="op">,</span></span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>          }<span class="op">,</span></span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>        })<span class="op">,</span></span>
+<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>      })</span>
+<span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> response<span class="op">.</span><span class="at">input_tokens</span></span>
+<span id="cb4-35"><a href="#cb4-35" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">catch</span> (error) {</span>
+<span id="cb4-36"><a href="#cb4-36" aria-hidden="true" tabindex="-1"></a>      <span class="fu">logError</span>(error)</span>
+<span id="cb4-37"><a href="#cb4-37" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb4-38"><a href="#cb4-38" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb4-39"><a href="#cb4-39" aria-hidden="true" tabindex="-1"></a>  })</span>
+<span id="cb4-40"><a href="#cb4-40" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The function signature tells the entire philosophy:
+<code>Promise&lt;number | null&gt;</code>. It never throws. On any
+failure — network error, rate limit, unsupported provider — it returns
+<code>null</code>, and callers fall back to rough estimation. This means
+the system <em>always</em> has a token count available, at varying
+accuracy, regardless of network conditions or API provider
+capabilities.</p>
+<p>Three subtleties in this implementation:</p>
+<p><strong>Thinking block handling.</strong> When messages contain
+thinking blocks, the <code>countTokens</code> API requires thinking to
+be enabled with a budget. The counting-only call uses minimal values —
+1,024 budget, 2,048 max tokens (<code>tokenEstimation.ts:30-33</code>) —
+to satisfy the API constraint without wasting capacity. These are
+throwaway values; the counting endpoint does not actually generate
+output.</p>
+<p><strong>Empty message guard.</strong> If <code>messages</code> is
+empty, the function substitutes a dummy
+<code>{ role: 'user', content: 'foo' }</code>. The
+<code>countTokens</code> endpoint requires at least one message. The
+dummy adds a negligible token count (~1-2 tokens) to an empty result —
+an acceptable error margin.</p>
+<p><strong>VCR wrapper.</strong> The <code>withTokenCountVCR</code>
+wrapper enables record/replay in tests (covered in Chapter 43). In
+production, it is a pass-through.</p>
+<h3 id="how-the-three-layers-compose">How the Three Layers Compose</h3>
+<p>The layered design follows a consistent pattern throughout the
+system:</p>
+<pre><code>API count (exact) → API count + rough delta → pure rough estimate
+                          ↑
+                   This is the common case</code></pre>
+<p>The common case is the middle tier: you have an exact count from the
+last API response, plus a rough estimate of messages added since then.
+This gives you accuracy within 5-10% — good enough for threshold
+decisions — without an extra API call on every turn.</p>
+<hr />
+<h2 id="the-canonical-token-counter">The Canonical Token Counter</h2>
+<h3
+id="tokencountwithestimation--the-single-source-of-truth">tokenCountWithEstimation
+— The Single Source of Truth</h3>
+<p>Every subsystem that needs to answer "how full is the context
+window?" calls one function: <code>tokenCountWithEstimation</code>.
+Auto-compact uses it. The status bar uses it. Session memory
+initialization uses it. The blocking limit check uses it. If you build a
+token-aware agent, this function is the one to study.</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/tokens.ts:226-261</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">tokenCountWithEstimation</span>(</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  messages<span class="op">:</span> <span class="kw">readonly</span> Message[]<span class="op">,</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> i <span class="op">=</span> messages<span class="op">.</span><span class="at">length</span> <span class="op">-</span> <span class="dv">1</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> (i <span class="op">&gt;=</span> <span class="dv">0</span>) {</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> message <span class="op">=</span> messages[i]</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> usage <span class="op">=</span> message <span class="op">?</span> <span class="fu">getTokenUsage</span>(message) <span class="op">:</span> <span class="dt">undefined</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (message <span class="op">&amp;&amp;</span> usage) {</span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> responseId <span class="op">=</span> <span class="fu">getAssistantMessageId</span>(message)</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (responseId) {</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> j <span class="op">=</span> i <span class="op">-</span> <span class="dv">1</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">while</span> (j <span class="op">&gt;=</span> <span class="dv">0</span>) {</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>          <span class="kw">const</span> prior <span class="op">=</span> messages[j]</span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>          <span class="kw">const</span> priorId <span class="op">=</span> prior <span class="op">?</span> <span class="fu">getAssistantMessageId</span>(prior) <span class="op">:</span> <span class="dt">undefined</span></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>          <span class="cf">if</span> (priorId <span class="op">===</span> responseId) {</span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>            i <span class="op">=</span> j</span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>          } <span class="cf">else</span> <span class="cf">if</span> (priorId <span class="op">!==</span> <span class="kw">undefined</span>) {</span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>            <span class="cf">break</span></span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>          }</span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>          j<span class="op">--</span></span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>      }</span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> (</span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>        <span class="fu">getTokenCountFromUsage</span>(usage) <span class="op">+</span></span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>        <span class="fu">roughTokenCountEstimationForMessages</span>(messages<span class="op">.</span><span class="fu">slice</span>(i <span class="op">+</span> <span class="dv">1</span>))</span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>      )</span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>    i<span class="op">--</span></span>
+<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="fu">roughTokenCountEstimationForMessages</span>(messages)</span>
+<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The algorithm has three phases:</p>
+<p><strong>Phase 1: Walk backward to find real usage data.</strong>
+Starting from the end of the message array, the function searches for
+the last assistant message that carries API usage data. Not every
+message has usage — user messages, tool results, and injected system
+messages don't. Only assistant messages from actual API calls carry the
+<code>usage</code> field.</p>
+<p><strong>Phase 2: Handle parallel tool call deduplication.</strong>
+This is the non-obvious part. When the model makes multiple tool calls
+in a single response, the streaming code (Chapter 5) emits a
+<em>separate</em> assistant record per content block, all sharing the
+same <code>message.id</code>. The messages array looks like:</p>
+<pre><code>[..., assistant(id=A), user(tool_result), assistant(id=A), user(tool_result), ...]</code></pre>
+<p>If the function stops at the <em>last</em>
+<code>assistant(id=A)</code>, it would only estimate one
+<code>tool_result</code> after it and miss all the earlier interleaved
+ones. The inner <code>while</code> loop walks back to the <em>first</em>
+sibling with the same <code>message.id</code>, ensuring every
+interleaved tool result is included in the rough estimate slice.</p>
+<p><strong>Phase 3: Combine exact + estimate.</strong> The return value
+is the sum of two parts: the exact token count from the API's
+<code>usage</code> field (everything up to and including that response),
+plus a rough estimate of all messages appended since.</p>
+<p>When no message has usage data at all — the conversation just
+started, or the API never returned usage — the function falls through to
+pure rough estimation of the entire array. This is the "floor" accuracy
+level: always available, never fails.</p>
+<h3 id="what-gettokencountfromusage-includes">What
+getTokenCountFromUsage Includes</h3>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/tokens.ts:46-53</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getTokenCountFromUsage</span>(usage<span class="op">:</span> Usage)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> (</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    usage<span class="op">.</span><span class="at">input_tokens</span> <span class="op">+</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    (usage<span class="op">.</span><span class="at">cache_creation_input_tokens</span> <span class="op">??</span> <span class="dv">0</span>) <span class="op">+</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>    (usage<span class="op">.</span><span class="at">cache_read_input_tokens</span> <span class="op">??</span> <span class="dv">0</span>) <span class="op">+</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>    usage<span class="op">.</span><span class="at">output_tokens</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>All four categories matter because they all occupy context window
+space. Cache tokens are a billing distinction, not a context distinction
+— a cached token takes the same context slot as a fresh one. If you only
+counted <code>input_tokens + output_tokens</code>, you would undercount
+by the cached portion, which for a well-warmed session can be 80-90% of
+the input.</p>
+<hr />
+<h2 id="output-token-escalation-8k-to-64k">Output Token Escalation: 8K
+to 64K</h2>
+<h3 id="the-slot-reservation-problem">The Slot Reservation Problem</h3>
+<p>When you send <code>max_output_tokens: 32000</code> to the API, the
+serving infrastructure reserves a GPU slot large enough to produce
+32,000 tokens. For Claude Code's actual workload, p99 output is 4,911
+tokens. That means 87-94% of every reserved slot goes unused — 6.5x
+over-reservation at the median, 16x at the 50th percentile. Across
+millions of requests per day, this wastes enormous GPU capacity.</p>
+<p>The solution is a two-phase escalation: start at 8K, retry at 64K
+only when needed.</p>
+<h3 id="the-constants">The Constants</h3>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/context.ts:8-25</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> CAPPED_DEFAULT_MAX_TOKENS <span class="op">=</span> <span class="dv">8_000</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> ESCALATED_MAX_TOKENS <span class="op">=</span> <span class="dv">64_000</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MAX_OUTPUT_TOKENS_DEFAULT <span class="op">=</span> <span class="dv">32_000</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MAX_OUTPUT_TOKENS_UPPER_LIMIT <span class="op">=</span> <span class="dv">64_000</span></span></code></pre></div>
+<h3 id="per-model-output-limits">Per-Model Output Limits</h3>
+<p>Different models have different ceilings:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/context.ts:149-210</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getModelMaxOutputTokens</span>(model<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> {</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">default</span><span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  upperLimit<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>} {</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> m <span class="op">=</span> <span class="fu">getCanonicalName</span>(model)</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (m<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;opus-4-6&#39;</span>)) {</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { <span class="cf">default</span><span class="op">:</span> <span class="dv">64_000</span><span class="op">,</span> upperLimit<span class="op">:</span> <span class="dv">128_000</span> }</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (m<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;sonnet-4-6&#39;</span>)) {</span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { <span class="cf">default</span><span class="op">:</span> <span class="dv">32_000</span><span class="op">,</span> upperLimit<span class="op">:</span> <span class="dv">128_000</span> }</span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (m<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;opus-4-5&#39;</span>) <span class="op">||</span> m<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;sonnet-4&#39;</span>) <span class="op">||</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>      m<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;haiku-4&#39;</span>)) {</span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { <span class="cf">default</span><span class="op">:</span> <span class="dv">32_000</span><span class="op">,</span> upperLimit<span class="op">:</span> <span class="dv">64_000</span> }</span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (m<span class="op">.</span><span class="fu">includes</span>(<span class="st">&#39;claude-3-opus&#39;</span>)) {</span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { <span class="cf">default</span><span class="op">:</span> <span class="dv">4_096</span><span class="op">,</span> upperLimit<span class="op">:</span> <span class="dv">4_096</span> }</span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Fallback</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { <span class="cf">default</span><span class="op">:</span> <span class="dv">32_000</span><span class="op">,</span> upperLimit<span class="op">:</span> <span class="dv">64_000</span> }</span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="the-capping-function">The Capping Function</h3>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/api/claude.ts:3399-3417</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getMaxOutputTokensForModel</span>(model<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> maxOutputTokens <span class="op">=</span> <span class="fu">getModelMaxOutputTokens</span>(model)</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> defaultTokens <span class="op">=</span> <span class="fu">isMaxTokensCapEnabled</span>()</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">?</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">min</span>(maxOutputTokens<span class="op">.</span><span class="at">default</span><span class="op">,</span> CAPPED_DEFAULT_MAX_TOKENS)</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">:</span> maxOutputTokens<span class="op">.</span><span class="at">default</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> result <span class="op">=</span> <span class="fu">validateBoundedIntEnvVar</span>(</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    <span class="st">&#39;CLAUDE_CODE_MAX_OUTPUT_TOKENS&#39;</span><span class="op">,</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>    <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">CLAUDE_CODE_MAX_OUTPUT_TOKENS</span><span class="op">,</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>    defaultTokens<span class="op">,</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    maxOutputTokens<span class="op">.</span><span class="at">upperLimit</span><span class="op">,</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>Math.min</code> is critical: it keeps models with native
+defaults below 8K (like <code>claude-3-opus</code> at 4,096) at their
+native value. You do not want to <em>raise</em> a model's default to 8K
+if it cannot support it.</p>
+<h3 id="the-three-phase-escalation">The Three-Phase Escalation</h3>
+<p>As covered in Chapter 4, the query loop handles
+<code>max_output_tokens</code> exhaustion with a three-phase recovery
+(from <code>query.ts:1188-1256</code>):</p>
+<ol type="1">
+<li><p><strong>Phase 1: 8K to 64K.</strong> Retry the same request with
+<code>max_output_tokens: 64000</code>. No user message injected. This
+handles the &lt;1% of requests that genuinely need more than 8K output
+tokens.</p></li>
+<li><p><strong>Phase 2: Multi-turn recovery.</strong> Inject a "Resume
+directly where you left off" message and call the model again, up to 3
+times. This handles responses that exceed even 64K — rare but possible
+for large code generation tasks.</p></li>
+<li><p><strong>Phase 3: Surface error.</strong> If 3 resume attempts
+fail, the system surfaces the truncation to the user.</p></li>
+</ol>
+<h3 id="the-economics">The Economics</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>32K Default</th>
+<th>8K + Escalation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Slot utilization</td>
+<td>15% (p99 = 4,911)</td>
+<td>61% for 99%+ of requests</td>
+</tr>
+<tr>
+<td>Wasted capacity</td>
+<td>6.5x over-reservation</td>
+<td>~1.3x for capped requests</td>
+</tr>
+<tr>
+<td>Extra API calls</td>
+<td>0</td>
+<td>~1 per 100 requests</td>
+</tr>
+<tr>
+<td>Net efficiency</td>
+<td>Baseline</td>
+<td>4-8x improvement</td>
+</tr>
+</tbody>
+</table>
+<p>The trade-off is clear: one retry per ~100 requests costs far less
+than 6.5x global over-reservation. This is a textbook example of
+optimizing for the common case while handling the tail correctly.</p>
+<p>The <code>CLAUDE_CODE_MAX_OUTPUT_TOKENS</code> environment variable
+exists as an escape hatch. Users who consistently generate long output
+can set it to 32K or 64K to avoid the retry overhead. But the default
+serves the 99th percentile correctly.</p>
+<hr />
+<h2 id="token-budget-the-user-facing-parser">Token Budget: The
+User-Facing Parser</h2>
+<p>When a user types <code>"refactor this module +500k"</code>, the
+system needs to extract <code>500000</code> from the natural language
+prompt, remove it from the text sent to the model, and use it to control
+how long the agent loop runs. This is the client-side token budget
+system.</p>
+<h3 id="parsing-shorthand-notation">Parsing Shorthand Notation</h3>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/tokenBudget.ts:1-19</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SHORTHAND_START_RE <span class="op">=</span> <span class="ss">/</span><span class="sc">^\s*\+(\d+(?</span><span class="ss">:</span><span class="sc">\.\d+)?)\s*(</span><span class="ss">k</span><span class="sc">|</span><span class="ss">m</span><span class="sc">|</span><span class="ss">b</span><span class="sc">)\b</span><span class="ss">/i</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> SHORTHAND_END_RE <span class="op">=</span> <span class="ss">/</span><span class="sc">\s\+(\d+(?</span><span class="ss">:</span><span class="sc">\.\d+)?)\s*(</span><span class="ss">k</span><span class="sc">|</span><span class="ss">m</span><span class="sc">|</span><span class="ss">b</span><span class="sc">)\s*[.!?]?\s*$</span><span class="ss">/i</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> VERBOSE_RE <span class="op">=</span> <span class="ss">/</span><span class="sc">\b(?</span><span class="ss">:use</span><span class="sc">|</span><span class="ss">spend</span><span class="sc">)\s+(\d+(?</span><span class="ss">:</span><span class="sc">\.\d+)?)\s*(</span><span class="ss">k</span><span class="sc">|</span><span class="ss">m</span><span class="sc">|</span><span class="ss">b</span><span class="sc">)\s*</span><span class="ss">tokens</span><span class="sc">?\b</span><span class="ss">/i</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MULTIPLIERS<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">number</span><span class="op">&gt;</span> <span class="op">=</span> {</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  k<span class="op">:</span> <span class="dv">1_000</span><span class="op">,</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  m<span class="op">:</span> <span class="dv">1_000_000</span><span class="op">,</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>  b<span class="op">:</span> <span class="dv">1_000_000_000</span><span class="op">,</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">parseTokenBudget</span>(text<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> <span class="op">|</span> <span class="dt">null</span> {</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> startMatch <span class="op">=</span> text<span class="op">.</span><span class="fu">match</span>(SHORTHAND_START_RE)</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (startMatch) <span class="cf">return</span> <span class="fu">parseBudgetMatch</span>(startMatch[<span class="dv">1</span>]<span class="op">!,</span> startMatch[<span class="dv">2</span>]<span class="op">!</span>)</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> endMatch <span class="op">=</span> text<span class="op">.</span><span class="fu">match</span>(SHORTHAND_END_RE)</span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (endMatch) <span class="cf">return</span> <span class="fu">parseBudgetMatch</span>(endMatch[<span class="dv">1</span>]<span class="op">!,</span> endMatch[<span class="dv">2</span>]<span class="op">!</span>)</span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> verboseMatch <span class="op">=</span> text<span class="op">.</span><span class="fu">match</span>(VERBOSE_RE)</span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (verboseMatch) <span class="cf">return</span> <span class="fu">parseBudgetMatch</span>(verboseMatch[<span class="dv">1</span>]<span class="op">!,</span> verboseMatch[<span class="dv">2</span>]<span class="op">!</span>)</span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">null</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Three patterns, checked in priority order:</p>
+<ul>
+<li><strong>Start-anchored:</strong> <code>"+500k refactor this"</code>
+— the budget comes first</li>
+<li><strong>End-anchored:</strong> <code>"refactor this +500k"</code> —
+the budget comes last</li>
+<li><strong>Verbose:</strong>
+<code>"spend 2M tokens on this refactor"</code> — natural language</li>
+</ul>
+<p>The anchoring matters for avoiding false positives. Without
+anchoring, <code>"+5k"</code> could match inside a string like "they
+raised +5k in funding" that happens to appear in a commit message or
+code comment. The start regex requires leading whitespace or
+beginning-of-string; the end regex requires trailing whitespace,
+punctuation, or end-of-string.</p>
+<p>A performance note hidden in the source
+(<code>tokenBudget.ts:6</code>): lookbehind <code>(?&lt;=\s)</code> is
+deliberately avoided because it defeats the YARR JIT compiler in
+JavaScriptCore (Bun's runtime). The interpreter path scans O(n) of the
+input even with a <code>$</code> anchor. Instead, the regex captures the
+leading whitespace and callers offset by 1. This is the kind of
+runtime-specific optimization you encounter when your agent runs on Bun
+rather than Node.</p>
+<h3 id="position-tracking-for-the-ui">Position Tracking for the UI</h3>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/tokenBudget.ts:31-63</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">findTokenBudgetPositions</span>(</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  text<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="bu">Array</span><span class="op">&lt;</span>{ start<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> end<span class="op">:</span> <span class="dt">number</span> }<span class="op">&gt;</span> {</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Returns byte positions of all budget tokens in the text</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Used by the UI to highlight/remove budget notation</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The UI needs to strip the <code>+500k</code> notation from the
+displayed prompt while preserving the rest.
+<code>findTokenBudgetPositions</code> returns start/end byte offsets so
+the rendering layer can excise the budget tokens without a second regex
+pass.</p>
+<h3 id="continuation-message-formatting">Continuation Message
+Formatting</h3>
+<p>When the budget system decides to continue, it injects a nudge
+message:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/tokenBudget.ts:66-73</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getBudgetContinuationMessage</span>(</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  pct<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  turnTokens<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  budget<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> fmt <span class="op">=</span> (n<span class="op">:</span> <span class="dt">number</span>)<span class="op">:</span> <span class="dt">string</span> <span class="kw">=&gt;</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">new</span> <span class="bu">Intl</span><span class="op">.</span><span class="fu">NumberFormat</span>(<span class="st">&#39;en-US&#39;</span>)<span class="op">.</span><span class="fu">format</span>(n)</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="vs">`Stopped at </span><span class="sc">${</span>pct<span class="sc">}</span><span class="vs">% of token target (</span><span class="sc">${</span><span class="fu">fmt</span>(turnTokens)<span class="sc">}</span><span class="vs"> / </span><span class="sc">${</span><span class="fu">fmt</span>(budget)<span class="sc">}</span><span class="vs">). Keep working — do not summarize.`</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The "do not summarize" instruction is deliberate. Without it, the
+model tends to wrap up with a summary paragraph on continuation, wasting
+budget on meta-commentary instead of productive work. The explicit
+instruction keeps the model focused on the task.</p>
+<hr />
+<h2 id="the-budget-decision-engine">The Budget Decision Engine</h2>
+<p>Parsing the budget is the easy part. The hard part is deciding when
+to continue and when to stop. The decision engine at
+<code>query/tokenBudget.ts</code> (93 lines) manages this with a state
+tracker and three exit conditions.</p>
+<h3 id="the-budgettracker-state">The BudgetTracker State</h3>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// query/tokenBudget.ts:3-11</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> COMPLETION_THRESHOLD <span class="op">=</span> <span class="fl">0.9</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DIMINISHING_THRESHOLD <span class="op">=</span> <span class="dv">500</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> BudgetTracker <span class="op">=</span> {</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  continuationCount<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  lastDeltaTokens<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  lastGlobalTurnTokens<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  startedAt<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Four fields track the budget lifecycle.
+<code>continuationCount</code> is the number of times the engine has
+decided to continue past a natural stopping point.
+<code>lastDeltaTokens</code> records how many tokens the model produced
+in the previous continuation round. <code>lastGlobalTurnTokens</code>
+anchors the previous checkpoint for computing deltas.
+<code>startedAt</code> records the wall-clock time for duration
+reporting.</p>
+<h3 id="the-decision-algorithm">The Decision Algorithm</h3>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// query/tokenBudget.ts:45-93</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">checkTokenBudget</span>(</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  tracker<span class="op">:</span> BudgetTracker<span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  agentId<span class="op">:</span> <span class="dt">string</span> <span class="op">|</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>  budget<span class="op">:</span> <span class="dt">number</span> <span class="op">|</span> <span class="dt">null</span><span class="op">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  globalTurnTokens<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> TokenBudgetDecision {</span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Subagents don&#39;t get budget continuation</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (agentId <span class="op">||</span> budget <span class="op">===</span> <span class="kw">null</span> <span class="op">||</span> budget <span class="op">&lt;=</span> <span class="dv">0</span>) {</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { action<span class="op">:</span> <span class="st">&#39;stop&#39;</span><span class="op">,</span> completionEvent<span class="op">:</span> <span class="dt">null</span> }</span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> turnTokens <span class="op">=</span> globalTurnTokens</span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> pct <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">round</span>((turnTokens <span class="op">/</span> budget) <span class="op">*</span> <span class="dv">100</span>)</span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> deltaSinceLastCheck <span class="op">=</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>    globalTurnTokens <span class="op">-</span> tracker<span class="op">.</span><span class="at">lastGlobalTurnTokens</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> isDiminishing <span class="op">=</span></span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>    tracker<span class="op">.</span><span class="at">continuationCount</span> <span class="op">&gt;=</span> <span class="dv">3</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>    deltaSinceLastCheck <span class="op">&lt;</span> DIMINISHING_THRESHOLD <span class="op">&amp;&amp;</span></span>
+<span id="cb16-21"><a href="#cb16-21" aria-hidden="true" tabindex="-1"></a>    tracker<span class="op">.</span><span class="at">lastDeltaTokens</span> <span class="op">&lt;</span> DIMINISHING_THRESHOLD</span>
+<span id="cb16-22"><a href="#cb16-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-23"><a href="#cb16-23" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>isDiminishing <span class="op">&amp;&amp;</span> turnTokens <span class="op">&lt;</span> budget <span class="op">*</span> COMPLETION_THRESHOLD) {</span>
+<span id="cb16-24"><a href="#cb16-24" aria-hidden="true" tabindex="-1"></a>    tracker<span class="op">.</span><span class="at">continuationCount</span><span class="op">++</span></span>
+<span id="cb16-25"><a href="#cb16-25" aria-hidden="true" tabindex="-1"></a>    tracker<span class="op">.</span><span class="at">lastDeltaTokens</span> <span class="op">=</span> deltaSinceLastCheck</span>
+<span id="cb16-26"><a href="#cb16-26" aria-hidden="true" tabindex="-1"></a>    tracker<span class="op">.</span><span class="at">lastGlobalTurnTokens</span> <span class="op">=</span> globalTurnTokens</span>
+<span id="cb16-27"><a href="#cb16-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb16-28"><a href="#cb16-28" aria-hidden="true" tabindex="-1"></a>      action<span class="op">:</span> <span class="st">&#39;continue&#39;</span><span class="op">,</span></span>
+<span id="cb16-29"><a href="#cb16-29" aria-hidden="true" tabindex="-1"></a>      nudgeMessage<span class="op">:</span> <span class="fu">getBudgetContinuationMessage</span>(</span>
+<span id="cb16-30"><a href="#cb16-30" aria-hidden="true" tabindex="-1"></a>        pct<span class="op">,</span> turnTokens<span class="op">,</span> budget<span class="op">,</span></span>
+<span id="cb16-31"><a href="#cb16-31" aria-hidden="true" tabindex="-1"></a>      )<span class="op">,</span></span>
+<span id="cb16-32"><a href="#cb16-32" aria-hidden="true" tabindex="-1"></a>      continuationCount<span class="op">:</span> tracker<span class="op">.</span><span class="at">continuationCount</span><span class="op">,</span></span>
+<span id="cb16-33"><a href="#cb16-33" aria-hidden="true" tabindex="-1"></a>      pct<span class="op">,</span> turnTokens<span class="op">,</span> budget<span class="op">,</span></span>
+<span id="cb16-34"><a href="#cb16-34" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb16-35"><a href="#cb16-35" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb16-36"><a href="#cb16-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-37"><a href="#cb16-37" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (isDiminishing <span class="op">||</span> tracker<span class="op">.</span><span class="at">continuationCount</span> <span class="op">&gt;</span> <span class="dv">0</span>) {</span>
+<span id="cb16-38"><a href="#cb16-38" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb16-39"><a href="#cb16-39" aria-hidden="true" tabindex="-1"></a>      action<span class="op">:</span> <span class="st">&#39;stop&#39;</span><span class="op">,</span></span>
+<span id="cb16-40"><a href="#cb16-40" aria-hidden="true" tabindex="-1"></a>      completionEvent<span class="op">:</span> {</span>
+<span id="cb16-41"><a href="#cb16-41" aria-hidden="true" tabindex="-1"></a>        continuationCount<span class="op">:</span> tracker<span class="op">.</span><span class="at">continuationCount</span><span class="op">,</span></span>
+<span id="cb16-42"><a href="#cb16-42" aria-hidden="true" tabindex="-1"></a>        pct<span class="op">,</span> turnTokens<span class="op">,</span> budget<span class="op">,</span></span>
+<span id="cb16-43"><a href="#cb16-43" aria-hidden="true" tabindex="-1"></a>        diminishingReturns<span class="op">:</span> isDiminishing<span class="op">,</span></span>
+<span id="cb16-44"><a href="#cb16-44" aria-hidden="true" tabindex="-1"></a>        durationMs<span class="op">:</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> tracker<span class="op">.</span><span class="at">startedAt</span><span class="op">,</span></span>
+<span id="cb16-45"><a href="#cb16-45" aria-hidden="true" tabindex="-1"></a>      }<span class="op">,</span></span>
+<span id="cb16-46"><a href="#cb16-46" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb16-47"><a href="#cb16-47" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb16-48"><a href="#cb16-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-49"><a href="#cb16-49" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> { action<span class="op">:</span> <span class="st">&#39;stop&#39;</span><span class="op">,</span> completionEvent<span class="op">:</span> <span class="dt">null</span> }</span>
+<span id="cb16-50"><a href="#cb16-50" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Three exit conditions, in evaluation order:</p>
+<p><strong>1. Under 90% and not diminishing -- continue.</strong> The
+model has budget remaining and is making progress. Inject the nudge
+message (the "keep working" text from above) and let the query loop
+submit another turn. The 90% threshold (not 100%) exists because the
+model needs headroom to produce a coherent closing response. Cutting off
+at exactly 100% truncates mid-thought.</p>
+<p><strong>2. Diminishing returns -- stop early.</strong> Three or more
+continuations have occurred, and both the current and previous deltas
+are under 500 tokens. This catches the degenerate case where the model
+produces tiny 50-token responses forever, each triggering a
+continuation. Without this circuit breaker, a model stuck in a "let me
+think about this..." loop would burn budget indefinitely. The
+<code>diminishingReturns: true</code> flag in the completion event lets
+telemetry track how often this occurs.</p>
+<p><strong>3. At or above 90% -- stop naturally.</strong> The budget is
+substantially consumed. Let the model complete its current response
+without injecting a continuation.</p>
+<p>The first guard in the function —
+<code>if (agentId || budget === null || budget &lt;= 0)</code> —
+prevents subagents from inheriting the parent's budget. Budget
+continuation is a user-facing feature; subagents spawned by the
+<code>AgentTool</code> should complete their delegated task and return,
+not auto-continue.</p>
+<h3 id="decision-types">Decision Types</h3>
+<p>The return type is a discriminated union:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// query/tokenBudget.ts:22-43</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> ContinueDecision <span class="op">=</span> {</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span> <span class="st">&#39;continue&#39;</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  nudgeMessage<span class="op">:</span> <span class="dt">string</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  continuationCount<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  pct<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  turnTokens<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  budget<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> StopDecision <span class="op">=</span> {</span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span> <span class="st">&#39;stop&#39;</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>  completionEvent<span class="op">:</span> {</span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>    continuationCount<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a>    pct<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>    turnTokens<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>    budget<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>    diminishingReturns<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a>    durationMs<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>  } <span class="op">|</span> <span class="dt">null</span></span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>completionEvent</code> is null when there was never a
+budget in the first place (no <code>+500k</code> in the prompt). It is
+non-null when the budget was active and the engine decided to stop. This
+distinction matters for telemetry: you want to log budget completion
+events, but not log a "budget completed" event for prompts that never
+had a budget.</p>
+<hr />
+<h2 id="task_budget--api-side-budget-awareness">task_budget — API-Side
+Budget Awareness</h2>
+<p>The client-side budget system described above has a limitation:
+<em>the model does not know it exists.</em> The model produces a full
+response, hits its stop reason, and the client decides whether to
+continue. This means the model cannot pace itself — it cannot produce a
+shorter response because the budget is running low.</p>
+<p>The <code>task_budget</code> API parameter solves this. It is sent in
+the request body so the model sees the total budget and the remaining
+balance, and can self-pace.</p>
+<h3 id="the-wire-format">The Wire Format</h3>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/api/claude.ts:468-477</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> TaskBudgetParam <span class="op">=</span> {</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="st">&#39;tokens&#39;</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>  total<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>  remaining<span class="op">?:</span> <span class="dt">number</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">configureTaskBudgetParams</span>(</span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>  taskBudget<span class="op">:</span> Options[<span class="st">&#39;taskBudget&#39;</span>]<span class="op">,</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>  outputConfig<span class="op">:</span> BetaOutputConfig <span class="op">&amp;</span> { task_budget<span class="op">?:</span> TaskBudgetParam }<span class="op">,</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>  betas<span class="op">:</span> <span class="dt">string</span>[]<span class="op">,</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>taskBudget <span class="op">||</span> <span class="st">&#39;task_budget&#39;</span> <span class="kw">in</span> outputConfig <span class="op">||</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>      <span class="op">!</span><span class="fu">shouldIncludeFirstPartyOnlyBetas</span>()) {</span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>  outputConfig<span class="op">.</span><span class="at">task_budget</span> <span class="op">=</span> {</span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>    type<span class="op">:</span> <span class="st">&#39;tokens&#39;</span><span class="op">,</span></span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>    total<span class="op">:</span> taskBudget<span class="op">.</span><span class="at">total</span><span class="op">,</span></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span>(taskBudget<span class="op">.</span><span class="at">remaining</span> <span class="op">!==</span> <span class="kw">undefined</span> <span class="op">&amp;&amp;</span> {</span>
+<span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a>      remaining<span class="op">:</span> taskBudget<span class="op">.</span><span class="at">remaining</span><span class="op">,</span></span>
+<span id="cb18-22"><a href="#cb18-22" aria-hidden="true" tabindex="-1"></a>    })<span class="op">,</span></span>
+<span id="cb18-23"><a href="#cb18-23" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb18-24"><a href="#cb18-24" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>betas<span class="op">.</span><span class="fu">includes</span>(TASK_BUDGETS_BETA_HEADER)) {</span>
+<span id="cb18-25"><a href="#cb18-25" aria-hidden="true" tabindex="-1"></a>    betas<span class="op">.</span><span class="fu">push</span>(TASK_BUDGETS_BETA_HEADER)</span>
+<span id="cb18-26"><a href="#cb18-26" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb18-27"><a href="#cb18-27" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The guard <code>'task_budget' in outputConfig</code> prevents
+double-setting — if something upstream already configured it, the
+function is a no-op. The <code>shouldIncludeFirstPartyOnlyBetas()</code>
+check restricts this to first-party API access; third-party
+Bedrock/Vertex users do not get the beta.</p>
+<h3 id="two-budget-systems-two-purposes">Two Budget Systems, Two
+Purposes</h3>
+<p>The comment at <code>services/api/claude.ts:702-706</code> makes the
+distinction explicit:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">// API-side task budget (output_config.task_budget). Distinct from the</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="co">// tokenBudget.ts +500k auto-continue feature — this one is sent to the API</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="co">// so the model can pace itself. `remaining` is computed by the caller</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="co">// (query.ts decrements across the agentic loop).</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>taskBudget<span class="op">?:</span> { total<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> remaining<span class="op">?:</span> <span class="dt">number</span> }</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Client-side <code>tokenBudget</code></th>
+<th>Server-side <code>task_budget</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Triggered by</td>
+<td>User typing <code>+500k</code></td>
+<td>Same, but passed to API</td>
+</tr>
+<tr>
+<td>Who decides</td>
+<td>Query loop (<code>checkTokenBudget</code>)</td>
+<td>The model itself</td>
+</tr>
+<tr>
+<td>Model awareness</td>
+<td>None — model does not see it</td>
+<td>Full — model sees total + remaining</td>
+</tr>
+<tr>
+<td>Mechanism</td>
+<td>Auto-continue with nudge message</td>
+<td>Model self-paces response length</td>
+</tr>
+<tr>
+<td>Compaction handling</td>
+<td>N/A</td>
+<td><code>remaining</code> decremented after compact</td>
+</tr>
+</tbody>
+</table>
+<p>They work in concert. The client-side system decides <em>whether</em>
+to continue the loop. The server-side system tells the model <em>how
+much budget is left</em> so it can allocate its response
+accordingly.</p>
+<h3 id="tracking-remaining-across-compaction">Tracking remaining Across
+Compaction</h3>
+<p>Compaction (Chapter 6) replaces the full conversation history with a
+summary. After compaction, the server can no longer see the original
+messages — it would under-count the tokens spent because the summary is
+shorter than the original. The <code>remaining</code> field bridges this
+gap:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">// query.ts:291 (loop-local variable)</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> taskBudgetRemaining<span class="op">:</span> <span class="dt">number</span> <span class="op">|</span> <span class="dt">undefined</span> <span class="op">=</span> <span class="kw">undefined</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="co">// query.ts:508-515 (after compaction)</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (params<span class="op">.</span><span class="at">taskBudget</span>) {</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> preCompactContext <span class="op">=</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">finalContextTokensFromLastResponse</span>(messagesForQuery)</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>  taskBudgetRemaining <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">max</span>(</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>    <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>    (taskBudgetRemaining <span class="op">??</span> params<span class="op">.</span><span class="at">taskBudget</span><span class="op">.</span><span class="at">total</span>) <span class="op">-</span> preCompactContext<span class="op">,</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The <code>finalContextTokensFromLastResponse</code> function
+(<code>utils/tokens.ts:79-112</code>) extracts the last response's total
+context size. When the API uses server-side tool loops (the
+<code>iterations</code> array), it returns the last iteration's token
+count — the actual final context window. This is the number that gets
+subtracted from the remaining budget.</p>
+<p>The <code>Math.max(0, ...)</code> prevents negative remaining values.
+If the pre-compact context exceeds the remaining budget (the user
+already overspent), remaining clamps to zero rather than going
+negative.</p>
+<hr />
+<h2 id="cache-economics--why-tokens-are-not-created-equal">Cache
+Economics — Why Tokens Are Not Created Equal</h2>
+<p>Not all tokens cost the same. The Anthropic API distinguishes five
+token categories in its usage reporting, and understanding their pricing
+is essential for building an economical agent.</p>
+<h3 id="the-usage-shape">The Usage Shape</h3>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/api/emptyUsage.ts:8-22</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> EMPTY_USAGE<span class="op">:</span> <span class="bu">Readonly</span><span class="op">&lt;</span>NonNullableUsage<span class="op">&gt;</span> <span class="op">=</span> {</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  input_tokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  cache_creation_input_tokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  cache_read_input_tokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  output_tokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>  server_tool_use<span class="op">:</span> {</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    web_search_requests<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    web_fetch_requests<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  service_tier<span class="op">:</span> <span class="st">&#39;standard&#39;</span><span class="op">,</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  cache_creation<span class="op">:</span> {</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    ephemeral_1h_input_tokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    ephemeral_5m_input_tokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>  inference_geo<span class="op">:</span> <span class="st">&#39;&#39;</span><span class="op">,</span></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>  iterations<span class="op">:</span> []<span class="op">,</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  speed<span class="op">:</span> <span class="st">&#39;standard&#39;</span><span class="op">,</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Five categories that affect cost:</p>
+<ol type="1">
+<li><strong><code>input_tokens</code></strong> — Fresh input tokens, not
+cached. Charged at the base input rate.</li>
+<li><strong><code>cache_creation_input_tokens</code></strong> — Tokens
+written into the prompt cache. Charged at 1.25x the input rate (you pay
+a premium to populate the cache).</li>
+<li><strong><code>cache_read_input_tokens</code></strong> — Tokens read
+from the prompt cache. Charged at 0.1x the input rate (10x cheaper than
+fresh input).</li>
+<li><strong><code>output_tokens</code></strong> — Model-generated
+tokens. Always the most expensive per-token.</li>
+<li><strong><code>cache_creation.ephemeral_*</code></strong> —
+Fine-grained breakdown by TTL (5-minute vs 1-hour).</li>
+</ol>
+<h3 id="pricing-by-model-tier">Pricing by Model Tier</h3>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/modelCost.ts:36-88</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Sonnet: $3 input / $15 output per Mtok</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> COST_TIER_3_15 <span class="op">=</span> {</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  inputTokens<span class="op">:</span> <span class="dv">3</span><span class="op">,</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  outputTokens<span class="op">:</span> <span class="dv">15</span><span class="op">,</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  promptCacheWriteTokens<span class="op">:</span> <span class="fl">3.75</span><span class="op">,</span>   <span class="co">// 1.25x</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>  promptCacheReadTokens<span class="op">:</span> <span class="fl">0.3</span><span class="op">,</span>     <span class="co">// 0.1x</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>} <span class="im">as</span> <span class="kw">const</span> satisfies ModelCosts</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a><span class="co">// Opus 4.6 standard: $5 input / $25 output per Mtok</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> COST_TIER_5_25 <span class="op">=</span> {</span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>  inputTokens<span class="op">:</span> <span class="dv">5</span><span class="op">,</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>  outputTokens<span class="op">:</span> <span class="dv">25</span><span class="op">,</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>  promptCacheWriteTokens<span class="op">:</span> <span class="fl">6.25</span><span class="op">,</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>  promptCacheReadTokens<span class="op">:</span> <span class="fl">0.5</span><span class="op">,</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>} <span class="im">as</span> <span class="kw">const</span> satisfies ModelCosts</span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a><span class="co">// Opus 4.6 fast: $30 input / $150 output per Mtok</span></span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> COST_TIER_30_150 <span class="op">=</span> {</span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>  inputTokens<span class="op">:</span> <span class="dv">30</span><span class="op">,</span></span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a>  outputTokens<span class="op">:</span> <span class="dv">150</span><span class="op">,</span></span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a>  promptCacheWriteTokens<span class="op">:</span> <span class="fl">37.5</span><span class="op">,</span></span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a>  promptCacheReadTokens<span class="op">:</span> <span class="dv">3</span><span class="op">,</span></span>
+<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a>} <span class="im">as</span> <span class="kw">const</span> satisfies ModelCosts</span></code></pre></div>
+<h3 id="the-cache-multiplier-effect">The Cache Multiplier Effect</h3>
+<p>For a typical Claude Code session with 200K context:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Sonnet ($3/Mtok)</th>
+<th>Opus 4.6 ($5/Mtok)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>200K fresh input</td>
+<td>$0.60</td>
+<td>$1.00</td>
+</tr>
+<tr>
+<td>200K cache read</td>
+<td>$0.06</td>
+<td>$0.10</td>
+</tr>
+<tr>
+<td><strong>Savings</strong></td>
+<td><strong>90%</strong></td>
+<td><strong>90%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Cache reads are 10x cheaper than fresh input across every model tier.
+The system prompt (~5K tokens), tool definitions (~15K tokens), and
+early conversation history (~30K tokens) are largely identical across
+turns. In a well-warmed session, 80-90% of input tokens are cache reads.
+This is why Chapter 5 dedicates so much engineering to cache key
+stability — a single cache bust on a 50K-token prefix costs 10x what a
+cache hit would cost.</p>
+<h3 id="cost-calculation">Cost Calculation</h3>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/modelCost.ts:131-142</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">tokensToUSDCost</span>(</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  modelCosts<span class="op">:</span> ModelCosts<span class="op">,</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  usage<span class="op">:</span> Usage<span class="op">,</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> (</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    (usage<span class="op">.</span><span class="at">input_tokens</span> <span class="op">/</span> <span class="dv">1_000_000</span>) <span class="op">*</span> modelCosts<span class="op">.</span><span class="at">inputTokens</span> <span class="op">+</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>    (usage<span class="op">.</span><span class="at">output_tokens</span> <span class="op">/</span> <span class="dv">1_000_000</span>) <span class="op">*</span> modelCosts<span class="op">.</span><span class="at">outputTokens</span> <span class="op">+</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    ((usage<span class="op">.</span><span class="at">cache_read_input_tokens</span> <span class="op">??</span> <span class="dv">0</span>) <span class="op">/</span> <span class="dv">1_000_000</span>) <span class="op">*</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>      modelCosts<span class="op">.</span><span class="at">promptCacheReadTokens</span> <span class="op">+</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>    ((usage<span class="op">.</span><span class="at">cache_creation_input_tokens</span> <span class="op">??</span> <span class="dv">0</span>) <span class="op">/</span> <span class="dv">1_000_000</span>) <span class="op">*</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>      modelCosts<span class="op">.</span><span class="at">promptCacheWriteTokens</span> <span class="op">+</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>    (usage<span class="op">.</span><span class="at">server_tool_use</span><span class="op">?.</span><span class="at">web_search_requests</span> <span class="op">??</span> <span class="dv">0</span>) <span class="op">*</span></span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>      modelCosts<span class="op">.</span><span class="at">webSearchRequests</span></span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Prices are in dollars per million tokens. The <code>?? 0</code>
+fallback on cache fields handles older API responses that may not
+include them.</p>
+<hr />
+<h2 id="streaming-usage-tracking--the-cumulative-protocol">Streaming
+Usage Tracking — The Cumulative Protocol</h2>
+<p>The Anthropic streaming API provides <strong>cumulative</strong>
+usage totals in each event, not deltas. This seems straightforward but
+creates a subtle trap.</p>
+<h3 id="the-overwrite-guard">The Overwrite Guard</h3>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/api/claude.ts:2914-2946</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">updateUsage</span>(</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  usage<span class="op">:</span> <span class="bu">Readonly</span><span class="op">&lt;</span>NonNullableUsage<span class="op">&gt;,</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  partUsage<span class="op">:</span> BetaMessageDeltaUsage <span class="op">|</span> <span class="dt">undefined</span><span class="op">,</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> NonNullableUsage {</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>partUsage) <span class="cf">return</span> { <span class="op">...</span>usage }</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    input_tokens<span class="op">:</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>      partUsage<span class="op">.</span><span class="at">input_tokens</span> <span class="op">!==</span> <span class="kw">null</span> <span class="op">&amp;&amp;</span> partUsage<span class="op">.</span><span class="at">input_tokens</span> <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">?</span> partUsage<span class="op">.</span><span class="at">input_tokens</span></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">:</span> usage<span class="op">.</span><span class="at">input_tokens</span><span class="op">,</span></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>    cache_creation_input_tokens<span class="op">:</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>      partUsage<span class="op">.</span><span class="at">cache_creation_input_tokens</span> <span class="op">!==</span> <span class="kw">null</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>      partUsage<span class="op">.</span><span class="at">cache_creation_input_tokens</span> <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">?</span> partUsage<span class="op">.</span><span class="at">cache_creation_input_tokens</span></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>        <span class="op">:</span> usage<span class="op">.</span><span class="at">cache_creation_input_tokens</span><span class="op">,</span></span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>    cache_read_input_tokens<span class="op">:</span></span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>      partUsage<span class="op">.</span><span class="at">cache_read_input_tokens</span> <span class="op">!==</span> <span class="kw">null</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a>      partUsage<span class="op">.</span><span class="at">cache_read_input_tokens</span> <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">?</span> partUsage<span class="op">.</span><span class="at">cache_read_input_tokens</span></span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">:</span> usage<span class="op">.</span><span class="at">cache_read_input_tokens</span><span class="op">,</span></span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a>    output_tokens<span class="op">:</span></span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a>      partUsage<span class="op">.</span><span class="at">output_tokens</span> <span class="op">??</span> usage<span class="op">.</span><span class="at">output_tokens</span><span class="op">,</span></span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... server_tool_use, etc.</span></span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The trap: <code>message_delta</code> events may include explicit
+<code>0</code> values for <code>cache_read_input_tokens</code>. A naive
+implementation would overwrite the real value (set in
+<code>message_start</code>) with zero. The guard
+<code>!== null &amp;&amp; &gt; 0</code> prevents this — it only accepts
+positive values, preserving the previous count otherwise.</p>
+<p>This is documented at <code>claude.ts:2914-2916</code>:</p>
+<blockquote>
+<p>Anthropic's streaming API provides CUMULATIVE usage totals, not
+deltas. Input-related tokens are typically set in message_start and
+remain constant. message_delta events may send explicit 0 values for
+these fields, which should not overwrite the values from
+message_start.</p>
+</blockquote>
+<p>Without this guard, the final usage would show
+<code>cache_read_input_tokens: 0</code>, making cost tracking incorrect
+and cache break detection impossible.</p>
+<h3 id="cross-turn-accumulation">Cross-Turn Accumulation</h3>
+<p>Within a single stream, usage is cumulative. Across turns, it must be
+summed:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/api/claude.ts:2993-3008</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">accumulateUsage</span>(</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  totalUsage<span class="op">:</span> <span class="bu">Readonly</span><span class="op">&lt;</span>NonNullableUsage<span class="op">&gt;,</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  messageUsage<span class="op">:</span> <span class="bu">Readonly</span><span class="op">&lt;</span>NonNullableUsage<span class="op">&gt;,</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> NonNullableUsage {</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    input_tokens<span class="op">:</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>      totalUsage<span class="op">.</span><span class="at">input_tokens</span> <span class="op">+</span> messageUsage<span class="op">.</span><span class="at">input_tokens</span><span class="op">,</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    cache_creation_input_tokens<span class="op">:</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>      totalUsage<span class="op">.</span><span class="at">cache_creation_input_tokens</span> <span class="op">+</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>      messageUsage<span class="op">.</span><span class="at">cache_creation_input_tokens</span><span class="op">,</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    cache_read_input_tokens<span class="op">:</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>      totalUsage<span class="op">.</span><span class="at">cache_read_input_tokens</span> <span class="op">+</span></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>      messageUsage<span class="op">.</span><span class="at">cache_read_input_tokens</span><span class="op">,</span></span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>    output_tokens<span class="op">:</span></span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a>      totalUsage<span class="op">.</span><span class="at">output_tokens</span> <span class="op">+</span> messageUsage<span class="op">.</span><span class="at">output_tokens</span><span class="op">,</span></span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a>    server_tool_use<span class="op">:</span> {</span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>      web_search_requests<span class="op">:</span></span>
+<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>        totalUsage<span class="op">.</span><span class="at">server_tool_use</span><span class="op">.</span><span class="at">web_search_requests</span> <span class="op">+</span></span>
+<span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a>        messageUsage<span class="op">.</span><span class="at">server_tool_use</span><span class="op">.</span><span class="at">web_search_requests</span><span class="op">,</span></span>
+<span id="cb25-21"><a href="#cb25-21" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb25-22"><a href="#cb25-22" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb25-23"><a href="#cb25-23" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb25-24"><a href="#cb25-24" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Every field is a simple sum. The session-level total grows
+monotonically. This feeds both the cost tracker and the
+<code>/cost</code> command.</p>
+<hr />
+<h2 id="session-cost-tracking">Session Cost Tracking</h2>
+<h3 id="per-model-usage-accumulation">Per-Model Usage Accumulation</h3>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cost-tracker.ts:250-276</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">addToTotalModelUsage</span>(</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  cost<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  usage<span class="op">:</span> Usage<span class="op">,</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  model<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> ModelUsage {</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> modelUsage <span class="op">=</span> <span class="fu">getUsageForModel</span>(model) <span class="op">??</span> {</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    inputTokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>    outputTokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>    cacheReadInputTokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>    cacheCreationInputTokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>    webSearchRequests<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>    costUSD<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>    contextWindow<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>    maxOutputTokens<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>  modelUsage<span class="op">.</span><span class="at">inputTokens</span> <span class="op">+=</span> usage<span class="op">.</span><span class="at">input_tokens</span></span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>  modelUsage<span class="op">.</span><span class="at">outputTokens</span> <span class="op">+=</span> usage<span class="op">.</span><span class="at">output_tokens</span></span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a>  modelUsage<span class="op">.</span><span class="at">cacheReadInputTokens</span> <span class="op">+=</span> usage<span class="op">.</span><span class="at">cache_read_input_tokens</span> <span class="op">??</span> <span class="dv">0</span></span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a>  modelUsage<span class="op">.</span><span class="at">cacheCreationInputTokens</span> <span class="op">+=</span></span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>    usage<span class="op">.</span><span class="at">cache_creation_input_tokens</span> <span class="op">??</span> <span class="dv">0</span></span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>  modelUsage<span class="op">.</span><span class="at">costUSD</span> <span class="op">+=</span> cost</span>
+<span id="cb26-23"><a href="#cb26-23" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> modelUsage</span>
+<span id="cb26-24"><a href="#cb26-24" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Costs are tracked per-model because a single session may use multiple
+models — Opus for the main loop, Sonnet for subagents, Haiku for
+classifiers. The <code>/cost</code> command shows a per-model breakdown
+so users can see where their spend is going.</p>
+<h3 id="opentelemetry-integration">OpenTelemetry Integration</h3>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cost-tracker.ts:291-301</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="fu">getCostCounter</span>()<span class="op">?.</span><span class="fu">add</span>(cost<span class="op">,</span> attrs)</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="fu">getTokenCounter</span>()<span class="op">?.</span><span class="fu">add</span>(usage<span class="op">.</span><span class="at">input_tokens</span><span class="op">,</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  { <span class="op">...</span>attrs<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;input&#39;</span> })</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="fu">getTokenCounter</span>()<span class="op">?.</span><span class="fu">add</span>(usage<span class="op">.</span><span class="at">output_tokens</span><span class="op">,</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  { <span class="op">...</span>attrs<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;output&#39;</span> })</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a><span class="fu">getTokenCounter</span>()<span class="op">?.</span><span class="fu">add</span>(usage<span class="op">.</span><span class="at">cache_read_input_tokens</span> <span class="op">??</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  { <span class="op">...</span>attrs<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;cacheRead&#39;</span> })</span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a><span class="fu">getTokenCounter</span>()<span class="op">?.</span><span class="fu">add</span>(usage<span class="op">.</span><span class="at">cache_creation_input_tokens</span> <span class="op">??</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>  { <span class="op">...</span>attrs<span class="op">,</span> type<span class="op">:</span> <span class="st">&#39;cacheCreation&#39;</span> })</span></code></pre></div>
+<p>Cost and token counters feed OpenTelemetry metrics for monitoring,
+alerting, and billing dashboards. The <code>?.</code> optional chaining
+handles the case where OTel is not configured (e.g., local development
+without a metrics backend).</p>
+<h3 id="advisor-sub-model-cost-tracking">Advisor (Sub-Model) Cost
+Tracking</h3>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cost-tracker.ts:303-321</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (<span class="kw">const</span> advisorUsage <span class="kw">of</span> <span class="fu">getAdvisorUsage</span>(usage)) {</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> advisorCost <span class="op">=</span> <span class="fu">calculateUSDCost</span>(</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    advisorUsage<span class="op">.</span><span class="at">model</span><span class="op">,</span> advisorUsage<span class="op">,</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>  totalCost <span class="op">+=</span> <span class="fu">addToTotalSessionCost</span>(</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>    advisorCost<span class="op">,</span> advisorUsage<span class="op">,</span> advisorUsage<span class="op">.</span><span class="at">model</span><span class="op">,</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>When the primary model delegates to an "advisor" sub-model (for tool
+search routing, thinking classifiers, etc.), the advisor's usage is
+nested in the response. The cost tracker extracts it, computes cost at
+the advisor's pricing tier, and adds it to the session total. This is
+recursive — <code>addToTotalSessionCost</code> handles nested
+advisors.</p>
+<h3 id="session-persistence">Session Persistence</h3>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cost-tracker.ts:143-175</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">saveCurrentSessionCosts</span>(</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>  fpsMetrics<span class="op">?:</span> FpsMetrics<span class="op">,</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">saveCurrentProjectConfig</span>(current <span class="kw">=&gt;</span> ({</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span>current<span class="op">,</span></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>    lastCost<span class="op">:</span> <span class="fu">getTotalCostUSD</span>()<span class="op">,</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>    lastAPIDuration<span class="op">:</span> <span class="fu">getTotalAPIDuration</span>()<span class="op">,</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>    lastModelUsage<span class="op">:</span> <span class="bu">Object</span><span class="op">.</span><span class="fu">fromEntries</span>(</span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>      <span class="bu">Object</span><span class="op">.</span><span class="fu">entries</span>(<span class="fu">getModelUsage</span>())<span class="op">.</span><span class="fu">map</span>(([model<span class="op">,</span> usage]) <span class="kw">=&gt;</span> [</span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>        model<span class="op">,</span></span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>        {</span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>          inputTokens<span class="op">:</span> usage<span class="op">.</span><span class="at">inputTokens</span><span class="op">,</span></span>
+<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a>          outputTokens<span class="op">:</span> usage<span class="op">.</span><span class="at">outputTokens</span><span class="op">,</span></span>
+<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a>          cacheReadInputTokens<span class="op">:</span> usage<span class="op">.</span><span class="at">cacheReadInputTokens</span><span class="op">,</span></span>
+<span id="cb29-16"><a href="#cb29-16" aria-hidden="true" tabindex="-1"></a>          cacheCreationInputTokens<span class="op">:</span> usage<span class="op">.</span><span class="at">cacheCreationInputTokens</span><span class="op">,</span></span>
+<span id="cb29-17"><a href="#cb29-17" aria-hidden="true" tabindex="-1"></a>          costUSD<span class="op">:</span> usage<span class="op">.</span><span class="at">costUSD</span><span class="op">,</span></span>
+<span id="cb29-18"><a href="#cb29-18" aria-hidden="true" tabindex="-1"></a>        }<span class="op">,</span></span>
+<span id="cb29-19"><a href="#cb29-19" aria-hidden="true" tabindex="-1"></a>      ])<span class="op">,</span></span>
+<span id="cb29-20"><a href="#cb29-20" aria-hidden="true" tabindex="-1"></a>    )<span class="op">,</span></span>
+<span id="cb29-21"><a href="#cb29-21" aria-hidden="true" tabindex="-1"></a>    lastSessionId<span class="op">:</span> <span class="fu">getSessionId</span>()<span class="op">,</span></span>
+<span id="cb29-22"><a href="#cb29-22" aria-hidden="true" tabindex="-1"></a>  }))</span>
+<span id="cb29-23"><a href="#cb29-23" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Costs persist to
+<code>.claude/projects/&lt;path&gt;/config.json</code>. When a session
+resumes (same session ID), the <code>/cost</code> command can show
+cumulative spend across restarts. This is important for long-running
+sessions that get interrupted — the user should see total cost, not just
+"cost since last restart."</p>
+<hr />
+<h2 id="auto-compaction-thresholds">Auto-Compaction Thresholds</h2>
+<p>The token estimation system exists primarily to feed the
+auto-compaction engine from Chapter 6. Here is how the thresholds are
+computed.</p>
+<h3 id="buffer-constants">Buffer Constants</h3>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/compact/autoCompact.ts:62-65</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> AUTOCOMPACT_BUFFER_TOKENS <span class="op">=</span> <span class="dv">13_000</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> WARNING_THRESHOLD_BUFFER_TOKENS <span class="op">=</span> <span class="dv">20_000</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> ERROR_THRESHOLD_BUFFER_TOKENS <span class="op">=</span> <span class="dv">20_000</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> MANUAL_COMPACT_BUFFER_TOKENS <span class="op">=</span> <span class="dv">3_000</span></span></code></pre></div>
+<h3 id="threshold-calculation">Threshold Calculation</h3>
+<p>For a 200K context window:</p>
+<pre><code>Context Window:     200,000 tokens
+- Output Reserved:   20,000  (compact summary p99.99 = 17,387 tokens)
+= Effective Window: 180,000
+                         |
+Warning Threshold:  147,000  (effective - 20K - 13K)     ~73.5%
+                         |
+Auto-Compact:       167,000  (effective - 13K)            ~83.5%
+                         |
+Blocking Limit:     177,000  (effective - 3K)             ~88.5%</code></pre>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/compact/autoCompact.ts:33-48</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getEffectiveContextWindowSize</span>(model<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> reservedTokensForSummary <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">min</span>(</span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">getMaxOutputTokensForModel</span>(model)<span class="op">,</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>    MAX_OUTPUT_TOKENS_FOR_SUMMARY<span class="op">,</span>   <span class="co">// 20,000</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> contextWindow <span class="op">=</span> <span class="fu">getContextWindowForModel</span>(model<span class="op">,</span> <span class="fu">getSdkBetas</span>())</span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> contextWindow <span class="op">-</span> reservedTokensForSummary</span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a><span class="co">// services/compact/autoCompact.ts:72-91</span></span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">getAutoCompactThreshold</span>(model<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">number</span> {</span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> effectiveContextWindow <span class="op">=</span> <span class="fu">getEffectiveContextWindowSize</span>(model)</span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> effectiveContextWindow <span class="op">-</span> AUTOCOMPACT_BUFFER_TOKENS</span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The 20K output reservation covers the compaction summary itself. The
+p99.99 of summary output is 17,387 tokens — reserving 20K leaves
+headroom for exceptionally verbose summaries. The 13K auto-compact
+buffer is tuned so compaction fires before the blocking limit but not so
+aggressively that every large tool result triggers it.</p>
+<h3 id="the-token-warning-state-machine">The Token Warning State
+Machine</h3>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/compact/autoCompact.ts:93-145</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">calculateTokenWarningState</span>(</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>  tokenUsage<span class="op">:</span> <span class="dt">number</span><span class="op">,</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>  model<span class="op">:</span> <span class="dt">string</span><span class="op">,</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>)<span class="op">:</span> {</span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>  percentLeft<span class="op">:</span> <span class="dt">number</span></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>  isAboveWarningThreshold<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>  isAboveErrorThreshold<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>  isAboveAutoCompactThreshold<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>  isAtBlockingLimit<span class="op">:</span> <span class="dt">boolean</span></span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This feeds the status bar indicator that shows context fullness. Four
+zones:</p>
+<table>
+<thead>
+<tr>
+<th>Zone</th>
+<th>Threshold</th>
+<th>User Sees</th>
+<th>System Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Normal</td>
+<td>&lt; 73.5%</td>
+<td>Green indicator</td>
+<td>None</td>
+</tr>
+<tr>
+<td>Warning</td>
+<td>73.5% - 83.5%</td>
+<td>Yellow indicator</td>
+<td>None</td>
+</tr>
+<tr>
+<td>Error</td>
+<td>83.5% - 88.5%</td>
+<td>Red indicator</td>
+<td>Auto-compact fires</td>
+</tr>
+<tr>
+<td>Blocking</td>
+<td>&gt; 88.5%</td>
+<td>Red + "Context full"</td>
+<td>API calls blocked</td>
+</tr>
+</tbody>
+</table>
+<p>The blocking limit exists as a hard stop. If auto-compact fails (and
+it can — see the circuit breaker below), the system must prevent sending
+a request that would 413. Better to block the user with a clear message
+than to waste an API call that will definitely fail.</p>
+<h3 id="circuit-breaker-for-consecutive-failures">Circuit Breaker for
+Consecutive Failures</h3>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/compact/autoCompact.ts:68-70</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="co">// BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="co">// (up to 3,272) in a single session, wasting ~250K API calls/day.</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES <span class="op">=</span> <span class="dv">3</span></span></code></pre></div>
+<p>Before this circuit breaker, sessions with irrecoverably long context
+— typically caused by a single massive tool result that exceeded the
+compaction window — would retry compaction on every turn, failing every
+time. The worst offender retried 3,272 times in a single session. Across
+all affected sessions, this wasted approximately 250,000 API calls per
+day globally.</p>
+<p>The fix is a 3-strike circuit breaker. After 3 consecutive compaction
+failures, auto-compact disables itself for the session. The user sees
+the blocking limit message and must manually run <code>/compact</code>
+or <code>/clear</code>.</p>
+<hr />
+<h2 id="the-full-architecture">The Full Architecture</h2>
+<p>Here is how all the token management components connect in a single
+query turn:</p>
+<pre><code>User Prompt: &quot;refactor this +500k&quot;
+     |
+     +-- parseTokenBudget(&quot;+500k&quot;) --&gt; 500,000
+     |
+     v
+QueryEngine.submitMessage()
+     |
+     +-- query({ ..., taskBudget: { total: 500000 } })
+              |
+              +-- while(true) loop
+              |     |
+              |     +-- tokenCountWithEstimation(messages)
+              |     |     +-- Find last assistant with usage -----+
+              |     |     +-- Walk back for parallel tool splits   |
+              |     |     +-- getTokenCountFromUsage(usage) ----- |-- exact
+              |     |     +-- + roughEstimation(msgs[i+1:])       |-- delta
+              |     |                                             |
+              |     +-- calculateTokenWarningState()              |
+              |     |     +-- &gt; autoCompactThreshold? --&gt; compact  |
+              |     |     +-- &gt; blockingLimit? --&gt; return          |
+              |     |                                             |
+              |     +-- deps.callModel({                          |
+              |     |     maxOutputTokens: 8_000 (capped),        |
+              |     |     taskBudget: { total, remaining },       |
+              |     |   })                                        |
+              |     |     |                                       |
+              |     |     +-- Stream: updateUsage(cumulative) ----+
+              |     |     +-- message_start: set input, cache tokens
+              |     |     +-- message_delta: increment output_tokens
+              |     |
+              |     +-- [max_output_tokens hit?]
+              |     |     +-- Phase 1: escalate 8K --&gt; 64K, retry
+              |     |     +-- Phase 2: inject &quot;resume&quot;, up to 3x
+              |     |     +-- Phase 3: surface error
+              |     |
+              |     +-- Tool execution --&gt; collect results
+              |     |
+              |     +-- checkTokenBudget(tracker, budget=500k)
+              |     |     +-- under 90% + not diminishing --&gt; continue
+              |     |     +-- diminishing (3x &lt; 500 tokens) --&gt; stop
+              |     |     +-- at/above 90% --&gt; stop
+              |     |
+              |     +-- state = { messages: [...prev, ...asst, ...tools] }
+              |
+              +-- addToTotalSessionCost(cost, usage, model)
+                    +-- tokensToUSDCost(pricing, usage)
+                    |     +-- input   x $X/Mtok
+                    |     +-- output  x $Y/Mtok
+                    |     +-- cache_read  x $0.1X/Mtok   (10x cheaper)
+                    |     +-- cache_write x $1.25X/Mtok
+                    +-- OTel: costCounter.add(), tokenCounter.add()
+                    +-- saveCurrentSessionCosts() --&gt; project config</code></pre>
+<hr />
+<h2 id="design-lessons">Design Lessons</h2>
+<p>Building the token estimation and budget system for a production CLI
+agent, the Claude Code approach teaches seven principles:</p>
+<p><strong>1. Layer your estimation with graceful degradation.</strong>
+API count (exact) falls back to API count + rough delta (common case),
+which falls back to pure rough estimation (always available). The system
+never fails to produce a number. Every function that could fail returns
+<code>null</code>, not an exception. Every caller handles
+<code>null</code> by falling back one layer.</p>
+<p><strong>2. Overestimate conservatively.</strong> Images at 2,000
+tokens instead of computing dimensions. JSON at 2 bytes/token instead of
+4. The philosophy: overestimating triggers protective action
+(compaction) early, while underestimating causes context overflow
+(unrecoverable 413 error). When in doubt, err toward safety.</p>
+<p><strong>3. Optimize slot reservation for the common case.</strong>
+The 8K default with escalation to 64K saves 4-8x GPU slot capacity while
+adding only one retry per 100 requests. Measure your actual output
+distribution (p99 = 4,911 tokens for Claude Code), then set the default
+below p99 and handle the tail with a retry.</p>
+<p><strong>4. Separate client-side control from server-side
+awareness.</strong> The client-side budget continuation
+(<code>+500k</code>) decides <em>whether</em> to keep the loop running.
+The server-side <code>task_budget</code> tells the model <em>how much
+budget remains</em> so it can self-pace. They are complementary, not
+redundant.</p>
+<p><strong>5. Guard against the cumulative streaming protocol.</strong>
+Streaming usage is cumulative, not delta. But delta events can send
+explicit zeros for fields set in <code>message_start</code>. The
+<code>!== null &amp;&amp; &gt; 0</code> guard before overwriting is not
+paranoia — it prevents zeroing out your cache hit metrics, breaking both
+cost tracking and cache break detection.</p>
+<p><strong>6. Circuit-break runaway loops.</strong> Auto-compaction with
+a 3-failure limit (previously: 3,272 consecutive failures, 250K wasted
+API calls/day). Diminishing returns detection after 3 rounds with
+&lt;500 tokens each. Both prevent degenerate infinite loops that burn
+budget without progress.</p>
+<p><strong>7. Track cost per model, persist across restarts.</strong> A
+session may use Opus, Sonnet, and Haiku simultaneously. Per-model cost
+tracking with session persistence lets users see exactly where their
+spend goes and maintain continuity across session restarts.</p>
+<p>In Chapter 8, we turn from tokens and budgets to the tool system
+itself — the 52-tool registry, the <code>Tool</code> interface,
+feature-gated conditional imports, and the architecture that lets Claude
+Code's capabilities grow without growing its bundle size.</p>
+</div>
+</body>
+</html>

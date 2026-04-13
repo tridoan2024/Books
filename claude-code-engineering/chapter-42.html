@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title> Chapter 42: Startup Performance Engineering — Building AI CLI Agent: Engineering of Claude Code</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --code-bg: #161b22;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.7;
+    background: var(--bg-primary); color: var(--text-primary);
+  }
+  .main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.5em; color: var(--text-primary); }
+  h2 { font-size: 1.4em; margin-top: 2em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.15em; color: var(--text-primary); }
+  h4 { font-size: 1em; color: var(--text-secondary); }
+  p { margin: 1em 0; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.88em; font-family: 'SF Mono', Menlo, monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  blockquote { border-left: 3px solid var(--accent-blue); margin: 1em 0; padding: 0.5em 1em; background: var(--bg-secondary); border-radius: 0 6px 6px 0; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.6em 1em; text-align: left; }
+  th { background: var(--bg-secondary); font-weight: 600; }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  strong { color: var(--text-primary); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="main">
+<h1 id="chapter-42-startup-performance-engineering">Chapter 42: Startup
+Performance Engineering</h1>
+<p>Every millisecond of startup time is a millisecond the engineer
+spends staring at a cursor instead of working. A CLI agent that takes
+three seconds to reach its first prompt will annoy users. One that takes
+five seconds will lose them to a competitor. One that takes ten seconds
+is an academic demo, not a production tool.</p>
+<p>The startup performance challenge in a CLI agent like Claude Code is
+uniquely difficult. Before the agent can accept a single keystroke, it
+must load configuration from eight sources, authenticate with an API
+provider, connect to MCP servers, initialize a feature flag system, load
+project-level settings, scan for skills and rules, set up a session
+store, and build a context manager. Each of these operations involves
+file I/O, network calls, or both. Doing them sequentially produces a
+startup time measured in seconds. Doing them in parallel, with lazy
+initialization for anything not on the critical path, produces a startup
+time measured in hundreds of milliseconds.</p>
+<p>This chapter covers the engineering techniques that make fast startup
+possible: checkpoint-based profiling to identify what is slow, parallel
+prefetch to overlap I/O-bound initialization, lazy imports to defer
+unused code, fast-path exits for simple commands, FPS tracking for the
+TUI render loop, and heap dump services for diagnosing memory issues in
+long-running sessions. These are not theoretical optimizations. They are
+the specific patterns extracted from a production CLI agent codebase,
+battle-tested across tens of thousands of daily sessions.</p>
+<p>As discussed in Chapter 2, the bootstrap sequence establishes the
+initialization pipeline. This chapter goes deeper into the performance
+engineering that makes that pipeline fast enough to feel instant.</p>
+<hr />
+<h2 id="421-checkpoint-based-startup-profiling">42.1 Checkpoint-Based
+Startup Profiling</h2>
+<p>You cannot optimize what you cannot measure. The first step in
+startup performance engineering is instrumenting the initialization path
+with fine-grained timing checkpoints.</p>
+<h3 id="the-profiler-design">The Profiler Design</h3>
+<p>A startup profiler needs three properties: zero allocation overhead
+when disabled, nanosecond-resolution timing, and structured output that
+can be consumed by automated tooling. The implementation uses the
+monotonic clock (<code>Instant::now()</code> in Rust,
+<code>performance.now()</code> in TypeScript) rather than wall-clock
+time to avoid NTP jumps corrupting measurements.</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// utils/startupProfiler.ts</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> StartupCheckpoint {</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>     <span class="co">// performance.now() in ms</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  delta<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>         <span class="co">// ms since previous checkpoint</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  cumulative<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>    <span class="co">// ms since profiler start</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  metadata<span class="op">?:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> StartupProfiler {</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> checkpoints<span class="op">:</span> StartupCheckpoint[] <span class="op">=</span> []<span class="op">;</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> startTime<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> lastCheckpoint<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> enabled<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">constructor</span>() {</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">enabled</span> <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">CLAUDE_DEBUG</span> <span class="op">!==</span> <span class="kw">undefined</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>                <span class="op">||</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">STARTUP_PROFILE</span> <span class="op">!==</span> <span class="kw">undefined</span><span class="op">;</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">startTime</span> <span class="op">=</span> <span class="bu">performance</span><span class="op">.</span><span class="fu">now</span>()<span class="op">;</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">lastCheckpoint</span> <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">startTime</span><span class="op">;</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>  <span class="fu">checkpoint</span>(name<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> metadata<span class="op">?:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;</span>)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="kw">this</span><span class="op">.</span><span class="at">enabled</span>) <span class="cf">return</span><span class="op">;</span>  <span class="co">// Zero overhead when disabled</span></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> now <span class="op">=</span> <span class="bu">performance</span><span class="op">.</span><span class="fu">now</span>()<span class="op">;</span></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">checkpoints</span><span class="op">.</span><span class="fu">push</span>({</span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>      name<span class="op">,</span></span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>      timestamp<span class="op">:</span> now<span class="op">,</span></span>
+<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>      delta<span class="op">:</span> now <span class="op">-</span> <span class="kw">this</span><span class="op">.</span><span class="at">lastCheckpoint</span><span class="op">,</span></span>
+<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>      cumulative<span class="op">:</span> now <span class="op">-</span> <span class="kw">this</span><span class="op">.</span><span class="at">startTime</span><span class="op">,</span></span>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>      metadata<span class="op">,</span></span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>    <span class="kw">this</span><span class="op">.</span><span class="at">lastCheckpoint</span> <span class="op">=</span> now<span class="op">;</span></span>
+<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>  <span class="fu">report</span>()<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="kw">this</span><span class="op">.</span><span class="at">enabled</span> <span class="op">||</span> <span class="kw">this</span><span class="op">.</span><span class="at">checkpoints</span><span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="st">&#39;&#39;</span><span class="op">;</span></span>
+<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> lines <span class="op">=</span> [<span class="st">&#39;Startup Profile:&#39;</span>]<span class="op">;</span></span>
+<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (<span class="kw">const</span> cp <span class="kw">of</span> <span class="kw">this</span><span class="op">.</span><span class="at">checkpoints</span>) {</span>
+<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> bar <span class="op">=</span> <span class="st">&#39;█&#39;</span><span class="op">.</span><span class="fu">repeat</span>(<span class="bu">Math</span><span class="op">.</span><span class="fu">min</span>(<span class="dv">50</span><span class="op">,</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">round</span>(cp<span class="op">.</span><span class="at">delta</span> <span class="op">/</span> <span class="dv">2</span>)))<span class="op">;</span></span>
+<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>      lines<span class="op">.</span><span class="fu">push</span>(</span>
+<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`  </span><span class="sc">${</span>cp<span class="op">.</span><span class="at">name</span><span class="op">.</span><span class="fu">padEnd</span>(<span class="dv">30</span>)<span class="sc">}</span><span class="vs"> </span><span class="sc">${</span>cp<span class="op">.</span><span class="at">delta</span><span class="op">.</span><span class="fu">toFixed</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">padStart</span>(<span class="dv">8</span>)<span class="sc">}</span><span class="vs">ms `</span> <span class="op">+</span></span>
+<span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`(</span><span class="sc">${</span>cp<span class="op">.</span><span class="at">cumulative</span><span class="op">.</span><span class="fu">toFixed</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">padStart</span>(<span class="dv">8</span>)<span class="sc">}</span><span class="vs">ms) </span><span class="sc">${</span>bar<span class="sc">}</span><span class="vs">`</span></span>
+<span id="cb1-46"><a href="#cb1-46" aria-hidden="true" tabindex="-1"></a>      )<span class="op">;</span></span>
+<span id="cb1-47"><a href="#cb1-47" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb1-48"><a href="#cb1-48" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> total <span class="op">=</span> <span class="kw">this</span><span class="op">.</span><span class="at">checkpoints</span>[<span class="kw">this</span><span class="op">.</span><span class="at">checkpoints</span><span class="op">.</span><span class="at">length</span> <span class="op">-</span> <span class="dv">1</span>]<span class="op">?.</span><span class="at">cumulative</span> <span class="op">??</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb1-49"><a href="#cb1-49" aria-hidden="true" tabindex="-1"></a>    lines<span class="op">.</span><span class="fu">push</span>(<span class="vs">`  </span><span class="sc">${</span><span class="st">&#39;TOTAL&#39;</span><span class="op">.</span><span class="fu">padEnd</span>(<span class="dv">30</span>)<span class="sc">}</span><span class="vs"> </span><span class="sc">${</span>total<span class="op">.</span><span class="fu">toFixed</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">padStart</span>(<span class="dv">8</span>)<span class="sc">}</span><span class="vs">ms`</span>)<span class="op">;</span></span>
+<span id="cb1-50"><a href="#cb1-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> lines<span class="op">.</span><span class="fu">join</span>(<span class="st">&#39;</span><span class="sc">\n</span><span class="st">&#39;</span>)<span class="op">;</span></span>
+<span id="cb1-51"><a href="#cb1-51" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb1-52"><a href="#cb1-52" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The key design decision is the <code>enabled</code> check at the top
+of <code>checkpoint()</code>. When profiling is off — which is the
+default for all production users — the function returns immediately
+without allocating a checkpoint object. This means the profiler can stay
+in the hot path permanently, ready to activate with an environment
+variable, without adding measurable overhead to normal startup.</p>
+<p>The Rust equivalent in the rcode codebase uses
+<code>std::time::Instant</code> with the same pattern:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// main.rs — checkpoint-based timing in the startup sequence</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span><span class="pp">tokio::</span>main<span class="at">]</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> main() <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> t_total <span class="op">=</span> <span class="pp">std::time::Instant::</span>now()<span class="op">;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> cli <span class="op">=</span> <span class="pp">Cli::</span>parse()<span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... directory change, logging init ...</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ── Config loading ─────────────────────────────────────────</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> t_config <span class="op">=</span> <span class="pp">std::time::Instant::</span>now()<span class="op">;</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> cfg <span class="op">=</span> <span class="pp">config::Settings::</span>load()</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>context(<span class="st">&quot;failed to load configuration&quot;</span>)<span class="op">?;</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> config_ms <span class="op">=</span> t_config<span class="op">.</span>elapsed()<span class="op">.</span>as_millis()<span class="op">;</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ── LLM client ─────────────────────────────────────────────</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> t_llm <span class="op">=</span> <span class="pp">std::time::Instant::</span>now()<span class="op">;</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> llm_client <span class="op">=</span> <span class="pp">llm::Client::</span>new(<span class="op">&amp;</span>cfg<span class="op">,</span> <span class="op">&amp;</span>effective_model)</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>context(<span class="st">&quot;failed to create LLM client&quot;</span>)<span class="op">?;</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> llm_ms <span class="op">=</span> t_llm<span class="op">.</span>elapsed()<span class="op">.</span>as_millis()<span class="op">;</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ── Tool registry ──────────────────────────────────────────</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> t_tools <span class="op">=</span> <span class="pp">std::time::Instant::</span>now()<span class="op">;</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> tool_registry <span class="op">=</span> <span class="pp">tools::Registry::</span>new()<span class="op">;</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> tools_ms <span class="op">=</span> t_tools<span class="op">.</span>elapsed()<span class="op">.</span>as_millis()<span class="op">;</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... remaining initialization ...</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Log startup summary</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> total_ms <span class="op">=</span> t_total<span class="op">.</span>elapsed()<span class="op">.</span>as_millis()<span class="op">;</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>    <span class="pp">tracing::info!</span>(</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>        startup_ms <span class="op">=</span> total_ms<span class="op">,</span></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>        config_ms<span class="op">,</span></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>        llm_ms<span class="op">,</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>        tools_ms<span class="op">,</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;rcode started — model={}, effort={}, max_turns={}&quot;</span><span class="op">,</span></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>        effective_model<span class="op">,</span> cli<span class="op">.</span>effort<span class="op">,</span></span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a>        max_turns<span class="op">.</span>map_or(<span class="st">&quot;∞&quot;</span><span class="op">.</span>to_string()<span class="op">,</span> <span class="op">|</span>n<span class="op">|</span> n<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a>    )<span class="op">;</span></span>
+<span id="cb2-40"><a href="#cb2-40" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="interpreting-profiler-output">Interpreting Profiler Output</h3>
+<p>A typical startup profile for a well-optimized CLI agent looks like
+this:</p>
+<pre><code>Startup Profile:
+  cli_parse                       0.8ms (    0.8ms) 
+  logging_init                    2.1ms (    2.9ms) █
+  provider_detect                 1.2ms (    4.1ms) 
+  config_load                    12.4ms (   16.5ms) ██████
+  feature_flags                   0.3ms (   16.8ms) 
+  project_settings                8.7ms (   25.5ms) ████
+  session_store                  15.2ms (   40.7ms) ███████
+  llm_client                      3.1ms (   43.8ms) █
+  tool_registry                   0.4ms (   44.2ms) 
+  permission_engine               0.2ms (   44.4ms) 
+  context_manager                 5.3ms (   49.7ms) ██
+  mcp_connect                   142.8ms (  192.5ms) ███████████████████████████████████████████
+  memory_bridge                  47.3ms (  239.8ms) ███████████████████████
+  TOTAL                         239.8ms</code></pre>
+<p>The profile immediately reveals that MCP server connection dominates
+startup. The lesson: any I/O-bound operation that talks to an external
+process or network endpoint will dwarf everything else. Configuration
+loading and session store initialization are the next targets. CPU-bound
+work like parsing CLI arguments, building the tool registry, and
+initializing the permission engine is measured in microseconds — not
+worth optimizing until the I/O is fully parallel.</p>
+<h3 id="regression-detection">Regression Detection</h3>
+<p>The profiler output becomes a regression detection tool when piped
+into CI. A startup benchmark test runs the agent in headless mode with
+<code>--version</code> (fast path exit) and asserts that total time
+stays under a threshold:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="va">THRESHOLD_MS</span><span class="op">=</span>500</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="va">START</span><span class="op">=</span><span class="va">$(</span><span class="fu">date</span> +%s%N<span class="va">)</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="ex">rcode</span> <span class="at">--version</span> <span class="op">&gt;</span> /dev/null <span class="dv">2</span><span class="op">&gt;&amp;</span><span class="dv">1</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="va">END</span><span class="op">=</span><span class="va">$(</span><span class="fu">date</span> +%s%N<span class="va">)</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="va">ELAPSED_MS</span><span class="op">=</span><span class="va">$((</span> (<span class="va">END</span> <span class="op">-</span> <span class="va">START</span>) <span class="op">/</span> <span class="dv">1000000</span> <span class="va">))</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="st">&quot;</span><span class="va">${ELAPSED_MS}</span><span class="st">&quot;</span> <span class="ot">-gt</span> <span class="st">&quot;</span><span class="va">${THRESHOLD_MS}</span><span class="st">&quot;</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>  <span class="bu">printf</span> <span class="st">&quot;FAIL: startup took %dms (threshold: %dms)\n&quot;</span> <span class="st">&quot;</span><span class="va">${ELAPSED_MS}</span><span class="st">&quot;</span> <span class="st">&quot;</span><span class="va">${THRESHOLD_MS}</span><span class="st">&quot;</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>  <span class="bu">exit</span> 1</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="bu">printf</span> <span class="st">&quot;PASS: startup in %dms\n&quot;</span> <span class="st">&quot;</span><span class="va">${ELAPSED_MS}</span><span class="st">&quot;</span></span></code></pre></div>
+<p>This test catches the most common startup regression: someone adds a
+synchronous file read or network call to the initialization sequence
+without realizing it runs on every startup.</p>
+<hr />
+<h2 id="422-parallel-prefetch-overlapping-io-bound-initialization">42.2
+Parallel Prefetch: Overlapping I/O-Bound Initialization</h2>
+<p>The profiler told us that MCP server connection, memory bridge setup,
+and session store initialization are the three slowest operations. All
+three are I/O-bound. None depends on the others. The solution is
+obvious: run them in parallel.</p>
+<h3 id="the-prefetch-architecture">The Prefetch Architecture</h3>
+<p>The parallel prefetch pattern is straightforward in async Rust:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Conceptual parallel initialization</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> (session_result<span class="op">,</span> mem_result<span class="op">,</span> mcp_result) <span class="op">=</span> <span class="pp">tokio::join!</span>(</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="pp">session::Store::</span>init_async()<span class="op">,</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="pp">memory::MemoryBridge::</span>connect_with_timeout(<span class="pp">Duration::</span>from_secs(<span class="dv">3</span>))<span class="op">,</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="pp">mcp::Manager::</span>connect_all_servers(<span class="op">&amp;</span>mcp_configs)<span class="op">,</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>)<span class="op">;</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> session_store <span class="op">=</span> session_result<span class="op">.</span>context(<span class="st">&quot;session init failed&quot;</span>)<span class="op">?;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mem_bridge <span class="op">=</span> mem_result<span class="op">.</span>unwrap_or_else(<span class="op">|</span>_<span class="op">|</span> <span class="pp">memory::MemoryBridge::</span>disabled())<span class="op">;</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mcp_manager <span class="op">=</span> mcp_result<span class="op">.</span>ok()<span class="op">;</span></span></code></pre></div>
+<p>In practice, the production implementation is more nuanced because
+some initialization has hard dependencies (the LLM client needs the
+config to be loaded first) while other work is truly independent. The
+dependency graph looks like this:</p>
+<pre class="mermaid"><code>graph TD
+    CLI[CLI Parse] --&gt; CD[Change Directory]
+    CD --&gt; LOG[Init Logging]
+    CD --&gt; CFG[Load Config]
+    CFG --&gt; FF[Feature Flags]
+    CFG --&gt; PS[Project Settings]
+    CFG --&gt; LLM[LLM Client]
+    LOG --&gt; SS[Session Store]
+    PS --&gt; PE[Permission Engine]
+    PS --&gt; HM[Hook Manager]
+    CFG --&gt; MCP[MCP Connect]
+    CFG --&gt; MEM[Memory Bridge]
+    LLM --&gt; ENG[Build Engine]
+    PE --&gt; ENG
+    SS --&gt; ENG
+    MCP -.-&gt; ENG
+    MEM -.-&gt; ENG
+
+    style MCP fill:#f96,stroke:#333
+    style MEM fill:#f96,stroke:#333
+    style SS fill:#f96,stroke:#333</code></pre>
+<p>The dotted lines from MCP and Memory to Engine indicate optional
+dependencies — the engine can start without them. This is critical. If
+the memory bridge takes 3 seconds to time out because the MCP server is
+down, the agent still starts in under 300ms. The user gets their prompt
+immediately; memory results trickle in asynchronously.</p>
+<h3 id="four-key-prefetch-targets">Four Key Prefetch Targets</h3>
+<p><strong>1. MDM / Managed Settings Prefetch</strong></p>
+<p>Enterprise deployments use Mobile Device Management (MDM) to push
+configuration profiles to developer machines. Reading the MDM plist on
+macOS involves a system call to <code>defaults read</code>, which can
+take 50-200ms if the MDM daemon needs to refresh from the server. The
+prefetch fires this read as a background task at the very start of
+initialization, before config loading even begins:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Conceptual MDM prefetch</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> mdmPromise <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">platform</span> <span class="op">===</span> <span class="st">&#39;darwin&#39;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">?</span> <span class="fu">readMDMSettingsAsync</span>()  <span class="co">// spawns `defaults read` in background</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">:</span> <span class="bu">Promise</span><span class="op">.</span><span class="fu">resolve</span>(<span class="dt">null</span>)<span class="op">;</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="co">// ... config loading happens here, ~12ms ...</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> mdmSettings <span class="op">=</span> <span class="cf">await</span> mdmPromise<span class="op">;</span>  <span class="co">// Usually already resolved</span></span></code></pre></div>
+<p>By the time the config loader needs the MDM settings, the subprocess
+has been running for 12ms in the background. The <code>await</code>
+resolves instantly in the common case.</p>
+<p><strong>2. Keychain / Credential Prefetch</strong></p>
+<p>API key retrieval from the macOS Keychain involves a call to the
+<code>security</code> CLI tool. The rcode codebase shows this pattern
+explicitly:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// main.rs — provider detection includes keychain access</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> detect_providers() <span class="op">-&gt;</span> ProviderDetection <span class="op">{</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> checks<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>(Provider<span class="op">,</span> <span class="op">&amp;</span>[<span class="op">&amp;</span><span class="dt">str</span>])<span class="op">&gt;</span> <span class="op">=</span> <span class="pp">vec!</span>[</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>        (<span class="pp">Provider::</span>RcodeProxy<span class="op">,</span> <span class="op">&amp;</span>[<span class="st">&quot;RCODE_TOKEN&quot;</span>])<span class="op">,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>        (<span class="pp">Provider::</span>Anthropic<span class="op">,</span> <span class="op">&amp;</span>[<span class="st">&quot;ANTHROPIC_API_KEY&quot;</span><span class="op">,</span> <span class="st">&quot;ANTHROPIC_AUTH_TOKEN&quot;</span>])<span class="op">,</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>        (<span class="pp">Provider::</span>AwsBedrock<span class="op">,</span> <span class="op">&amp;</span>[<span class="st">&quot;AWS_REGION&quot;</span>])<span class="op">,</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>        (<span class="pp">Provider::</span>OpenAi<span class="op">,</span> <span class="op">&amp;</span>[<span class="st">&quot;OPENAI_API_KEY&quot;</span>])<span class="op">,</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>        (<span class="pp">Provider::</span>Google<span class="op">,</span> <span class="op">&amp;</span>[<span class="st">&quot;GOOGLE_APPLICATION_CREDENTIALS&quot;</span>])<span class="op">,</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    ]<span class="op">;</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> available <span class="op">=</span> <span class="dt">Vec</span><span class="pp">::</span>new()<span class="op">;</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (provider<span class="op">,</span> env_vars) <span class="kw">in</span> <span class="op">&amp;</span>checks <span class="op">{</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> found <span class="op">=</span> env_vars<span class="op">.</span>iter()<span class="op">.</span>any(<span class="op">|</span>v<span class="op">|</span> <span class="op">{</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>            <span class="pp">std::env::</span>var(v)<span class="op">.</span>map(<span class="op">|</span>val<span class="op">|</span> <span class="op">!</span>val<span class="op">.</span>is_empty())<span class="op">.</span>unwrap_or(<span class="cn">false</span>)</span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> found <span class="op">{</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>            available<span class="op">.</span>push(provider<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Fallback: check macOS Keychain for GitHub Copilot token</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> available<span class="op">.</span>is_empty() <span class="op">{</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> keychain_services <span class="op">=</span> [</span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;github.copilot&quot;</span><span class="op">,</span> <span class="st">&quot;copilot-cli&quot;</span><span class="op">,</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;github-copilot&quot;</span><span class="op">,</span> <span class="st">&quot;vscode-github.copilot&quot;</span><span class="op">,</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>        ]<span class="op">;</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> service <span class="kw">in</span> <span class="op">&amp;</span>keychain_services <span class="op">{</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Ok</span>(output) <span class="op">=</span> <span class="pp">std::process::Command::</span>new(<span class="st">&quot;security&quot;</span>)</span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>args([<span class="st">&quot;find-generic-password&quot;</span><span class="op">,</span> <span class="st">&quot;-s&quot;</span><span class="op">,</span> service])</span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>stderr(<span class="pp">std::process::Stdio::</span>null())</span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>output()</span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a>            <span class="op">{</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> output<span class="op">.</span>status<span class="op">.</span>success() <span class="op">{</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>                    available<span class="op">.</span>push(<span class="pp">Provider::</span>RcodeProxy)<span class="op">;</span></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> primary <span class="op">=</span> available<span class="op">.</span>first()<span class="op">.</span>cloned()<span class="op">;</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>    ProviderDetection <span class="op">{</span> primary<span class="op">,</span> available <span class="op">}</span></span>
+<span id="cb8-43"><a href="#cb8-43" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The keychain fallback only fires when no environment variables are
+set, which is the slow path. When it does fire, it checks up to four
+keychain service names. Each <code>security find-generic-password</code>
+call takes 20-40ms. Running them sequentially would add 80-160ms to
+startup. The optimization is to either (a) check only the first hit (the
+<code>break</code> after success) or (b) run all four checks in parallel
+with <code>tokio::spawn</code> and take the first success.</p>
+<p><strong>3. Feature Flag (GrowthBook) Prefetch</strong></p>
+<p>Feature flag services like GrowthBook typically require an HTTP call
+to fetch the current flag configuration. In the rcode implementation,
+the flags use a local-first approach: the
+<code>FeatureFlagRegistry</code> loads from environment variables and a
+local JSON file, deferring the remote sync to a background task:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Feature flags load from env + config immediately (no network)</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="pp">config::feature_flags::</span>from_env()<span class="op">;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(flags_path) <span class="op">=</span> cfg<span class="op">.</span>feature_flags_path() <span class="op">{</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Err</span>(e) <span class="op">=</span> <span class="pp">config::feature_flags::</span>from_config(<span class="op">&amp;</span>flags_path) <span class="op">{</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        <span class="pp">tracing::debug!</span>(error <span class="op">=</span> <span class="op">%</span>e<span class="op">,</span> <span class="st">&quot;could not load feature flags config&quot;</span>)<span class="op">;</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The remote GrowthBook sync, if enabled, runs on a background
+<code>tokio::spawn</code> with a stale-while-revalidate pattern. The
+agent starts with cached flags from the last session. The fresh flags
+arrive asynchronously and take effect on the next turn — not on the
+current startup.</p>
+<p><strong>4. API Preconnect</strong></p>
+<p>TCP connection establishment plus TLS handshake to the API server
+takes 100-200ms for a geographically distant endpoint. Preconnecting —
+opening the TCP socket and completing the TLS handshake without sending
+an HTTP request — lets the first API call bypass the connection overhead
+entirely:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Conceptual API preconnect</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">preconnectToApi</span>(baseUrl<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;</span> {</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> url <span class="op">=</span> <span class="kw">new</span> <span class="fu">URL</span>(baseUrl)<span class="op">;</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> socket <span class="op">=</span> net<span class="op">.</span><span class="fu">connect</span>({</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    host<span class="op">:</span> url<span class="op">.</span><span class="at">hostname</span><span class="op">,</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    port<span class="op">:</span> url<span class="op">.</span><span class="at">port</span> <span class="op">?</span> <span class="pp">parseInt</span>(url<span class="op">.</span><span class="at">port</span>) <span class="op">:</span> <span class="dv">443</span><span class="op">,</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Just establishing the connection is enough —</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// the HTTP/2 session will reuse it</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>  socket<span class="op">.</span><span class="fu">on</span>(<span class="st">&#39;connect&#39;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// For TLS, we need the full handshake</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> tls <span class="op">=</span> tls<span class="op">.</span><span class="fu">connect</span>({</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>      socket<span class="op">,</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>      servername<span class="op">:</span> url<span class="op">.</span><span class="at">hostname</span><span class="op">,</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>    tls<span class="op">.</span><span class="fu">on</span>(<span class="st">&#39;secureConnect&#39;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Connection is warm. The HTTP client pool</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>      <span class="co">// will reuse this socket on the first request.</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>In practice, most HTTP client libraries (hyper in Rust, undici in
+Node.js) manage a connection pool internally. The preconnect fires an
+HTTP HEAD request to <code>/health</code> or similar lightweight
+endpoint, which warms the pool without consuming significant
+bandwidth.</p>
+<h3 id="prefetch-timeout-and-degradation">Prefetch Timeout and
+Degradation</h3>
+<p>Every prefetch must have a timeout. A missing MCP server or
+unreachable API endpoint must not prevent the agent from starting. The
+rcode implementation shows this pattern with the memory bridge:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mem_bridge <span class="op">=</span> <span class="cf">if</span> cli<span class="op">.</span>no_memory <span class="op">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="pp">memory::MemoryBridge::</span>disabled()</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="pp">tokio::time::</span>timeout(</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>        <span class="pp">std::time::Duration::</span>from_secs(MEMORY_TIMEOUT_SECS)<span class="op">,</span>  <span class="co">// 3 seconds</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>        <span class="pp">memory::MemoryBridge::</span>new()<span class="op">,</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    )<span class="op">.</span><span class="kw">await</span> <span class="op">{</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(bridge) <span class="op">=&gt;</span> bridge<span class="op">,</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Err</span>(_) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>            <span class="pp">tracing::debug!</span>(<span class="st">&quot;copilot-mem connection timed out, starting without memory&quot;</span>)<span class="op">;</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>            <span class="pp">memory::MemoryBridge::</span>disabled()</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p>The pattern is universal: try for N seconds, then fall back to a
+degraded-but-functional default. The user gets a working agent
+immediately. The missing subsystem logs a debug message and can be
+retried later.</p>
+<hr />
+<h2 id="423-lazy-imports-and-conditional-loading">42.3 Lazy Imports and
+Conditional Loading</h2>
+<p>Not every module is needed on every startup. If the user runs
+<code>claude --version</code>, loading the MCP subsystem, the TUI
+renderer, the 52-tool registry, and the LSP client is pure waste. Lazy
+imports defer module loading until the code path that needs the module
+is actually executed.</p>
+<h3 id="the-conditional-require-pattern">The Conditional Require
+Pattern</h3>
+<p>In TypeScript/JavaScript, dynamic <code>import()</code> replaces
+static <code>import</code> for deferring module resolution:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Static import — loaded on startup regardless of usage</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { McpManager } <span class="im">from</span> <span class="st">&#39;./services/mcp/client&#39;</span><span class="op">;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Lazy import — loaded only when MCP is actually needed</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">connectMcpServers</span>(configs<span class="op">:</span> McpConfig[])<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>McpManager<span class="op">&gt;</span> {</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> { McpManager } <span class="op">=</span> <span class="cf">await</span> <span class="im">import</span>(<span class="st">&#39;./services/mcp/client&#39;</span>)<span class="op">;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> McpManager<span class="op">.</span><span class="fu">connectAll</span>(configs)<span class="op">;</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The static import forces the bundler to include
+<code>mcp/client.ts</code> and all its transitive dependencies in the
+startup bundle. The lazy import defers all of that until
+<code>connectMcpServers</code> is called. If the user has no MCP servers
+configured, the entire MCP module tree is never loaded.</p>
+<p>In Rust, the equivalent is conditional compilation via feature flags
+and module-level cfg attributes:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Only compile MCP support when the feature is enabled</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;mcp&quot;</span><span class="at">)]</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="kw">mod</span> mcp<span class="op">;</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Runtime feature flag gating</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="pp">config::feature_flags::</span>feature(<span class="st">&quot;mcp_support&quot;</span>) <span class="op">{</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> mcp_manager <span class="op">=</span> <span class="pp">mcp::Manager::</span>connect_all(<span class="op">&amp;</span>configs)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>    engine<span class="op">.</span>set_mcp_manager(mcp_manager)<span class="op">;</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The rcode codebase uses a more aggressive pattern with
+<code>LazyLock</code> (Rust's equivalent of a <code>lazy_static</code>
+that initializes on first access):</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Global singleton that initializes only on first access</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">static</span> GLOBAL_REGISTRY<span class="op">:</span> <span class="pp">std::sync::</span>LazyLock<span class="op">&lt;</span>SharedFlagRegistry<span class="op">&gt;</span> <span class="op">=</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    <span class="pp">std::sync::LazyLock::</span>new(<span class="pp">SharedFlagRegistry::</span>new)<span class="op">;</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> global_registry() <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="ot">&#39;static</span> SharedFlagRegistry <span class="op">{</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>GLOBAL_REGISTRY</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The <code>LazyLock</code> defers the creation of the flag registry —
+including the allocation and insertion of 50+ default flags — until the
+first time any code calls <code>global_registry()</code>. If the fast
+path exits before touching feature flags (as <code>--version</code>
+does), the registry is never constructed.</p>
+<h3 id="feature-gated-tool-imports">Feature-Gated Tool Imports</h3>
+<p>The tool registry is one of the largest subsystems. Loading all 52
+tools on every startup is wasteful when many tools are feature-gated or
+only relevant in specific contexts. The pattern is to register tool
+factories instead of tool instances:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// tools.ts — tool registry with lazy initialization</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> ToolFactory <span class="op">=</span> () <span class="kw">=&gt;</span> Tool<span class="op">;</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> TOOL_FACTORIES<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> ToolFactory<span class="op">&gt;</span> <span class="op">=</span> {</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;Bash&#39;</span><span class="op">:</span>        () <span class="kw">=&gt;</span> <span class="kw">new</span> <span class="fu">BashTool</span>()<span class="op">,</span>        <span class="co">// Always loaded</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;Read&#39;</span><span class="op">:</span>        () <span class="kw">=&gt;</span> <span class="kw">new</span> <span class="fu">ReadTool</span>()<span class="op">,</span>         <span class="co">// Always loaded</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;Edit&#39;</span><span class="op">:</span>        () <span class="kw">=&gt;</span> <span class="kw">new</span> <span class="fu">EditTool</span>()<span class="op">,</span>         <span class="co">// Always loaded</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;Write&#39;</span><span class="op">:</span>       () <span class="kw">=&gt;</span> <span class="kw">new</span> <span class="fu">WriteTool</span>()<span class="op">,</span>        <span class="co">// Always loaded</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;Glob&#39;</span><span class="op">:</span>        () <span class="kw">=&gt;</span> <span class="kw">new</span> <span class="fu">GlobTool</span>()<span class="op">,</span>         <span class="co">// Always loaded</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;Grep&#39;</span><span class="op">:</span>        () <span class="kw">=&gt;</span> <span class="kw">new</span> <span class="fu">GrepTool</span>()<span class="op">,</span>         <span class="co">// Always loaded</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;WebFetch&#39;</span><span class="op">:</span>    () <span class="kw">=&gt;</span> <span class="fu">lazyRequire</span>(<span class="st">&#39;./tools/WebFetchTool&#39;</span>)<span class="op">,</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;WebSearch&#39;</span><span class="op">:</span>   () <span class="kw">=&gt;</span> <span class="fu">lazyRequire</span>(<span class="st">&#39;./tools/WebSearchTool&#39;</span>)<span class="op">,</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;AgentTool&#39;</span><span class="op">:</span>   () <span class="kw">=&gt;</span> <span class="fu">lazyRequire</span>(<span class="st">&#39;./tools/AgentTool&#39;</span>)<span class="op">,</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;TaskCreate&#39;</span><span class="op">:</span>  () <span class="kw">=&gt;</span> <span class="fu">lazyRequire</span>(<span class="st">&#39;./tools/TaskCreateTool&#39;</span>)<span class="op">,</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... 40+ more tools</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>}<span class="op">;</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">lazyRequire</span>(path<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> Tool {</span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> mod <span class="op">=</span> <span class="pp">require</span>(path)<span class="op">;</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">new</span> mod<span class="op">.</span><span class="fu">default</span>()<span class="op">;</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ToolRegistry {</span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>  <span class="kw">private</span> instances <span class="op">=</span> <span class="kw">new</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> Tool<span class="op">&gt;</span>()<span class="op">;</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a>  <span class="kw">get</span>(name<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> Tool {</span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span><span class="kw">this</span><span class="op">.</span><span class="at">instances</span><span class="op">.</span><span class="fu">has</span>(name)) {</span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> factory <span class="op">=</span> TOOL_FACTORIES[name]<span class="op">;</span></span>
+<span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> (<span class="op">!</span>factory) <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">Error</span>(<span class="vs">`Unknown tool: </span><span class="sc">${</span>name<span class="sc">}</span><span class="vs">`</span>)<span class="op">;</span></span>
+<span id="cb15-30"><a href="#cb15-30" aria-hidden="true" tabindex="-1"></a>      <span class="kw">this</span><span class="op">.</span><span class="at">instances</span><span class="op">.</span><span class="fu">set</span>(name<span class="op">,</span> <span class="fu">factory</span>())<span class="op">;</span></span>
+<span id="cb15-31"><a href="#cb15-31" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb15-32"><a href="#cb15-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">this</span><span class="op">.</span><span class="at">instances</span><span class="op">.</span><span class="fu">get</span>(name)<span class="op">!;</span></span>
+<span id="cb15-33"><a href="#cb15-33" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb15-34"><a href="#cb15-34" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The six core tools (Bash, Read, Edit, Write, Glob, Grep) are loaded
+eagerly because they are used in nearly every session. The remaining 46
+tools are loaded on first invocation. A session that only uses Bash and
+Read never pays the cost of initializing WebFetch, AgentTool, or the
+task management tools.</p>
+<h3 id="measuring-the-impact">Measuring the Impact</h3>
+<p>Lazy imports typically save 50-150ms on startup for a large CLI
+agent. The savings come from three sources:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Savings</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Module parsing</td>
+<td>20-40ms</td>
+<td>V8/Bun doesn't parse JavaScript that isn't
+<code>import()</code>ed</td>
+</tr>
+<tr>
+<td>Module initialization</td>
+<td>30-60ms</td>
+<td>Top-level code in deferred modules never runs</td>
+</tr>
+<tr>
+<td>Transitive dependencies</td>
+<td>20-50ms</td>
+<td>Each lazy module has its own dependency tree that stays
+unloaded</td>
+</tr>
+</tbody>
+</table>
+<p>The tradeoff is a 10-20ms latency hit on the first invocation of a
+lazy tool. This is imperceptible to the user because it happens after
+they have already submitted a prompt and are waiting for the model to
+respond.</p>
+<hr />
+<h2 id="424-fast-path-cli-exits">42.4 Fast Path CLI Exits</h2>
+<p>Some CLI invocations should never touch the full initialization
+pipeline. When the user runs <code>claude --version</code>, they expect
+the version string in under 100ms — not the full initialization of the
+LLM client, session store, and MCP manager.</p>
+<h3 id="identifying-fast-path-commands">Identifying Fast Path
+Commands</h3>
+<p>The fast path optimization applies to commands that satisfy three
+criteria:</p>
+<ol type="1">
+<li>They produce deterministic output (no LLM call needed)</li>
+<li>They require no project context (no config loading)</li>
+<li>They are expected to return instantly by user convention</li>
+</ol>
+<p>In the rcode implementation, four commands qualify:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// main.rs — early-exit commands</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> cli<span class="op">.</span>doctor <span class="op">{</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> run_doctor()<span class="op">;</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> cli<span class="op">.</span>show_config <span class="op">{</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> show_config(<span class="op">&amp;</span>cli)<span class="op">;</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a><span class="co">// clap handles --version and --help internally</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a><span class="co">// before main() even runs, via:</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>command<span class="at">(</span>version<span class="at">)]</span></span></code></pre></div>
+<p>The critical point is placement. These checks appear
+<strong>before</strong> the expensive initialization steps (config
+loading, LLM client creation, MCP connection). Here is the execution
+timeline:</p>
+<pre><code>Full startup:    CLI parse → Logging → Provider detect → Config → ... → Engine → TUI
+                 |←──────────────── 240ms ────────────────────────────→|
+
+--version:       CLI parse → Print version → exit
+                 |← 0.8ms →|
+
+--show-config:   CLI parse → Config load → Print config → exit
+                 |←────── 13ms ────────→|
+
+--doctor:        CLI parse → Logging → Provider detect → Config → Doctor checks → exit
+                 |←──────────── 45ms ────────────────────────→|
+
+--history:       CLI parse → Logging → Config → Session store → List → exit
+                 |←──────────── 60ms ──────────────────────→|</code></pre>
+<h3 id="the---version-fast-path">The <code>--version</code> Fast
+Path</h3>
+<p>The fastest possible exit is <code>--version</code>. Clap (the CLI
+parser in Rust) handles this before <code>main()</code> gets control.
+The version string is constructed at compile time:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> version_info() <span class="op">-&gt;</span> <span class="dt">String</span> <span class="op">{</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> version <span class="op">=</span> <span class="pp">env!</span>(<span class="st">&quot;CARGO_PKG_VERSION&quot;</span>)<span class="op">;</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> git_hash <span class="op">=</span> <span class="pp">option_env!</span>(<span class="st">&quot;RCODE_GIT_HASH&quot;</span>)<span class="op">.</span>unwrap_or(<span class="st">&quot;dev&quot;</span>)<span class="op">;</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> build_date <span class="op">=</span> <span class="pp">option_env!</span>(<span class="st">&quot;RCODE_BUILD_DATE&quot;</span>)<span class="op">.</span>unwrap_or(<span class="st">&quot;unknown&quot;</span>)<span class="op">;</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>    <span class="pp">format!</span>(<span class="st">&quot;rcode {version} (git: {git_hash}, built: {build_date})&quot;</span>)</span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>All three values (<code>CARGO_PKG_VERSION</code>,
+<code>RCODE_GIT_HASH</code>, <code>RCODE_BUILD_DATE</code>) are
+compile-time constants embedded in the binary. No file I/O, no network
+call, no heap allocation beyond the format string. The version command
+returns in under 1ms.</p>
+<h3 id="the---dump-system-prompt-pattern">The
+<code>--dump-system-prompt</code> Pattern</h3>
+<p>In the TypeScript implementation, <code>--dump-system-prompt</code>
+is a debugging tool that prints the fully resolved system prompt and
+exits. This is not as fast as <code>--version</code> because it needs
+configuration and project context to assemble the prompt, but it skips
+the LLM client, session store, and MCP initialization:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Pseudocode for dump-system-prompt fast path</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (args[<span class="st">&#39;dump-system-prompt&#39;</span>]) {</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> config <span class="op">=</span> <span class="fu">loadConfig</span>()<span class="op">;</span>       <span class="co">// ~12ms</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> rules <span class="op">=</span> <span class="fu">loadRules</span>()<span class="op">;</span>          <span class="co">// ~5ms</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> prompt <span class="op">=</span> <span class="fu">buildSystemPrompt</span>(config<span class="op">,</span> rules)<span class="op">;</span>  <span class="co">// ~2ms</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>  <span class="bu">process</span><span class="op">.</span><span class="at">stdout</span><span class="op">.</span><span class="fu">write</span>(prompt)<span class="op">;</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>  <span class="bu">process</span><span class="op">.</span><span class="fu">exit</span>(<span class="dv">0</span>)<span class="op">;</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Skipped: LLM client (~3ms), session store (~15ms),</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">//          MCP connect (~143ms), memory bridge (~47ms)</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The time savings are substantial: 200ms of initialization skipped for
+a command that takes 20ms to complete. More importantly, the command is
+self-contained — it does not require API credentials, network access, or
+a running MCP server. This makes it safe to run in CI pipelines for
+prompt regression testing.</p>
+<h3 id="the---history-fast-path">The <code>--history</code> Fast
+Path</h3>
+<p>The <code>--history</code> command shows recent sessions and exits.
+It needs the session store but nothing else:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> cli<span class="op">.</span>history <span class="op">{</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> sessions <span class="op">=</span> session_store<span class="op">.</span>list_sessions(<span class="dv">20</span>)<span class="op">?;</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> sessions<span class="op">.</span>is_empty() <span class="op">{</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">println!</span>(<span class="st">&quot;No sessions found.&quot;</span>)<span class="op">;</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>        <span class="pp">println!</span>(<span class="st">&quot;Recent sessions:&quot;</span>)<span class="op">;</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> s <span class="kw">in</span> sessions <span class="op">{</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>            <span class="pp">println!</span>(</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>                <span class="st">&quot;  {} | {} | {} turns | {}&quot;</span><span class="op">,</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>                <span class="op">&amp;</span>s<span class="op">.</span>id[<span class="op">..</span><span class="dv">8</span>]<span class="op">,</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>                s<span class="op">.</span>created_at<span class="op">.</span>format(<span class="st">&quot;%Y-%m-%d %H:%M&quot;</span>)<span class="op">,</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>                s<span class="op">.</span>turn_count<span class="op">,</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>                s<span class="op">.</span>summary<span class="op">.</span>as_deref()<span class="op">.</span>unwrap_or(<span class="st">&quot;(no summary)&quot;</span>)</span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>            )<span class="op">;</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="cn">Ok</span>(())<span class="op">;</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This exits after session store initialization, skipping LLM client
+creation, MCP connection, memory bridge setup, and engine construction.
+The entire command completes in 40-60ms.</p>
+<h3 id="design-principle-progressive-initialization">Design Principle:
+Progressive Initialization</h3>
+<p>The fast path pattern reflects a broader design principle:
+<strong>initialize subsystems in order of when they are first needed,
+and exit as soon as the command is complete</strong>. The initialization
+sequence is not a monolithic block but a pipeline of increasingly
+expensive steps, with exit ramps between each step:</p>
+<pre><code>Step 1:  CLI parse              → Exit ramp: --version, --help
+Step 2:  Logging + config       → Exit ramp: --show-config, --doctor
+Step 3:  Session store          → Exit ramp: --history
+Step 4:  LLM + tools + perms   → Exit ramp: (none — need all for any real work)
+Step 5:  MCP + memory + engine  → Enter interactive mode</code></pre>
+<hr />
+<h2 id="425-fps-tracking-and-frame-timing">42.5 FPS Tracking and Frame
+Timing</h2>
+<p>Once the agent is running, the TUI needs to render at a consistent
+frame rate. A dropped frame manifests as a visible stutter — the cursor
+freezes, typed characters appear in a burst, and the progress spinner
+jumps instead of animating smoothly. Users perceive this as the agent
+being "slow" even when the LLM is responding quickly.</p>
+<h3 id="the-tui-render-loop">The TUI Render Loop</h3>
+<p>The rcode TUI uses ratatui with a tick-based render loop. The
+fundamental constant is <code>TICK_RATE_MS</code>:</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> TICK_RATE_MS<span class="op">:</span> <span class="dt">u64</span> <span class="op">=</span> <span class="dv">50</span><span class="op">;</span>  <span class="co">// 20 FPS target</span></span></code></pre></div>
+<p>A 50ms tick rate targets 20 FPS. This is not a game engine — we do
+not need 60 FPS for a terminal UI. Twenty frames per second is
+sufficient for smooth cursor blinking, spinner animation, and scroll
+responsiveness. The lower target means more CPU headroom for tool
+execution and LLM streaming.</p>
+<p>The render loop follows the standard tick-event pattern:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> run_event_loop(</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    terminal<span class="op">:</span> <span class="op">&amp;</span><span class="kw">mut</span> Terminal<span class="op">&lt;</span>CrosstermBackend<span class="op">&lt;</span>Stdout<span class="op">&gt;&gt;,</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    app<span class="op">:</span> <span class="op">&amp;</span><span class="kw">mut</span> App<span class="op">,</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="pp">io::</span><span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span>AppAction<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> tick_rate <span class="op">=</span> <span class="pp">Duration::</span>from_millis(TICK_RATE_MS)<span class="op">;</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">loop</span> <span class="op">{</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Render the current frame</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>        terminal<span class="op">.</span>draw(<span class="op">|</span>frame<span class="op">|</span> render(app<span class="op">,</span> frame))<span class="op">?;</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>        app<span class="op">.</span>update_fps()<span class="op">;</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Poll for events with remaining tick budget</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> timeout <span class="op">=</span> tick_rate</span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>checked_sub(app<span class="op">.</span>last_tick<span class="op">.</span>elapsed())</span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>unwrap_or(<span class="pp">Duration::</span>ZERO)<span class="op">;</span></span>
+<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="pp">event::</span>poll(timeout)<span class="op">?</span> <span class="op">{</span></span>
+<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Handle keyboard, mouse, resize events</span></span>
+<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a>            <span class="cf">match</span> <span class="pp">event::</span>read()<span class="op">?</span> <span class="op">{</span></span>
+<span id="cb23-20"><a href="#cb23-20" aria-hidden="true" tabindex="-1"></a>                <span class="pp">Event::</span>Key(key) <span class="op">=&gt;</span> <span class="op">{</span> <span class="co">/* ... */</span> <span class="op">}</span></span>
+<span id="cb23-21"><a href="#cb23-21" aria-hidden="true" tabindex="-1"></a>                <span class="pp">Event::</span>Mouse(mouse) <span class="op">=&gt;</span> <span class="op">{</span> <span class="co">/* ... */</span> <span class="op">}</span></span>
+<span id="cb23-22"><a href="#cb23-22" aria-hidden="true" tabindex="-1"></a>                <span class="pp">Event::</span>Resize(w<span class="op">,</span> h) <span class="op">=&gt;</span> <span class="op">{</span> <span class="co">/* ... */</span> <span class="op">}</span></span>
+<span id="cb23-23"><a href="#cb23-23" aria-hidden="true" tabindex="-1"></a>                _ <span class="op">=&gt;</span> <span class="op">{}</span></span>
+<span id="cb23-24"><a href="#cb23-24" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb23-25"><a href="#cb23-25" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb23-26"><a href="#cb23-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-27"><a href="#cb23-27" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Process tick</span></span>
+<span id="cb23-28"><a href="#cb23-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> app<span class="op">.</span>last_tick<span class="op">.</span>elapsed() <span class="op">&gt;=</span> tick_rate <span class="op">{</span></span>
+<span id="cb23-29"><a href="#cb23-29" aria-hidden="true" tabindex="-1"></a>            app<span class="op">.</span>last_tick <span class="op">=</span> <span class="pp">Instant::</span>now()<span class="op">;</span></span>
+<span id="cb23-30"><a href="#cb23-30" aria-hidden="true" tabindex="-1"></a>            app<span class="op">.</span>tick_cursor()<span class="op">;</span>  <span class="co">// Blink cursor</span></span>
+<span id="cb23-31"><a href="#cb23-31" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Process any pending async results</span></span>
+<span id="cb23-32"><a href="#cb23-32" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb23-33"><a href="#cb23-33" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb23-34"><a href="#cb23-34" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The critical detail is the timeout calculation:
+<code>tick_rate.checked_sub(app.last_tick.elapsed())</code>. If
+rendering took 10ms, the poll timeout is 40ms, keeping the total frame
+time at 50ms. If rendering took more than 50ms (a slow frame), the
+timeout is zero — the loop immediately processes pending events and
+renders the next frame, catching up rather than falling further
+behind.</p>
+<h3 id="the-fps-counter">The FPS Counter</h3>
+<p>The <code>App</code> struct tracks FPS with a simple sliding-window
+counter:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> App <span class="op">{</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... other fields ...</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> frame_count<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> last_fps_check<span class="op">:</span> Instant<span class="op">,</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> current_fps<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> App <span class="op">{</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> update_fps(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">{</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>frame_count <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> elapsed <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>last_fps_check<span class="op">.</span>elapsed()<span class="op">;</span></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> elapsed <span class="op">&gt;=</span> <span class="pp">Duration::</span>from_secs(<span class="dv">1</span>) <span class="op">{</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>current_fps <span class="op">=</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>                <span class="kw">self</span><span class="op">.</span>frame_count <span class="kw">as</span> <span class="dt">f64</span> <span class="op">/</span> elapsed<span class="op">.</span>as_secs_f64()<span class="op">;</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>frame_count <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>last_fps_check <span class="op">=</span> <span class="pp">Instant::</span>now()<span class="op">;</span></span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The FPS is calculated once per second by dividing the number of
+frames rendered by the elapsed time. This is displayed in the status
+bar:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> fps_span <span class="op">=</span> <span class="pp">Span::</span>styled(</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    <span class="pp">format!</span>(<span class="st">&quot; {:.0}fps &quot;</span><span class="op">,</span> app<span class="op">.</span>current_fps)<span class="op">,</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="pp">Style::</span><span class="kw">default</span>()<span class="op">.</span>fg(<span class="pp">Color::</span>DarkGray)<span class="op">,</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>)<span class="op">;</span></span></code></pre></div>
+<p>The FPS display serves two purposes. For developers, it provides a
+real-time health indicator during development. For users running with
+<code>--verbose</code>, it helps diagnose "the UI feels sluggish"
+reports — if the FPS drops below 15, there is a rendering
+bottleneck.</p>
+<h3 id="frame-timing-analysis">Frame Timing Analysis</h3>
+<p>When FPS tracking reveals dropped frames, the next question is: which
+part of the frame is slow? A frame consists of three phases:</p>
+<ol type="1">
+<li><strong>Layout</strong>: Computing the position and size of every
+widget</li>
+<li><strong>Render</strong>: Writing styled text to the terminal
+buffer</li>
+<li><strong>Flush</strong>: Sending the differential update to the
+terminal</li>
+</ol>
+<p>Each phase can be independently timed:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> render_with_timing(app<span class="op">:</span> <span class="op">&amp;</span><span class="kw">mut</span> App<span class="op">,</span> frame<span class="op">:</span> <span class="op">&amp;</span><span class="kw">mut</span> Frame) <span class="op">{</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> t_layout <span class="op">=</span> <span class="pp">Instant::</span>now()<span class="op">;</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> layout <span class="op">=</span> compute_layout(frame<span class="op">.</span>area()<span class="op">,</span> app)<span class="op">;</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> layout_ms <span class="op">=</span> t_layout<span class="op">.</span>elapsed()<span class="op">.</span>as_micros()<span class="op">;</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> t_render <span class="op">=</span> <span class="pp">Instant::</span>now()<span class="op">;</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>    render_messages(frame<span class="op">,</span> <span class="op">&amp;</span>layout<span class="op">,</span> app)<span class="op">;</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    render_input(frame<span class="op">,</span> <span class="op">&amp;</span>layout<span class="op">,</span> app)<span class="op">;</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>    render_status_bar(frame<span class="op">,</span> <span class="op">&amp;</span>layout<span class="op">,</span> app)<span class="op">;</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> render_ms <span class="op">=</span> t_render<span class="op">.</span>elapsed()<span class="op">.</span>as_micros()<span class="op">;</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> app<span class="op">.</span>verbose <span class="op">{</span></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>        <span class="pp">tracing::trace!</span>(</span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>            layout_us <span class="op">=</span> layout_ms<span class="op">,</span></span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>            render_us <span class="op">=</span> render_ms<span class="op">,</span></span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;frame timing&quot;</span></span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>        )<span class="op">;</span></span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Common causes of slow frames:</p>
+<table>
+<thead>
+<tr>
+<th>Cause</th>
+<th>Typical Impact</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Message list re-layout</td>
+<td>5-20ms when history is large</td>
+<td>Virtual scrolling — only lay out visible messages</td>
+</tr>
+<tr>
+<td>Syntax highlighting</td>
+<td>2-10ms per code block</td>
+<td>Cache highlighted output, invalidate on scroll</td>
+</tr>
+<tr>
+<td>Markdown rendering</td>
+<td>3-15ms for long assistant messages</td>
+<td>Pre-render during streaming, cache result</td>
+</tr>
+<tr>
+<td>Full terminal redraw</td>
+<td>1-5ms</td>
+<td>Use differential rendering (ratatui's default)</td>
+</tr>
+<tr>
+<td>Large tool output display</td>
+<td>5-30ms</td>
+<td>Truncate and paginate</td>
+</tr>
+</tbody>
+</table>
+<h3 id="adaptive-frame-budget">Adaptive Frame Budget</h3>
+<p>A production-ready TUI adapts its frame budget based on what is
+happening. When the user is typing, every millisecond of input lag is
+noticeable — the frame budget is tight. When the LLM is streaming a long
+response and the user is reading, a lower frame rate is acceptable:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> effective_tick_rate(app<span class="op">:</span> <span class="op">&amp;</span>App) <span class="op">-&gt;</span> Duration <span class="op">{</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> app<span class="op">.</span>mode <span class="op">{</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">AppMode::</span>Insert <span class="op">=&gt;</span> <span class="pp">Duration::</span>from_millis(<span class="dv">33</span>)<span class="op">,</span>   <span class="co">// 30 FPS — typing</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">AppMode::</span>Normal <span class="cf">if</span> app<span class="op">.</span>is_streaming <span class="op">=&gt;</span> <span class="pp">Duration::</span>from_millis(<span class="dv">50</span>)<span class="op">,</span>  <span class="co">// 20 FPS</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>        <span class="pp">AppMode::</span>Normal <span class="op">=&gt;</span> <span class="pp">Duration::</span>from_millis(<span class="dv">100</span>)<span class="op">,</span>  <span class="co">// 10 FPS — idle</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>        <span class="pp">AppMode::</span>HelpView <span class="op">=&gt;</span> <span class="pp">Duration::</span>from_millis(<span class="dv">200</span>)<span class="op">,</span> <span class="co">// 5 FPS — static content</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="pp">Duration::</span>from_millis(TICK_RATE_MS)<span class="op">,</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Lower frame rates in idle modes reduce CPU usage substantially. A
+terminal UI at 5 FPS consumes almost zero CPU. At 60 FPS it consumes a
+measurable percentage of a core, which matters on battery-powered
+laptops.</p>
+<hr />
+<h2 id="426-heap-dump-service-for-memory-debugging">42.6 Heap Dump
+Service for Memory Debugging</h2>
+<p>A CLI agent that runs for hours accumulates memory. Message history
+grows. Tool outputs pile up. MCP connections hold buffers. Unreleased
+closures hold references to expired state. Eventually, the process
+crosses a memory threshold and the OS starts swapping, or worse, the OOM
+killer terminates it.</p>
+<h3 id="the-problem-long-running-session-memory-growth">The Problem:
+Long-Running Session Memory Growth</h3>
+<p>A typical Claude Code session generates 100-500 messages over several
+hours. Each message contains structured content (text, tool results,
+file contents). The conversation history alone can grow to 50-100MB. Add
+tool output caching, syntax highlighting caches, and MCP connection
+buffers, and a long session can consume 200-500MB of RSS.</p>
+<p>This is not a memory leak in the traditional sense. Every allocation
+is reachable. The issue is memory pressure from legitimate data. The fix
+involves two strategies: (1) bounded caches with eviction, and (2) heap
+dump analysis to find surprising memory consumers.</p>
+<h3 id="triggering-a-heap-dump">Triggering a Heap Dump</h3>
+<p>A heap dump captures the current state of all heap allocations. In
+Node.js/Bun, this produces a <code>.heapsnapshot</code> file that can be
+loaded into Chrome DevTools:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">// services/heapDump.ts</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> <span class="op">*</span> <span class="im">as</span> v8 <span class="im">from</span> <span class="st">&#39;v8&#39;</span><span class="op">;</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> <span class="op">*</span> <span class="im">as</span> fs <span class="im">from</span> <span class="st">&#39;fs&#39;</span><span class="op">;</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> <span class="op">*</span> <span class="im">as</span> path <span class="im">from</span> <span class="st">&#39;path&#39;</span><span class="op">;</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">writeHeapSnapshot</span>(label<span class="op">?:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="dt">string</span> {</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> timestamp <span class="op">=</span> <span class="kw">new</span> <span class="bu">Date</span>()<span class="op">.</span><span class="fu">toISOString</span>()<span class="op">.</span><span class="fu">replace</span>(<span class="ss">/</span><span class="sc">[:.]</span><span class="ss">/g</span><span class="op">,</span> <span class="st">&#39;-&#39;</span>)<span class="op">;</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> filename <span class="op">=</span> <span class="vs">`heap-</span><span class="sc">${</span>label <span class="op">??</span> <span class="st">&#39;manual&#39;</span><span class="sc">}</span><span class="vs">-</span><span class="sc">${</span>timestamp<span class="sc">}</span><span class="vs">.heapsnapshot`</span><span class="op">;</span></span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> filepath <span class="op">=</span> path<span class="op">.</span><span class="fu">join</span>(</span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>    <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">HOME</span> <span class="op">??</span> <span class="st">&#39;/tmp&#39;</span><span class="op">,</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>    <span class="st">&#39;.local&#39;</span><span class="op">,</span> <span class="st">&#39;share&#39;</span><span class="op">,</span> <span class="st">&#39;claude&#39;</span><span class="op">,</span> <span class="st">&#39;diagnostics&#39;</span><span class="op">,</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>    filename<span class="op">,</span></span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>  )<span class="op">;</span></span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>  fs<span class="op">.</span><span class="fu">mkdirSync</span>(path<span class="op">.</span><span class="fu">dirname</span>(filepath)<span class="op">,</span> { recursive<span class="op">:</span> <span class="kw">true</span> })<span class="op">;</span></span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>  v8<span class="op">.</span><span class="fu">writeHeapSnapshot</span>(filepath)<span class="op">;</span></span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> filepath<span class="op">;</span></span>
+<span id="cb28-19"><a href="#cb28-19" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb28-20"><a href="#cb28-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-21"><a href="#cb28-21" aria-hidden="true" tabindex="-1"></a><span class="co">// Expose via slash command</span></span>
+<span id="cb28-22"><a href="#cb28-22" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">function</span> <span class="fu">registerHeapDumpCommand</span>(registry<span class="op">:</span> CommandRegistry)<span class="op">:</span> <span class="dt">void</span> {</span>
+<span id="cb28-23"><a href="#cb28-23" aria-hidden="true" tabindex="-1"></a>  registry<span class="op">.</span><span class="fu">register</span>({</span>
+<span id="cb28-24"><a href="#cb28-24" aria-hidden="true" tabindex="-1"></a>    name<span class="op">:</span> <span class="st">&#39;heap-dump&#39;</span><span class="op">,</span></span>
+<span id="cb28-25"><a href="#cb28-25" aria-hidden="true" tabindex="-1"></a>    description<span class="op">:</span> <span class="st">&#39;Write a V8 heap snapshot for memory debugging&#39;</span><span class="op">,</span></span>
+<span id="cb28-26"><a href="#cb28-26" aria-hidden="true" tabindex="-1"></a>    hidden<span class="op">:</span> <span class="kw">true</span><span class="op">,</span>  <span class="co">// Debug-only command</span></span>
+<span id="cb28-27"><a href="#cb28-27" aria-hidden="true" tabindex="-1"></a>    execute<span class="op">:</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb28-28"><a href="#cb28-28" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> path <span class="op">=</span> <span class="fu">writeHeapSnapshot</span>(<span class="st">&#39;user-requested&#39;</span>)<span class="op">;</span></span>
+<span id="cb28-29"><a href="#cb28-29" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="vs">`Heap snapshot written to: </span><span class="sc">${</span>path<span class="sc">}\n</span><span class="vs">`</span> <span class="op">+</span></span>
+<span id="cb28-30"><a href="#cb28-30" aria-hidden="true" tabindex="-1"></a>             <span class="vs">`Load in Chrome DevTools: chrome://inspect → Open dedicated DevTools for Node`</span><span class="op">;</span></span>
+<span id="cb28-31"><a href="#cb28-31" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb28-32"><a href="#cb28-32" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb28-33"><a href="#cb28-33" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>In Rust, heap profiling uses <code>jemalloc</code> with its built-in
+profiling support:</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Enable jemalloc profiling</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;jemalloc&quot;</span><span class="at">)]</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>global_allocator<span class="at">]</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="kw">static</span> ALLOC<span class="op">:</span> <span class="pp">tikv_jemallocator::</span>Jemalloc <span class="op">=</span> <span class="pp">tikv_jemallocator::</span>Jemalloc<span class="op">;</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a><span class="co">/// Dump a jemalloc heap profile to the diagnostics directory.</span></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;jemalloc&quot;</span><span class="at">)]</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> dump_heap_profile(label<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">PathBuf</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">use</span> <span class="pp">tikv_jemalloc_ctl::</span>raw<span class="op">;</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> dir <span class="op">=</span> data_dir()<span class="op">?.</span>join(<span class="st">&quot;diagnostics&quot;</span>)<span class="op">;</span></span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>    <span class="pp">std::fs::</span>create_dir_all(<span class="op">&amp;</span>dir)<span class="op">?;</span></span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> timestamp <span class="op">=</span> <span class="pp">chrono::Utc::</span>now()<span class="op">.</span>format(<span class="st">&quot;%Y%m%d-%H%M%S&quot;</span>)<span class="op">;</span></span>
+<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> path <span class="op">=</span> dir<span class="op">.</span>join(<span class="pp">format!</span>(<span class="st">&quot;heap-{label}-{timestamp}.prof&quot;</span>))<span class="op">;</span></span>
+<span id="cb29-16"><a href="#cb29-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> path_str <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;{}</span><span class="sc">\0</span><span class="st">&quot;</span><span class="op">,</span> path<span class="op">.</span>display())<span class="op">;</span></span>
+<span id="cb29-17"><a href="#cb29-17" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb29-18"><a href="#cb29-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="op">{</span></span>
+<span id="cb29-19"><a href="#cb29-19" aria-hidden="true" tabindex="-1"></a>        <span class="pp">raw::</span>write(</span>
+<span id="cb29-20"><a href="#cb29-20" aria-hidden="true" tabindex="-1"></a>            <span class="st">b&quot;prof.dump</span><span class="sc">\0</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb29-21"><a href="#cb29-21" aria-hidden="true" tabindex="-1"></a>            path_str<span class="op">.</span>as_ptr() <span class="kw">as</span> <span class="op">*</span><span class="kw">mut</span> _<span class="op">,</span></span>
+<span id="cb29-22"><a href="#cb29-22" aria-hidden="true" tabindex="-1"></a>            path_str<span class="op">.</span>len()<span class="op">,</span></span>
+<span id="cb29-23"><a href="#cb29-23" aria-hidden="true" tabindex="-1"></a>        )<span class="op">?;</span></span>
+<span id="cb29-24"><a href="#cb29-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb29-25"><a href="#cb29-25" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb29-26"><a href="#cb29-26" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(path)</span>
+<span id="cb29-27"><a href="#cb29-27" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="automatic-memory-pressure-detection">Automatic Memory Pressure
+Detection</h3>
+<p>Rather than waiting for the user to notice degradation, the agent can
+monitor its own memory usage and trigger diagnostics automatically:</p>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Periodic memory check (runs every 60 seconds)</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MEMORY_WARNING_MB <span class="op">=</span> <span class="dv">512</span><span class="op">;</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MEMORY_CRITICAL_MB <span class="op">=</span> <span class="dv">1024</span><span class="op">;</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">startMemoryMonitor</span>()<span class="op">:</span> NodeJS<span class="op">.</span><span class="at">Timeout</span> {</span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="pp">setInterval</span>(() <span class="kw">=&gt;</span> {</span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> usage <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="fu">memoryUsage</span>()<span class="op">;</span></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> rssMB <span class="op">=</span> usage<span class="op">.</span><span class="at">rss</span> <span class="op">/</span> (<span class="dv">1024</span> <span class="op">*</span> <span class="dv">1024</span>)<span class="op">;</span></span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> heapMB <span class="op">=</span> usage<span class="op">.</span><span class="at">heapUsed</span> <span class="op">/</span> (<span class="dv">1024</span> <span class="op">*</span> <span class="dv">1024</span>)<span class="op">;</span></span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (rssMB <span class="op">&gt;</span> MEMORY_CRITICAL_MB) {</span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>      <span class="bu">console</span><span class="op">.</span><span class="fu">error</span>(</span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`[memory] CRITICAL: RSS </span><span class="sc">${</span>rssMB<span class="op">.</span><span class="fu">toFixed</span>(<span class="dv">0</span>)<span class="sc">}</span><span class="vs">MB, `</span> <span class="op">+</span></span>
+<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`heap </span><span class="sc">${</span>heapMB<span class="op">.</span><span class="fu">toFixed</span>(<span class="dv">0</span>)<span class="sc">}</span><span class="vs">MB — consider /compact`</span></span>
+<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a>      )<span class="op">;</span></span>
+<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a>      <span class="fu">writeHeapSnapshot</span>(<span class="st">&#39;auto-critical&#39;</span>)<span class="op">;</span></span>
+<span id="cb30-17"><a href="#cb30-17" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (rssMB <span class="op">&gt;</span> MEMORY_WARNING_MB) {</span>
+<span id="cb30-18"><a href="#cb30-18" aria-hidden="true" tabindex="-1"></a>      <span class="bu">console</span><span class="op">.</span><span class="fu">error</span>(</span>
+<span id="cb30-19"><a href="#cb30-19" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`[memory] WARNING: RSS </span><span class="sc">${</span>rssMB<span class="op">.</span><span class="fu">toFixed</span>(<span class="dv">0</span>)<span class="sc">}</span><span class="vs">MB — `</span> <span class="op">+</span></span>
+<span id="cb30-20"><a href="#cb30-20" aria-hidden="true" tabindex="-1"></a>        <span class="vs">`</span><span class="sc">${</span><span class="bu">process</span><span class="op">.</span><span class="fu">memoryUsage</span>()<span class="op">.</span><span class="at">heapTotal</span> <span class="op">/</span> (<span class="dv">1024</span> <span class="op">*</span> <span class="dv">1024</span>) <span class="op">|</span> <span class="dv">0</span><span class="sc">}</span><span class="vs">MB heap total`</span></span>
+<span id="cb30-21"><a href="#cb30-21" aria-hidden="true" tabindex="-1"></a>      )<span class="op">;</span></span>
+<span id="cb30-22"><a href="#cb30-22" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb30-23"><a href="#cb30-23" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span> <span class="dv">60_000</span>)<span class="op">;</span></span>
+<span id="cb30-24"><a href="#cb30-24" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The auto-dump at the critical threshold is invaluable for post-mortem
+analysis. When a user reports "Claude Code used 2GB and my laptop
+froze," the diagnostic snapshot is already on disk, waiting to be
+analyzed.</p>
+<h3 id="common-memory-consumers">Common Memory Consumers</h3>
+<p>Heap dump analysis in a CLI agent typically reveals these top
+consumers:</p>
+<table>
+<thead>
+<tr>
+<th>Consumer</th>
+<th>Typical Size</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Conversation history</td>
+<td>20-100MB</td>
+<td>Context compaction (Chapter 6)</td>
+</tr>
+<tr>
+<td>Tool output cache</td>
+<td>10-50MB</td>
+<td>LRU cache with 100-entry limit</td>
+</tr>
+<tr>
+<td>Syntax highlighting cache</td>
+<td>5-20MB</td>
+<td>WeakRef-based cache, GC-friendly</td>
+</tr>
+<tr>
+<td>MCP response buffers</td>
+<td>5-30MB</td>
+<td>Stream processing, don't buffer full response</td>
+</tr>
+<tr>
+<td>File read cache</td>
+<td>10-40MB</td>
+<td>Bounded cache with last-access eviction</td>
+</tr>
+<tr>
+<td>Undo/checkpoint history</td>
+<td>5-20MB</td>
+<td>Keep last 10 checkpoints only</td>
+</tr>
+</tbody>
+</table>
+<p>The conversation history is always the largest consumer. This is by
+design — the agent needs to send the full conversation to the model on
+every turn. The mitigation is the context compaction system described in
+Chapter 6, which summarizes old messages to reclaim token budget (and,
+as a side effect, memory).</p>
+<h3 id="integration-with-context-compaction">Integration with Context
+Compaction</h3>
+<p>The heap dump service and the context compaction system share a
+feedback loop. When memory pressure rises above the warning threshold,
+the agent can trigger an automatic compaction:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (rssMB <span class="op">&gt;</span> MEMORY_WARNING_MB <span class="op">&amp;&amp;</span> <span class="op">!</span>recentlyCompacted) {</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Trigger auto-compact to reduce conversation history size</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">await</span> <span class="fu">autoCompact</span>(conversation<span class="op">,</span> {</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    reason<span class="op">:</span> <span class="st">&#39;memory_pressure&#39;</span><span class="op">,</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>    targetReduction<span class="op">:</span> <span class="fl">0.5</span><span class="op">,</span>  <span class="co">// Try to halve memory usage</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>  recentlyCompacted <span class="op">=</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>  <span class="pp">setTimeout</span>(() <span class="kw">=&gt;</span> { recentlyCompacted <span class="op">=</span> <span class="kw">false</span><span class="op">;</span> }<span class="op">,</span> <span class="dv">300_000</span>)<span class="op">;</span> <span class="co">// 5min cooldown</span></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>This creates a self-regulating system: long sessions that accumulate
+large histories automatically compact, keeping memory usage bounded
+without user intervention.</p>
+<hr />
+<h2 id="427-putting-it-all-together-the-optimized-startup-sequence">42.7
+Putting It All Together: The Optimized Startup Sequence</h2>
+<p>Let us trace through a complete optimized startup, from process
+creation to first user prompt:</p>
+<pre><code>T+0ms     Process starts. Rust runtime initializes.
+T+0.5ms   Clap parses CLI arguments.
+          → Fast path check: --version? Exit immediately.
+          → Fast path check: --help? Exit immediately.
+
+T+0.8ms   Change working directory if --directory was specified.
+
+T+1ms     PARALLEL LAUNCH:
+          ├── init_logging() → file appender + stderr filter
+          ├── detect_providers() → env var scan + keychain fallback
+          └── (If macOS) MDM plist read in background
+
+T+3ms     Logging ready. Provider detection complete.
+          → Fast path check: --doctor? Run diagnostics, exit.
+          → Fast path check: --show-config? Print config, exit.
+
+T+3ms     PARALLEL LAUNCH:
+          ├── config::Settings::load() → read ~/.config/rcode/config.toml
+          ├── feature_flags::from_env() → parse RCODE_FLAGS
+          └── session::Store::init() → open SQLite database
+
+T+16ms    Config loaded. Feature flags ready. Session store open.
+          → Fast path check: --history? List sessions, exit.
+
+T+16ms    PARALLEL LAUNCH:
+          ├── settings::ProjectSettings::load() → scan .rcode/ directory
+          ├── rules::RuleLoader::load() → discover CLAUDE.md + rule files
+          ├── llm::Client::new() → construct HTTP client + auth
+          └── API preconnect → TCP+TLS handshake to api.anthropic.com
+
+T+25ms    Project settings, rules, LLM client ready.
+
+T+25ms    PARALLEL LAUNCH:
+          ├── tools::Registry::new() → register core tools (lazy others)
+          ├── permissions::Engine::new() → load permission rules
+          ├── skills::SkillRegistry::load() → scan skill directories
+          ├── agents::AgentRegistry::load() → scan agent definitions
+          ├── mcp::Manager::connect_all() → spawn + handshake MCP servers
+          └── memory::MemoryBridge::new() → connect to memory service
+
+T+25ms    Tool registry, permissions, skills, agents ready (CPU-bound, fast).
+
+T+170ms   MCP servers connected (I/O-bound, slowest path).
+          Memory bridge connected or timed out (3s max).
+
+T+170ms   Engine constructed. All subsystems attached.
+          System prompt assembled.
+          TUI initialized. First frame rendered.
+          User sees the prompt input cursor.</code></pre>
+<p>The total startup time is dominated by MCP server connection (the
+slowest I/O operation). Without MCP servers configured, startup
+completes in under 50ms. With MCP servers, the parallel prefetch keeps
+it under 200ms. Both numbers are below the 250ms threshold where users
+perceive "instant" response.</p>
+<h3 id="performance-budget">Performance Budget</h3>
+<p>A startup performance budget allocates time to each subsystem and
+flags violations:</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Budget</th>
+<th>Actual</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CLI parse</td>
+<td>2ms</td>
+<td>0.8ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>Logging init</td>
+<td>5ms</td>
+<td>2.1ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>Provider detection</td>
+<td>5ms</td>
+<td>1.2ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>Config loading</td>
+<td>20ms</td>
+<td>12.4ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>Feature flags</td>
+<td>2ms</td>
+<td>0.3ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>Session store</td>
+<td>20ms</td>
+<td>15.2ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>LLM client</td>
+<td>10ms</td>
+<td>3.1ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>Tool registry</td>
+<td>5ms</td>
+<td>0.4ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>MCP connection</td>
+<td>200ms</td>
+<td>142.8ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td>Memory bridge</td>
+<td>100ms</td>
+<td>47.3ms</td>
+<td>Within budget</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>350ms</strong></td>
+<td><strong>239.8ms</strong></td>
+<td><strong>Within budget</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The budget is reviewed quarterly. When a subsystem exceeds its
+allocation, the startup profiler's per-checkpoint timing identifies the
+regression, and the fix typically involves moving the slow work to a
+background task or behind a lazy initialization barrier.</p>
+<hr />
+<h2 id="428-lessons-for-practitioners">42.8 Lessons for
+Practitioners</h2>
+<p>Building a fast CLI agent startup requires discipline across the
+entire codebase, not just in the initialization sequence. Here are the
+patterns that matter most:</p>
+<p><strong>Measure before optimizing.</strong> The startup profiler
+costs nothing when disabled and reveals everything when enabled. Add
+checkpoints to every initialization step from day one.</p>
+<p><strong>Parallel by default, sequential by necessity.</strong> Every
+initialization step should start as a parallel task. Only make it
+sequential when you discover a data dependency that requires it.</p>
+<p><strong>Timeout everything external.</strong> MCP servers, memory
+services, MDM endpoints — any external dependency gets a timeout and a
+degraded fallback. The agent must start even when the world is
+broken.</p>
+<p><strong>Lazy is a feature, not a shortcut.</strong> Lazy
+initialization is not deferred technical debt. It is a deliberate
+architectural choice that keeps startup fast and memory usage
+proportional to actual feature usage.</p>
+<p><strong>Fast path exits are user respect.</strong> When someone types
+<code>--version</code>, they want a version string, not a warm LLM
+client. Exit as early as possible for commands that do not need the full
+agent.</p>
+<p><strong>FPS is a first-class metric.</strong> Render performance
+affects perceived agent quality. A 20 FPS target with an adaptive frame
+budget keeps the UI responsive without burning CPU.</p>
+<p><strong>Memory is the long game.</strong> Startup performance gets
+you the first session. Memory management keeps you alive for the
+hundredth turn. Invest in bounded caches, automatic compaction, and heap
+dump infrastructure from the start.</p>
+<p>These techniques are not specific to AI agent CLIs. They apply to any
+interactive command-line tool that users run hundreds of times per day.
+The difference is that a CLI agent has more subsystems to initialize
+(LLM client, tool registry, permission engine, MCP servers, memory
+bridge) than a typical CLI. Each subsystem is another opportunity for a
+startup regression — and another reason to maintain the discipline of
+profiling, parallelism, and lazy loading.</p>
+<p>In the next chapter, we turn from performance to correctness: the
+testing infrastructure that ensures all of these subsystems work
+together reliably across releases, including the VCR system for
+deterministic API replay and the test fixtures that make
+feature-flag-dependent behavior reproducible.</p>
+</div>
+</body>
+</html>
