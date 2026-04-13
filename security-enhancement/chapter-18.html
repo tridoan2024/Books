@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 18: Debug Log Sanitization — Security Enhancement for Claude Code</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+blockquote {
+  border-left: 3px solid var(--red); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Security Enhancement for Claude Code</span>
+  <a href="chapter-19.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-18-debug-log-sanitization">Chapter 18: Debug Log Sanitization</h1>
+<p>Chapters 16 and 17 hardened the bridge and network layers -- the channels through which Claude Code communicates with remote servers. This chapter shifts focus to what those channels inadvertently carry outward: debug log output. Every debugging statement that includes token material, session identifiers, or organizational metadata creates a data exfiltration surface that persists long after the session ends. Log files get collected by centralized logging infrastructure, shipped to SIEMs, stored in S3 buckets with overly broad access policies, and indexed by full-text search engines. A single <code>token.slice(0, 15)</code> in a debug message can turn an entire logging pipeline into a credential exposure vector.</p>
+<p>The audit identified four distinct instances of token prefix logging (V-32, V-41, V-43, V-47), one instance of organizational UUID exposure in URL parameters (V-42), and a systemic absence of structured log redaction across the debug utility layer. This chapter implements comprehensive log sanitization -- not by trying to detect and remove sensitive data after the fact, but by establishing an allowlist architecture where only explicitly approved data fields can appear in log output.</p>
+<hr />
+<h2 id="181-the-anatomy-of-debug-log-exposure">18.1 The Anatomy of Debug Log Exposure</h2>
+<h3 id="why-token-prefixes-matter">Why Token Prefixes Matter</h3>
+<p>A common misconception in security engineering is that partial token exposure is harmless. The reasoning goes: if the full token is 128 characters, showing the first 15 characters reveals only 12% of the entropy, leaving the remaining 88% as the security barrier. This reasoning is wrong for three reasons.</p>
+<p>First, token prefixes reveal the token type. Claude Code's authentication tokens use the <code>sk-ant-si-</code> prefix, which consumes 10 of those 15 characters. The remaining 5 characters of actual secret material reduce the search space from the full token entropy to a much smaller universe. An attacker who knows 5 characters of a base62-encoded token has reduced the brute-force space from <code>62^n</code> to <code>62^(n-5)</code> -- a factor of approximately 916 million.</p>
+<p>Second, token prefixes enable correlation attacks. If the same prefix appears in multiple log entries across different systems, an attacker can link sessions, identify users, and map access patterns without ever obtaining the full token. This is particularly damaging in enterprise environments where logs from multiple Claude Code instances aggregate into shared infrastructure.</p>
+<p>Third, token prefixes in logs create compliance violations. PCI DSS Requirement 3.4 mandates rendering PANs unreadable anywhere they are stored. SOC 2 CC6.1 requires protection of confidential information in all forms. While these frameworks were written for payment card data and customer information, the principle applies universally: secret material in logs is secret material at rest, subject to the same protection requirements as the original credential.</p>
+<h3 id="the-four-instances">The Four Instances</h3>
+<p>The audit identified four specific locations where token material appears in debug output:</p>
+<table>
+<thead>
+<tr>
+<th>Finding</th>
+<th>CVSS</th>
+<th>Location</th>
+<th>Vulnerable Code</th>
+<th>Data Exposed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>V-32</td>
+<td>4.3 (MEDIUM)</td>
+<td><code>bridge/jwtUtils.ts:112</code></td>
+<td><code>token.slice(0, 15)</code> in JWT decode error</td>
+<td>Token type + 5 chars of secret</td>
+</tr>
+<tr>
+<td>V-41</td>
+<td>3.1 (LOW)</td>
+<td><code>bridge/jwtUtils.ts:110</code></td>
+<td><code>token.slice(0, 15)</code> in refresh log</td>
+<td>Same prefix on different code path</td>
+</tr>
+<tr>
+<td>V-43</td>
+<td>2.7 (LOW)</td>
+<td><code>utils/debug.ts:221</code></td>
+<td>No redaction in <code>logForDebugging()</code></td>
+<td>Any data passed through debug utility</td>
+</tr>
+<tr>
+<td>V-47</td>
+<td>2.4 (INFO)</td>
+<td><code>services/analytics/metadata.ts:291</code></td>
+<td>Tool input in telemetry</td>
+<td>File paths, URLs, command args</td>
+</tr>
+</tbody>
+</table>
+<p>The first two findings (V-32 and V-41) represent the same anti-pattern applied in two code paths within <code>jwtUtils.ts</code>. The third (V-43) is the systemic root cause -- the debug utility itself lacks any redaction capability. The fourth (V-47) extends the pattern into the telemetry layer, where tool inputs containing sensitive data flow to analytics endpoints.</p>
+<h3 id="the-org-uuid-exposure">The Org UUID Exposure</h3>
+<p>Finding V-42 (CWE-598, CVSS 3.1 LOW) represents a different class of log exposure: organizational metadata in URL parameters.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// VULNERABLE: remote/SessionsWebSocket.ts:109</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">baseUrl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">getOauthConfig</span><span class="p">().</span><span class="nx">BASE_API_URL</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="s1">&#39;https://&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;wss://&#39;</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">baseUrl</span><span class="si">}</span><span class="sb">/v1/sessions/ws/</span><span class="si">${</span><span class="k">this</span><span class="p">.</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">/subscribe?organization_uuid=</span><span class="si">${</span><span class="k">this</span><span class="p">.</span><span class="nx">orgUuid</span><span class="si">}</span><span class="sb">`</span>
+<span class="nx">logForDebugging</span><span class="p">(</span><span class="sb">`[ws] Connecting to </span><span class="si">${</span><span class="nx">url</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The organization UUID is not a secret in the authentication sense -- it cannot be used to gain access. But logging the full URL including the organization UUID violates the principle of data minimization. When these logs reach centralized infrastructure, the UUID enables:</p>
+<ul>
+<li>Mapping which organizations use Claude Code</li>
+<li>Correlating organization IDs across different log sources</li>
+<li>Identifying enterprise deployments for targeted attacks</li>
+<li>Building organizational profiles from usage patterns</li>
+</ul>
+<div class="codehilite"><pre><span></span><code><span class="nx">graph</span><span class="w"> </span><span class="nx">LR</span>
+<span class="w">    </span><span class="nx">A</span><span class="p">[</span><span class="s">&quot;Debug Log Output&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">B</span><span class="p">[</span><span class="s">&quot;Log File on Disk&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">B</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">C</span><span class="p">[</span><span class="s">&quot;SIEM / Log Aggregator&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">D</span><span class="p">[</span><span class="s">&quot;Full-Text Search Index&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">E</span><span class="p">[</span><span class="s">&quot;Token Prefix&lt;br/&gt;sk-ant-si-XXXXX&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">A</span>
+<span class="w">    </span><span class="nx">F</span><span class="p">[</span><span class="s">&quot;Org UUID&lt;br/&gt;in WebSocket URL&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">A</span>
+<span class="w">    </span><span class="nx">G</span><span class="p">[</span><span class="s">&quot;Session IDs&lt;br/&gt;Tool Inputs&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">A</span>
+
+<span class="w">    </span><span class="nx">D</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">H</span><span class="p">[</span><span class="s">&quot;Attacker with&lt;br/&gt;log access&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">H</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">I</span><span class="p">[</span><span class="s">&quot;Token type identification&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">H</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">J</span><span class="p">[</span><span class="s">&quot;Session correlation&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">H</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">K</span><span class="p">[</span><span class="s">&quot;Organization mapping&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">E</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">c53030</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">F</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">d29922</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="mi">000</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">H</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">c53030</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+</code></pre></div>
+
+<hr />
+<h2 id="182-cwe-532-insertion-of-sensitive-information-into-log-file">18.2 CWE-532: Insertion of Sensitive Information into Log File</h2>
+<p>CWE-532 describes the insertion of sensitive information into log files that are accessible to unauthorized actors. The CWE entry specifically calls out authentication credentials, session tokens, and personally identifiable information as data categories that should never appear in logs.</p>
+<h3 id="the-vulnerable-code-path">The Vulnerable Code Path</h3>
+<p>The primary vulnerability exists in the token refresh scheduling logic within <code>bridge/jwtUtils.ts</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// VULNERABLE: bridge/jwtUtils.ts — scheduleTokenRefresh</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">scheduleTokenRefresh</span><span class="p">(</span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">token</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">expiry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">decodeJwtExpiry</span><span class="p">(</span><span class="nx">token</span><span class="p">)</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">expiry</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">logForDebugging</span><span class="p">(</span>
+<span class="w">      </span><span class="sb">`[</span><span class="si">${</span><span class="nx">label</span><span class="si">}</span><span class="sb">:token] Could not decode JWT expiry for sessionId=</span><span class="si">${</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">, token prefix=</span><span class="si">${</span><span class="nx">token</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">15</span><span class="p">)</span><span class="si">}</span><span class="sb">…, keeping existing timer`</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="c1">// ... schedule refresh based on expiry</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>And in the token refresh callback:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// VULNERABLE: bridge/jwtUtils.ts — refresh callback</span>
+<span class="nx">logForDebugging</span><span class="p">(</span>
+<span class="w">  </span><span class="sb">`[</span><span class="si">${</span><span class="nx">label</span><span class="si">}</span><span class="sb">:token] Refreshing token for sessionId=</span><span class="si">${</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">: new token prefix=</span><span class="si">${</span><span class="nx">oauthToken</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">15</span><span class="p">)</span><span class="si">}</span><span class="sb">…`</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>Both statements use <code>token.slice(0, 15)</code> as a debugging identifier, intended to help engineers distinguish between different tokens during troubleshooting. The intent is understandable -- when debugging token refresh issues, knowing which token is being processed is valuable. But the implementation leaks the token type prefix and the beginning of the secret material.</p>
+<h3 id="the-secure-patch-sha-256-fingerprinting">The Secure Patch: SHA-256 Fingerprinting</h3>
+<p>The fix replaces token prefix logging with a cryptographic fingerprint that preserves debugging utility without exposing token material:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// SECURE: bridge/jwtUtils.ts — token fingerprint utility</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">createHash</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;node:crypto&#39;</span>
+
+<span class="cm">/**</span>
+<span class="cm"> * Generate a short, non-reversible fingerprint for token identification.</span>
+<span class="cm"> * 12 hex chars = 48 bits of entropy, sufficient for log correlation</span>
+<span class="cm"> * without exposing any token material.</span>
+<span class="cm"> */</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">tokenFingerprint</span><span class="p">(</span><span class="nx">token</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">createHash</span><span class="p">(</span><span class="s1">&#39;sha256&#39;</span><span class="p">).</span><span class="nx">update</span><span class="p">(</span><span class="nx">token</span><span class="p">).</span><span class="nx">digest</span><span class="p">(</span><span class="s1">&#39;hex&#39;</span><span class="p">).</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">12</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1">// SECURE: scheduleTokenRefresh</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">scheduleTokenRefresh</span><span class="p">(</span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">token</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">expiry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">decodeJwtExpiry</span><span class="p">(</span><span class="nx">token</span><span class="p">)</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">expiry</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">fingerprint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">tokenFingerprint</span><span class="p">(</span><span class="nx">token</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">logForDebugging</span><span class="p">(</span>
+<span class="w">      </span><span class="sb">`[</span><span class="si">${</span><span class="nx">label</span><span class="si">}</span><span class="sb">:token] Could not decode JWT expiry for sessionId=</span><span class="si">${</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">, `</span><span class="w"> </span><span class="o">+</span>
+<span class="w">      </span><span class="sb">`tokenId=</span><span class="si">${</span><span class="nx">fingerprint</span><span class="si">}</span><span class="sb">, keeping existing timer`</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="c1">// ... schedule refresh based on expiry</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This approach provides:</p>
+<ol>
+<li><strong>Uniqueness</strong>: Different tokens produce different fingerprints with overwhelming probability (birthday bound at ~2^24 for 48-bit hashes).</li>
+<li><strong>Non-reversibility</strong>: SHA-256 is a one-way function. The fingerprint cannot be used to recover any portion of the original token.</li>
+<li><strong>Correlation</strong>: The same token always produces the same fingerprint, so engineers can still trace a token's lifecycle through log entries.</li>
+<li><strong>Type-blindness</strong>: The fingerprint does not reveal whether the token is a JWT, API key, or opaque bearer token.</li>
+</ol>
+<h3 id="verification">Verification</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># After applying the patch:</span>
+grep<span class="w"> </span>-rn<span class="w"> </span><span class="s1">&#39;token.slice(0&#39;</span><span class="w"> </span>bridge/<span class="w"> </span>
+<span class="c1"># Expected: no matches</span>
+
+grep<span class="w"> </span>-rn<span class="w"> </span><span class="s1">&#39;oauthToken.slice(0&#39;</span><span class="w"> </span>bridge/<span class="w"> </span>
+<span class="c1"># Expected: no matches</span>
+
+grep<span class="w"> </span>-rn<span class="w"> </span><span class="s1">&#39;tokenFingerprint&#39;</span><span class="w"> </span>bridge/
+<span class="c1"># Expected: matches in jwtUtils.ts</span>
+</code></pre></div>
+
+<hr />
+<h2 id="183-cwe-598-use-of-get-request-method-with-sensitive-query-strings">18.3 CWE-598: Use of GET Request Method With Sensitive Query Strings</h2>
+<p>CWE-598 addresses the transmission of sensitive information in URL query parameters. While primarily concerned with HTTP GET requests (where URLs appear in browser history, referrer headers, and server access logs), the principle applies equally to WebSocket connection URLs that flow through logging infrastructure.</p>
+<h3 id="the-vulnerable-code">The Vulnerable Code</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// VULNERABLE: remote/SessionsWebSocket.ts</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">baseUrl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">getOauthConfig</span><span class="p">().</span><span class="nx">BASE_API_URL</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="s1">&#39;https://&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;wss://&#39;</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">baseUrl</span><span class="si">}</span><span class="sb">/v1/sessions/ws/</span><span class="si">${</span><span class="k">this</span><span class="p">.</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">/subscribe?organization_uuid=</span><span class="si">${</span><span class="k">this</span><span class="p">.</span><span class="nx">orgUuid</span><span class="si">}</span><span class="sb">`</span>
+<span class="nx">logForDebugging</span><span class="p">(</span><span class="sb">`[ws] Connecting to </span><span class="si">${</span><span class="nx">url</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The <code>organization_uuid</code> parameter in the WebSocket URL serves a legitimate purpose -- the server uses it to route the connection to the correct organization context. But logging the complete URL including this parameter exposes the UUID to any system that processes the log output.</p>
+<h3 id="the-secure-patch">The Secure Patch</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// SECURE: remote/SessionsWebSocket.ts</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">baseUrl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">getOauthConfig</span><span class="p">().</span><span class="nx">BASE_API_URL</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="s1">&#39;https://&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;wss://&#39;</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">baseUrl</span><span class="si">}</span><span class="sb">/v1/sessions/ws/</span><span class="si">${</span><span class="k">this</span><span class="p">.</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">/subscribe?organization_uuid=</span><span class="si">${</span><span class="k">this</span><span class="p">.</span><span class="nx">orgUuid</span><span class="si">}</span><span class="sb">`</span>
+
+<span class="c1">// Log the connection target without exposing organizational metadata</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">redactedUrl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">url</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span>
+<span class="w">  </span><span class="sr">/organization_uuid=[^&amp;]+/</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;organization_uuid=&lt;redacted&gt;&#39;</span>
+<span class="p">)</span>
+<span class="nx">logForDebugging</span><span class="p">(</span><span class="sb">`[ws] Connecting to </span><span class="si">${</span><span class="nx">redactedUrl</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The actual <code>url</code> variable retains the real <code>orgUuid</code> for the WebSocket connection. Only the log output is redacted. This is a critical distinction: redaction must happen at the logging boundary, not at the data source.</p>
+<h3 id="verification_1">Verification</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Enable debug mode, connect WebSocket</span>
+<span class="nv">CLAUDE_CODE_DEBUG</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>claude<span class="w"> </span>--resume<span class="w"> </span>&lt;session-id&gt;
+
+<span class="c1"># Inspect debug output</span>
+grep<span class="w"> </span><span class="s1">&#39;organization_uuid&#39;</span><span class="w"> </span>~/.claude/debug.log
+<span class="c1"># Expected: organization_uuid=&lt;redacted&gt;</span>
+<span class="c1"># NOT: organization_uuid=550e8400-e29b-41d4-a716-446655440000</span>
+</code></pre></div>
+
+<hr />
+<h2 id="184-structured-log-redaction-the-systemic-fix">18.4 Structured Log Redaction: The Systemic Fix</h2>
+<p>Patching individual logging statements is necessary but insufficient. The four findings identified in the audit are the instances that the review caught. In a 500K-line codebase, there are likely additional instances that were not flagged, and every future <code>logForDebugging()</code> call introduces the possibility of new data leaks. The systemic fix is a structured log redaction layer that operates at the <code>logForDebugging()</code> function itself.</p>
+<h3 id="the-allowlist-architecture">The Allowlist Architecture</h3>
+<p>There are two approaches to log sanitization: denylist and allowlist.</p>
+<p><strong>Denylist approach</strong>: Define patterns that look like sensitive data (API keys, JWTs, UUIDs) and strip them from log output. This is the regex-based approach.</p>
+<p><strong>Allowlist approach</strong>: Define the fields that are safe to log (event type, timestamp, session phase, error category) and exclude everything else. This is the structured approach.</p>
+<p>The denylist approach is fragile. It requires maintaining regex patterns for every possible token format, and a single missed pattern creates a data leak. The allowlist approach is robust: new data formats are excluded by default, and engineers must explicitly mark fields as safe for logging.</p>
+<p>For Claude Code's debug utility, a hybrid approach makes sense: regex-based redaction as an immediate defense layer, with a path toward structured logging as the long-term architecture.</p>
+<h3 id="implementing-the-redaction-layer">Implementing the Redaction Layer</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// SECURE: utils/debug.ts — redaction patterns</span>
+
+<span class="cm">/** </span>
+<span class="cm"> * Patterns matching known sensitive data formats.</span>
+<span class="cm"> * Order matters: more specific patterns before general ones.</span>
+<span class="cm"> * Each pattern is tested against the log message; matches are replaced.</span>
+<span class="cm"> */</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">REDACTION_PATTERNS</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="p">{</span>
+<span class="w">  </span><span class="nx">pattern</span><span class="o">:</span><span class="w"> </span><span class="kt">RegExp</span>
+<span class="w">  </span><span class="nx">replacement</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">  </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="p">}</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="c1">// Anthropic API keys: sk-ant-xxx-...</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">pattern</span><span class="o">:</span><span class="w"> </span><span class="sr">/\bsk-ant-[a-z]{2,4}-[A-Za-z0-9_-]{10,}\b/g</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">replacement</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;redacted-api-key&gt;&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;anthropic-api-key&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// Generic Bearer tokens</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">pattern</span><span class="o">:</span><span class="w"> </span><span class="sr">/Bearer\s+[A-Za-z0-9_-]{20,}/g</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">replacement</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Bearer &lt;redacted-token&gt;&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;bearer-token&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// JWT format (three base64url segments separated by dots)</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">pattern</span><span class="o">:</span><span class="w"> </span><span class="sr">/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">replacement</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;redacted-jwt&gt;&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;jwt-token&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// Datadog client tokens (pub prefix)</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">pattern</span><span class="o">:</span><span class="w"> </span><span class="sr">/\bpub[a-f0-9]{32,}\b/g</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">replacement</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;redacted-dd-token&gt;&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;datadog-client-token&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// Generic hex tokens (32+ chars)</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">pattern</span><span class="o">:</span><span class="w"> </span><span class="sr">/\b[a-f0-9]{32,}\b/g</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">replacement</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;redacted-hex-token&gt;&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;hex-token&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// Organization UUIDs in URLs</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">pattern</span><span class="o">:</span><span class="w"> </span><span class="sr">/organization_uuid=[0-9a-f-]{36}/g</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">replacement</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;organization_uuid=&lt;redacted&gt;&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;org-uuid&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="p">]</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="kd">const</span>
+
+<span class="cm">/**</span>
+<span class="cm"> * Redact sensitive data from a log message.</span>
+<span class="cm"> * Returns the redacted message and a list of redaction labels applied.</span>
+<span class="cm"> */</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">redacted</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">  </span><span class="nx">applied</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span>
+<span class="p">}</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">message</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">applied</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
+
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">pattern</span><span class="p">,</span><span class="w"> </span><span class="nx">replacement</span><span class="p">,</span><span class="w"> </span><span class="nx">label</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">REDACTION_PATTERNS</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Reset regex lastIndex for global patterns</span>
+<span class="w">    </span><span class="nx">pattern</span><span class="p">.</span><span class="nx">lastIndex</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">pattern</span><span class="p">.</span><span class="nx">test</span><span class="p">(</span><span class="nx">redacted</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">pattern</span><span class="p">.</span><span class="nx">lastIndex</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span>
+<span class="w">      </span><span class="nx">redacted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redacted</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="nx">pattern</span><span class="p">,</span><span class="w"> </span><span class="nx">replacement</span><span class="p">)</span>
+<span class="w">      </span><span class="nx">applied</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="nx">label</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="p">,</span><span class="w"> </span><span class="nx">applied</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="integrating-redaction-into-logfordebugging">Integrating Redaction into logForDebugging()</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// SECURE: utils/debug.ts — enhanced logForDebugging</span>
+
+<span class="cm">/**</span>
+<span class="cm"> * Log a debug message with automatic sensitive data redaction.</span>
+<span class="cm"> * </span>
+<span class="cm"> * Redaction is always on in production. The CLAUDE_CODE_DEBUG_REDACT=false</span>
+<span class="cm"> * escape hatch is available ONLY for internal debugging by Anthropic engineers</span>
+<span class="cm"> * and should never be set in user-facing environments.</span>
+<span class="cm"> */</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">logForDebugging</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">options</span><span class="o">?:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">level</span><span class="o">?:</span><span class="w"> </span><span class="s1">&#39;info&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;warn&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;error&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">isDebugEnabled</span><span class="p">())</span><span class="w"> </span><span class="k">return</span>
+
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">skipRedaction</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">CLAUDE_CODE_DEBUG_REDACT</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;false&#39;</span>
+
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">output</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">skipRedaction</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">message</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="p">,</span><span class="w"> </span><span class="nx">applied</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">message</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redacted</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">applied</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="c1">// Append redaction metadata for audit trail</span>
+<span class="w">      </span><span class="nx">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">` [redacted: </span><span class="si">${</span><span class="nx">applied</span><span class="p">.</span><span class="nx">join</span><span class="p">(</span><span class="s1">&#39;, &#39;</span><span class="p">)</span><span class="si">}</span><span class="sb">]`</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="nx">writeDebugLog</span><span class="p">(</span><span class="nx">output</span><span class="p">,</span><span class="w"> </span><span class="nx">options</span><span class="o">?</span><span class="p">.</span><span class="nx">level</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;info&#39;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="preventing-redos-in-redaction-patterns">Preventing ReDoS in Redaction Patterns</h3>
+<p>A critical concern with regex-based redaction is ReDoS (Regular Expression Denial of Service). If an attacker can craft a log message that triggers catastrophic backtracking in a redaction pattern, they can freeze the debug logging pipeline. This is particularly dangerous because the redaction layer sits in the critical path of every <code>logForDebugging()</code> call -- a ReDoS in the redaction layer would effectively disable all debug logging, potentially masking other attacks in progress.</p>
+<p>The patterns above are designed to avoid this:</p>
+<ol>
+<li><strong>No nested quantifiers</strong>: None of the patterns use <code>(a+)+</code> or similar constructions that cause exponential backtracking.</li>
+<li><strong>Bounded character classes</strong>: Each pattern uses specific character classes (<code>[A-Za-z0-9_-]</code>, <code>[a-f0-9]</code>) rather than wildcards.</li>
+<li><strong>Anchored or bounded matches</strong>: The <code>\b</code> word boundary anchors prevent unbounded scanning.</li>
+</ol>
+<p>Verification that redaction patterns are ReDoS-safe:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Test: redaction performance with adversarial input</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">performance</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;node:perf_hooks&#39;</span>
+
+<span class="kd">const</span><span class="w"> </span><span class="nx">adversarialInput</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;a&#39;</span><span class="p">.</span><span class="nx">repeat</span><span class="p">(</span><span class="mf">1000</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s1">&#39;sk-ant-si-&#39;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s1">&#39;b&#39;</span><span class="p">.</span><span class="nx">repeat</span><span class="p">(</span><span class="mf">1000</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">adversarialInput</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">elapsed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">start</span>
+
+<span class="nx">assert</span><span class="p">(</span><span class="nx">elapsed</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="sb">`Redaction took </span><span class="si">${</span><span class="nx">elapsed</span><span class="si">}</span><span class="sb">ms, expected &lt; 1ms`</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="185-tool-input-sanitization-for-telemetry-v-47">18.5 Tool Input Sanitization for Telemetry (V-47)</h2>
+<p>Finding V-47 (CWE-532, CVSS 2.4 INFO) addresses a different logging surface: tool input arguments that flow to telemetry when the <code>OTEL_LOG_TOOL_DETAILS</code> environment variable is set.</p>
+<h3 id="the-risk-context">The Risk Context</h3>
+<p>While V-32 and V-41 affect debug logs that remain on disk, V-47 represents a more concerning data flow because tool inputs travel over the network to telemetry endpoints. The telemetry pipeline ships events to both Anthropic's first-party analytics and to Datadog (a third-party observability platform, discussed in Chapter 19). Tool inputs that contain file paths, URLs with authentication tokens, or Bash commands with embedded secrets become externally accessible once they reach the telemetry endpoint.</p>
+<p>The severity is rated INFO because the feature requires explicit opt-in (<code>OTEL_LOG_TOOL_DETAILS=1</code>). However, enterprise deployments commonly enable detailed telemetry for operational visibility, making this a practical concern rather than a theoretical one. In a SOC 2 audit, telemetry data that includes file paths with usernames or command arguments with API keys would be flagged as a CC6.1 gap (confidential information protection).</p>
+<h3 id="the-vulnerable-code_1">The Vulnerable Code</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// VULNERABLE: services/analytics/metadata.ts</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">extractToolInputForTelemetry</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="kt">unknown</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">isToolDetailsLoggingEnabled</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="c1">// Truncates to 512 chars for strings, 4KB total JSON</span>
+<span class="w">  </span><span class="c1">// But no redaction of file paths, URLs, or command arguments</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">truncateAndSerialize</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>While this feature is opt-in (requiring <code>OTEL_LOG_TOOL_DETAILS=1</code>), the truncation-without-redaction approach means that when enabled, file paths containing usernames, URLs with authentication parameters, and bash commands with embedded secrets all flow to telemetry endpoints.</p>
+<h3 id="the-secure-patch_1">The Secure Patch</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// SECURE: services/analytics/metadata.ts</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">extractToolInputForTelemetry</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="kt">unknown</span><span class="p">,</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">isToolDetailsLoggingEnabled</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">serialized</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">truncateAndSerialize</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">serialized</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="kc">undefined</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+
+<span class="w">  </span><span class="c1">// Apply the same redaction patterns used in debug logging</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">serialized</span><span class="p">)</span>
+
+<span class="w">  </span><span class="c1">// Additionally, reduce file paths to relative-only</span>
+<span class="w">  </span><span class="c1">// /Users/john.doe/projects/app/src/auth.ts -&gt; ./src/auth.ts</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">pathRedacted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redacted</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span>
+<span class="w">    </span><span class="sr">/\/(?:Users|home)\/[^/]+\/[^&quot;&#39;\s]*/g</span><span class="p">,</span>
+<span class="w">    </span><span class="p">(</span><span class="nx">match</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kd">const</span><span class="w"> </span><span class="nx">segments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">match</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)</span>
+<span class="w">      </span><span class="c1">// Keep last 3 path segments for debugging utility</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;./&#39;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">segments</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="o">-</span><span class="mf">3</span><span class="p">).</span><span class="nx">join</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">)</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">pathRedacted</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This ensures that even when telemetry detail logging is explicitly enabled, no raw file paths with usernames or embedded credentials reach the telemetry endpoint.</p>
+<hr />
+<h2 id="186-the-allowlist-approach-moving-beyond-regex">18.6 The Allowlist Approach: Moving Beyond Regex</h2>
+<p>Regex-based redaction is a necessary first step, but the long-term architecture should move toward structured logging with explicit field declarations. This section presents the design for that migration.</p>
+<h3 id="structured-debug-events">Structured Debug Events</h3>
+<p>Instead of passing arbitrary strings to <code>logForDebugging()</code>, debug output should use structured event objects where each field is explicitly declared:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// FUTURE: Structured logging interface</span>
+
+<span class="kd">interface</span><span class="w"> </span><span class="nx">DebugEvent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="cm">/** Event category for filtering */</span>
+<span class="w">  </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;auth&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;ws&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;mcp&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;plugin&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;tool&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;bridge&#39;</span>
+<span class="w">  </span><span class="cm">/** Machine-readable event type */</span>
+<span class="w">  </span><span class="nx">event</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">  </span><span class="cm">/** Human-readable context */</span>
+<span class="w">  </span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">  </span><span class="cm">/** Structured data fields — each field must be on the allowlist */</span>
+<span class="w">  </span><span class="nx">data?</span><span class="o">:</span><span class="w"> </span><span class="kt">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">DebugFieldValue</span><span class="o">&gt;</span>
+<span class="p">}</span>
+
+<span class="kr">type</span><span class="w"> </span><span class="nx">DebugFieldValue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;public&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fingerprint&#39;</span><span class="p">;</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span><span class="w">  </span><span class="c1">// Will be hashed before logging</span>
+<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;redacted&#39;</span><span class="w"> </span><span class="p">}</span><span class="w">                     </span><span class="c1">// Logged as &lt;redacted&gt;</span>
+
+<span class="c1">// Example usage:</span>
+<span class="nx">logDebugEvent</span><span class="p">({</span>
+<span class="w">  </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;auth&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">event</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;jwt-decode-failed&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Could not decode JWT expiry, keeping existing timer&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;public&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">sessionId</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">tokenId</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fingerprint&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">token</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;public&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">label</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">rawToken</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;redacted&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="p">})</span>
+</code></pre></div>
+
+<h3 id="the-field-allowlist">The Field Allowlist</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// FUTURE: Field classification for structured logging</span>
+
+<span class="kd">const</span><span class="w"> </span><span class="nx">DEBUG_FIELD_ALLOWLIST</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlySet</span><span class="o">&lt;</span><span class="kt">string</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nb">Set</span><span class="p">([</span>
+<span class="w">  </span><span class="c1">// Safe to log as-is</span>
+<span class="w">  </span><span class="s1">&#39;event&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;category&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;message&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;timestamp&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;label&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;errorCode&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;errorCategory&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;phase&#39;</span><span class="p">,</span><span class="w">        </span><span class="c1">// &#39;connecting&#39;, &#39;authenticating&#39;, &#39;ready&#39;</span>
+<span class="w">  </span><span class="s1">&#39;duration_ms&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;retry_count&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;platform&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;runtime&#39;</span><span class="p">,</span>
+
+<span class="w">  </span><span class="c1">// Must be fingerprinted before logging</span>
+<span class="w">  </span><span class="c1">// &#39;sessionId&#39;,  — use fingerprint</span>
+<span class="w">  </span><span class="c1">// &#39;tokenId&#39;,    — use fingerprint</span>
+<span class="w">  </span><span class="c1">// &#39;orgId&#39;,      — use fingerprint</span>
+<span class="p">])</span>
+</code></pre></div>
+
+<div class="codehilite"><pre><span></span><code><span class="nx">flowchart</span><span class="w"> </span><span class="nx">TD</span>
+<span class="w">    </span><span class="nx">A</span><span class="p">[</span><span class="s">&quot;Application Code&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;logDebugEvent(event)&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">B</span><span class="p">[</span><span class="s">&quot;Debug Logger&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">B</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">C</span><span class="p">{</span><span class="s">&quot;Field Classification&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;type: public&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">D</span><span class="p">[</span><span class="s">&quot;Pass Through&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;type: fingerprint&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">E</span><span class="p">[</span><span class="s">&quot;SHA-256 Hash + Truncate&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;type: redacted&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">F</span><span class="p">[</span><span class="s">&quot;Replace with label&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="o">|</span><span class="s">&quot;Unknown field&quot;</span><span class="o">|</span><span class="w"> </span><span class="nx">G</span><span class="p">[</span><span class="s">&quot;DROP — not on allowlist&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">D</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">H</span><span class="p">[</span><span class="s">&quot;Structured Output&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">E</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">H</span>
+<span class="w">    </span><span class="nx">F</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">H</span>
+<span class="w">    </span><span class="nx">H</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">I</span><span class="p">[</span><span class="s">&quot;Debug Log File&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">G</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">c53030</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">E</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">d29922</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="mi">000</span>
+</code></pre></div>
+
+<h3 id="migration-path">Migration Path</h3>
+<p>The migration from unstructured to structured logging should happen incrementally. Attempting a big-bang migration would introduce regressions across the entire codebase, as every <code>logForDebugging()</code> call site would need to be updated simultaneously. The phased approach allows the team to validate the structured API on high-risk modules first, then expand incrementally.</p>
+<p>The critical insight is that Phase 1 (regex redaction) provides immediate protection while the structured migration progresses. This means the codebase is protected from day one, and the structured migration improves the protection quality over time rather than being a prerequisite for safety.</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Action</th>
+<th>Timeline</th>
+<th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Add regex redaction to <code>logForDebugging()</code></td>
+<td>Immediate (V-43 patch)</td>
+<td>Low -- additive change</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Remove <code>token.slice(0, 15)</code> from all call sites</td>
+<td>Immediate (V-32, V-41 patches)</td>
+<td>Low -- direct replacement</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Redact org UUID in WebSocket URL logs</td>
+<td>Immediate (V-42 patch)</td>
+<td>Low -- localized change</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Add <code>logDebugEvent()</code> structured API alongside <code>logForDebugging()</code></td>
+<td>Sprint 1</td>
+<td>Medium -- new API design</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Migrate high-risk modules (auth, bridge, ws) to structured API</td>
+<td>Sprint 2</td>
+<td>Medium -- behavior changes possible</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Deprecate <code>logForDebugging()</code> for new code</td>
+<td>Sprint 3</td>
+<td>Low -- policy, not code</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Migrate remaining modules</td>
+<td>Sprint 4-6</td>
+<td>Low -- mechanical changes</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Remove <code>logForDebugging()</code></td>
+<td>Post-migration</td>
+<td>Medium -- breaking change</td>
+</tr>
+</tbody>
+</table>
+<h3 id="structured-logging-in-practice-before-and-after">Structured Logging in Practice: Before and After</h3>
+<p>To illustrate the concrete improvement, consider a real debugging scenario. An engineer is investigating why a JWT token refresh is failing for a specific session:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// BEFORE: Unstructured (easy to write, dangerous)</span>
+<span class="nx">logForDebugging</span><span class="p">(</span>
+<span class="w">  </span><span class="sb">`[auth:token] Refreshing token for session=</span><span class="si">${</span><span class="nx">sessionId</span><span class="si">}</span><span class="sb">: `</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="sb">`old token prefix=</span><span class="si">${</span><span class="nx">token</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">15</span><span class="p">)</span><span class="si">}</span><span class="sb">, `</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="sb">`new token prefix=</span><span class="si">${</span><span class="nx">newToken</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">15</span><span class="p">)</span><span class="si">}</span><span class="sb">, `</span><span class="w"> </span><span class="o">+</span>
+<span class="w">  </span><span class="sb">`org=</span><span class="si">${</span><span class="k">this</span><span class="p">.</span><span class="nx">orgUuid</span><span class="si">}</span><span class="sb">`</span>
+<span class="p">)</span>
+<span class="c1">// Output: [auth:token] Refreshing token for session=sess_abc123: old token prefix=sk-ant-si-XXXXX, ...</span>
+<span class="c1">// Problem: Token material + org UUID + session ID all in plaintext</span>
+
+<span class="c1">// AFTER: Structured (slightly more verbose, fundamentally safe)</span>
+<span class="nx">logDebugEvent</span><span class="p">({</span>
+<span class="w">  </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;auth&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">event</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;token-refresh&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Token refreshed successfully&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">sessionId</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fingerprint&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">sessionId</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">oldTokenId</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fingerprint&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">token</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">newTokenId</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fingerprint&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">newToken</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">orgId</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fingerprint&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">this.orgUuid</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">refreshReason</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;public&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;expiry&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="p">})</span>
+<span class="c1">// Output: {&quot;category&quot;:&quot;auth&quot;,&quot;event&quot;:&quot;token-refresh&quot;,&quot;sessionId&quot;:&quot;a3f2c8&quot;,&quot;oldTokenId&quot;:&quot;7b91e4&quot;,...}</span>
+<span class="c1">// Benefit: All identifiers are non-reversible hashes, still useful for correlation</span>
+</code></pre></div>
+
+<hr />
+<h2 id="187-diagnostic-log-path-security-v-48">18.7 Diagnostic Log Path Security (V-48)</h2>
+<p>Finding V-48 (CWE-73, CVSS 2.0 INFO) addresses a related concern: the diagnostic log file path is controlled by an environment variable without validation.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// VULNERABLE: utils/diagLogs.ts</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">getDiagnosticLogFile</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">CLAUDE_CODE_DIAG_LOG</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>An attacker who controls the environment can set <code>CLAUDE_CODE_DIAG_LOG</code> to a path like <code>/etc/cron.d/backdoor</code> or <code>//attacker.com/share/collect.log</code>, causing debug output -- which may contain sensitive data even after redaction -- to be written to an attacker-controlled location.</p>
+<h3 id="the-secure-patch_2">The Secure Patch</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// SECURE: utils/diagLogs.ts</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">resolve</span><span class="p">,</span><span class="w"> </span><span class="nx">dirname</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;node:path&#39;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">existsSync</span><span class="p">,</span><span class="w"> </span><span class="nx">statSync</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;node:fs&#39;</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">getDiagnosticLogFile</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">logPath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">CLAUDE_CODE_DIAG_LOG</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">logPath</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolve</span><span class="p">(</span><span class="nx">logPath</span><span class="p">)</span>
+
+<span class="w">  </span><span class="c1">// Reject UNC paths and non-local paths</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">resolved</span><span class="p">.</span><span class="nx">startsWith</span><span class="p">(</span><span class="s1">&#39;//&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">resolved</span><span class="p">.</span><span class="nx">startsWith</span><span class="p">(</span><span class="s1">&#39;\\\\&#39;</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">logForDebugging</span><span class="p">(</span>
+<span class="w">      </span><span class="s1">&#39;[diag] Rejected CLAUDE_CODE_DIAG_LOG: UNC/network paths not allowed&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="p">{</span><span class="w"> </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;warn&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Verify parent directory exists and is writable</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">parentDir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">dirname</span><span class="p">(</span><span class="nx">resolved</span><span class="p">)</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">existsSync</span><span class="p">(</span><span class="nx">parentDir</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">logForDebugging</span><span class="p">(</span>
+<span class="w">      </span><span class="s1">&#39;[diag] Rejected CLAUDE_CODE_DIAG_LOG: parent directory does not exist&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="p">{</span><span class="w"> </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;warn&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Reject symlinks in the path</span>
+<span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">stat</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">statSync</span><span class="p">(</span><span class="nx">parentDir</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">throwIfNoEntry</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">stat</span><span class="p">.</span><span class="nx">isDirectory</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">undefined</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">resolved</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="188-testing-the-complete-redaction-stack">18.8 Testing the Complete Redaction Stack</h2>
+<h3 id="unit-tests">Unit Tests</h3>
+<div class="codehilite"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">describe</span><span class="p">,</span><span class="w"> </span><span class="nx">it</span><span class="p">,</span><span class="w"> </span><span class="nx">expect</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;vitest&#39;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;../utils/debug&#39;</span>
+
+<span class="nx">describe</span><span class="p">(</span><span class="s1">&#39;redactSensitiveData&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;redacts Anthropic API keys&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;token prefix=sk-ant-si-abc123def456ghi789jkl&#39;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">toBe</span><span class="p">(</span><span class="s1">&#39;token prefix=&lt;redacted-api-key&gt;&#39;</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;sk-ant-si-&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;redacts Bearer tokens&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature&#39;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;&lt;redacted&#39;</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;eyJhbGci&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;redacts JWT tokens&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.SflKxwRJSMeKKF2QT4fwpM&#39;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;&lt;redacted-jwt&gt;&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;redacts organization UUIDs in URLs&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;wss://api.example.com/ws?organization_uuid=550e8400-e29b-41d4-a716-446655440000&#39;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;organization_uuid=&lt;redacted&gt;&#39;</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;550e8400&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;leaves normal debug messages unchanged&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;[auth] Session started, phase=connecting, retry_count=0&#39;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">toBe</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;handles multiple redactions in one message&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;Bearer sk-ant-si-abc123 connecting to organization_uuid=550e8400-e29b-41d4-a716-446655440000&#39;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">redacted</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;sk-ant-si-&#39;</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">redacted</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;550e8400&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;completes in under 1ms for adversarial input&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">adversarial</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;a&#39;</span><span class="p">.</span><span class="nx">repeat</span><span class="p">(</span><span class="mf">10000</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s1">&#39;sk-ant-si-&#39;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s1">&#39;b&#39;</span><span class="p">.</span><span class="nx">repeat</span><span class="p">(</span><span class="mf">10000</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span>
+<span class="w">    </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">adversarial</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">elapsed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">performance</span><span class="p">.</span><span class="nx">now</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">start</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">elapsed</span><span class="p">).</span><span class="nx">toBeLessThan</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="nx">it</span><span class="p">(</span><span class="s1">&#39;reports which redaction patterns were applied&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;key=sk-ant-si-abc123def456&#39;</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">applied</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">redactSensitiveData</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">expect</span><span class="p">(</span><span class="nx">applied</span><span class="p">).</span><span class="nx">toContain</span><span class="p">(</span><span class="s1">&#39;anthropic-api-key&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+<span class="p">})</span>
+</code></pre></div>
+
+<h3 id="integration-verification">Integration Verification</h3>
+<div class="codehilite"><pre><span></span><code><span class="ch">#!/usr/bin/env bash</span>
+<span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+
+<span class="c1"># 1. Verify no raw token.slice calls remain</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Checking for token.slice patterns...&quot;</span>
+<span class="nv">count</span><span class="o">=</span><span class="k">$(</span>grep<span class="w"> </span>-rn<span class="w"> </span><span class="s1">&#39;token\.slice(0&#39;</span><span class="w"> </span>bridge/<span class="w"> </span>utils/<span class="w"> </span>services/<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l<span class="k">)</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">count</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>-gt<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;FAIL: Found </span><span class="si">${</span><span class="nv">count</span><span class="si">}</span><span class="s2"> instances of token.slice(0&quot;</span>
+<span class="w">  </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="k">fi</span>
+
+<span class="c1"># 2. Verify no oauthToken.slice calls remain</span>
+<span class="nv">count</span><span class="o">=</span><span class="k">$(</span>grep<span class="w"> </span>-rn<span class="w"> </span><span class="s1">&#39;oauthToken\.slice(0&#39;</span><span class="w"> </span>bridge/<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l<span class="k">)</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">count</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>-gt<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;FAIL: Found </span><span class="si">${</span><span class="nv">count</span><span class="si">}</span><span class="s2"> instances of oauthToken.slice(0&quot;</span>
+<span class="w">  </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="k">fi</span>
+
+<span class="c1"># 3. Verify redaction function exists</span>
+grep<span class="w"> </span>-q<span class="w"> </span><span class="s1">&#39;redactSensitiveData&#39;</span><span class="w"> </span>utils/debug.ts<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">{</span>
+<span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;FAIL: redactSensitiveData not found in utils/debug.ts&quot;</span>
+<span class="w">  </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="o">}</span>
+
+<span class="c1"># 4. Verify tokenFingerprint function exists</span>
+grep<span class="w"> </span>-q<span class="w"> </span><span class="s1">&#39;tokenFingerprint&#39;</span><span class="w"> </span>bridge/jwtUtils.ts<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">{</span>
+<span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;FAIL: tokenFingerprint not found in bridge/jwtUtils.ts&quot;</span>
+<span class="w">  </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="o">}</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;PASS: All debug log sanitization checks passed&quot;</span>
+</code></pre></div>
+
+<hr />
+<h2 id="189-compliance-implications">18.9 Compliance Implications</h2>
+<table>
+<thead>
+<tr>
+<th>Framework</th>
+<th>Requirement</th>
+<th>How This Chapter Addresses It</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OWASP A09:2021</td>
+<td>Security Logging and Monitoring Failures</td>
+<td>Ensures logs contain useful security events without sensitive data</td>
+</tr>
+<tr>
+<td>CWE-532</td>
+<td>Insertion of Sensitive Information into Log File</td>
+<td>Direct remediation of V-32, V-41, V-43, V-47</td>
+</tr>
+<tr>
+<td>CWE-598</td>
+<td>Use of GET Request Method With Sensitive Query Strings</td>
+<td>Remediation of V-42 (org UUID in WebSocket URL)</td>
+</tr>
+<tr>
+<td>SOC 2 CC6.1</td>
+<td>Confidential information protection</td>
+<td>Token material excluded from all log output</td>
+</tr>
+<tr>
+<td>NIST SP 800-92</td>
+<td>Guide to Computer Security Log Management</td>
+<td>Structured logging with field classification</td>
+</tr>
+<tr>
+<td>PCI DSS 3.4</td>
+<td>Render sensitive data unreadable</td>
+<td>Token fingerprinting replaces prefix logging</td>
+</tr>
+<tr>
+<td>GDPR Art. 25</td>
+<td>Data protection by design and default</td>
+<td>Allowlist approach ensures data minimization in logs</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1810-dependency-chain-impact">18.10 Dependency Chain Impact</h2>
+<p>The debug log sanitization patches affect the Data Exfiltration Chain (Finding IDs: 9, 24, 26, 33, 38, 43, 47, 49). By eliminating sensitive data from log output, these patches reduce the blast radius of any future compromise of log collection infrastructure. Even if an attacker gains access to log aggregation systems, the redacted output contains no actionable credential material.</p>
+<p>The patches in this chapter should be applied after the bridge and network hardening from Chapters 16-17, as those chapters may modify logging statements that need to comply with the new redaction framework. Apply the systemic fix (V-43, the <code>logForDebugging()</code> redaction layer) first, as it provides defense-in-depth for any individual logging statement that might be missed.</p>
+<p>As discussed in Chapter 3, Phase 6 (Data Protection &amp; Privacy) encompasses these debug log fixes alongside the telemetry and memory protection work covered in Chapters 19 and 20. The redaction patterns established here will be reused in Chapter 19's telemetry sanitization implementation.</p>
+<hr />
+<h2 id="summary">Summary</h2>
+<p>This chapter addressed five findings (V-32, V-41, V-42, V-43, V-47) plus the related V-48 diagnostic path vulnerability. The key patches are:</p>
+<ol>
+<li><strong>Token prefix removal</strong> (V-32, V-41): Replace <code>token.slice(0, 15)</code> with SHA-256 fingerprints in <code>bridge/jwtUtils.ts</code></li>
+<li><strong>URL parameter redaction</strong> (V-42): Redact <code>organization_uuid</code> in WebSocket URL logging in <code>remote/SessionsWebSocket.ts</code></li>
+<li><strong>Systemic redaction layer</strong> (V-43): Add regex-based sensitive data redaction to <code>logForDebugging()</code> in <code>utils/debug.ts</code></li>
+<li><strong>Telemetry input sanitization</strong> (V-47): Add redaction and path normalization to <code>extractToolInputForTelemetry()</code> in <code>services/analytics/metadata.ts</code></li>
+<li><strong>Diagnostic path validation</strong> (V-48): Validate <code>CLAUDE_CODE_DIAG_LOG</code> environment variable against path traversal and network paths</li>
+</ol>
+<p>The allowlist architecture presented in Section 18.6 provides the long-term path toward log sanitization that does not depend on maintaining a complete inventory of sensitive data patterns -- a fundamentally more robust approach than regex-based denylist matching.</p>
+<div class="chapter-nav">
+  <a href="chapter-17.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-19.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

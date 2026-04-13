@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 2: Vulnerability Dependency Chain Analysis — Security Enhancement for Claude Code</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+blockquote {
+  border-left: 3px solid var(--red); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Security Enhancement for Claude Code</span>
+  <a href="chapter-03.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-2-vulnerability-dependency-chain-analysis">Chapter 2: Vulnerability Dependency Chain Analysis</h1>
+<p>Individual vulnerabilities are dangerous. Vulnerability chains are catastrophic. A MEDIUM-severity path traversal in ZIP extraction becomes a full code execution primitive when combined with an unsigned plugin download. A LOW-severity token override via environment variable becomes persistent unauthorized access when combined with a JWT that is decoded but never signature-verified.</p>
+<p>This chapter dissects the seven dependency chains identified in Claude Code's vulnerability catalog. Each chain represents a group of findings that interact through shared code paths, shared data flows, or shared trust assumptions. Understanding these chains is prerequisite to the implementation roadmap in Chapter 3 -- you cannot sequence fixes correctly without knowing which vulnerabilities are load-bearing for others.</p>
+<h2 id="21-what-is-a-dependency-chain">2.1 What Is a Dependency Chain?</h2>
+<p>A vulnerability dependency chain exists when exploiting one finding either enables or amplifies another. The relationship can be:</p>
+<ul>
+<li><strong>Sequential:</strong> Finding A must be exploited before Finding B becomes reachable (e.g., unsigned plugin download enables path traversal in extraction)</li>
+<li><strong>Amplifying:</strong> Finding A increases the blast radius of Finding B (e.g., plaintext credential storage makes token theft trivially easy once filesystem access is gained)</li>
+<li><strong>Compensating:</strong> Fixing Finding A partially mitigates Finding B even without a direct patch (e.g., process isolation for subagents limits damage from missing MCP sandboxing)</li>
+</ul>
+<p>The seven chains span the entire vulnerability catalog. Some findings appear in multiple chains -- these are the highest-leverage fix targets. Others are chain-terminal findings that represent the final impact of an exploitation path.</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">C1</span><span class="p">[</span><span class="s2">&quot;Plugin Supply Chain&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F1</span><span class="p">[</span><span class="s2">&quot;#1 CRIT 9.1&lt;br/&gt;No Plugin Signing&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F2</span><span class="p">[</span><span class="s2">&quot;#2 CRIT 8.1&lt;br/&gt;No Download Verify&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F4</span><span class="p">[</span><span class="s2">&quot;#4 HIGH 7.5&lt;br/&gt;ZIP Symlink Traversal&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F15</span><span class="p">[</span><span class="s2">&quot;#15 MED 6.1&lt;br/&gt;ZIP Path Traversal&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F25</span><span class="p">[</span><span class="s2">&quot;#25 MED 5.3&lt;br/&gt;ZIP Bomb Gap&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F29</span><span class="p">[</span><span class="s2">&quot;#29 MED 4.8&lt;br/&gt;Short Git SHA&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">C2</span><span class="p">[</span><span class="s2">&quot;Credential Storage&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F7</span><span class="p">[</span><span class="s2">&quot;#7 HIGH 7.1&lt;br/&gt;Plaintext Non-macOS&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F8</span><span class="p">[</span><span class="s2">&quot;#8 HIGH 7.1&lt;br/&gt;Plaintext Fallback&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F10</span><span class="p">[</span><span class="s2">&quot;#10 HIGH 6.5&lt;br/&gt;Plaintext Linux&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F20</span><span class="p">[</span><span class="s2">&quot;#20 MED 5.5&lt;br/&gt;Keychain Injection&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F30</span><span class="p">[</span><span class="s2">&quot;#30 MED 4.7&lt;br/&gt;Credential TOCTOU&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">C3</span><span class="p">[</span><span class="s2">&quot;Auth Token Lifecycle&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F5</span><span class="p">[</span><span class="s2">&quot;#5 HIGH 7.5&lt;br/&gt;JWT No Verify&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F13</span><span class="p">[</span><span class="s2">&quot;#13 MED 6.5&lt;br/&gt;Env Token No Expire&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F16</span><span class="p">[</span><span class="s2">&quot;#16 MED 5.9&lt;br/&gt;JWT Timer Manipulation&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F32</span><span class="p">[</span><span class="s2">&quot;#32 MED 4.3&lt;br/&gt;Token in Debug Log&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">F34</span><span class="p">[</span><span class="s2">&quot;#34 LOW 4.3&lt;br/&gt;Device Token Override&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">F1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F4</span>
+<span class="w">    </span><span class="n">F2</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F15</span>
+<span class="w">    </span><span class="n">F1</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F25</span>
+<span class="w">    </span><span class="n">F7</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F30</span>
+<span class="w">    </span><span class="n">F5</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F16</span>
+<span class="w">    </span><span class="n">F5</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F13</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F1</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#f85149,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F2</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#f85149,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F4</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#db6d28,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F7</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#db6d28,color:#fff</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">F5</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#db6d28,color:#fff</span>
+</code></pre></div>
+
+<h2 id="22-chain-1-plugin-supply-chain">2.2 Chain 1: Plugin Supply Chain</h2>
+<p><strong>Severity:</strong> CRITICAL
+<strong>Findings:</strong> #1 (CVSS 9.1), #2 (CVSS 8.1), #4 (CVSS 7.5), #15 (CVSS 6.1), #25 (CVSS 5.3), #29 (CVSS 4.8)
+<strong>Affected Files:</strong> <code>plugins/</code>, <code>utils/plugins/pluginLoader.ts</code>, <code>utils/plugins/marketplaceManager.ts</code>, <code>utils/plugins/zipCache.ts</code>, <code>utils/dxt/zip.ts</code>, <code>utils/plugins/pluginVersioning.ts</code>
+<strong>Blast Radius:</strong> Full code execution on every developer machine that installs marketplace plugins</p>
+<p>This is the highest-risk chain in the codebase. It flows from marketplace download through extraction to execution with no authenticity verification at any point.</p>
+<h3 id="the-attack-path">The Attack Path</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Attacker</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CDN</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Marketplace</span><span class="w"> </span><span class="n">CDN</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CLI</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Claude</span><span class="w"> </span><span class="n">Code</span><span class="w"> </span><span class="n">CLI</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Developer</span><span class="w"> </span><span class="n">Filesystem</span>
+
+<span class="w">    </span><span class="n">Attacker</span><span class="o">-&gt;&gt;</span><span class="n">CDN</span><span class="p">:</span><span class="w"> </span><span class="n">Compromise</span><span class="w"> </span><span class="n">marketplace</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="n">MITM</span><span class="w"> </span><span class="n">download</span>
+<span class="w">    </span><span class="n">CDN</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">Malicious</span><span class="w"> </span><span class="n">plugin</span><span class="w"> </span><span class="n">ZIP</span><span class="w"> </span><span class="p">(</span><span class="n">valid</span><span class="w"> </span><span class="nb">hash</span><span class="p">,</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">signature</span><span class="p">)</span>
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">SHA</span><span class="o">-</span><span class="mi">256</span><span class="w"> </span><span class="nb">hash</span><span class="w"> </span><span class="n">check</span><span class="w"> </span><span class="n">passes</span><span class="w"> </span><span class="p">(</span><span class="n">computed</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">malicious</span><span class="w"> </span><span class="n">payload</span><span class="p">)</span>
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">FS</span><span class="p">:</span><span class="w"> </span><span class="n">Extract</span><span class="w"> </span><span class="n">ZIP</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CLI</span><span class="p">,</span><span class="n">FS</span><span class="p">:</span><span class="w"> </span><span class="c1">#4: Symlinks followed without boundary check</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CLI</span><span class="p">,</span><span class="n">FS</span><span class="p">:</span><span class="w"> </span><span class="c1">#15: No canonical path resolution</span>
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">Register</span><span class="w"> </span><span class="n">plugin</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="c1">#29: Version uses 12-char git SHA (collision risk)</span>
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">Plugin</span><span class="w"> </span><span class="n">executes</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">full</span><span class="w"> </span><span class="n">process</span><span class="w"> </span><span class="n">privileges</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">Shell</span><span class="w"> </span><span class="n">access</span><span class="p">,</span><span class="w"> </span><span class="n">filesystem</span><span class="w"> </span><span class="n">access</span><span class="p">,</span><span class="w"> </span><span class="n">network</span><span class="w"> </span><span class="n">access</span><span class="p">,</span><span class="w"> </span><span class="n">credential</span><span class="w"> </span><span class="n">access</span>
+</code></pre></div>
+
+<p>The chain has five links:</p>
+<ol>
+<li>
+<p><strong>Root (Findings 1 + 2):</strong> No cryptographic signature verification. The marketplace JSON is fetched via <code>axios.get()</code> with no integrity check. Plugin ZIPs are downloaded without signature verification against a known author key. Hash checks confirm the download was not corrupted but do not verify authenticity.</p>
+</li>
+<li>
+<p><strong>Extraction (Findings 4 + 15):</strong> Even if the ZIP contents were validated for authenticity, the extraction path has its own vulnerabilities. <code>zipCache.ts:292-300</code> follows symlinks without validating that targets remain within the extraction root. The <code>join()</code> path construction does not canonicalize, allowing symlink-based escapes.</p>
+</li>
+<li>
+<p><strong>Validation Gap (Finding 25):</strong> ZIP bomb detection occurs during extraction but not pre-download. There is no pre-flight check on the ZIP size from Content-Length headers. A multi-gigabyte ZIP bomb could consume disk and memory during extraction.</p>
+</li>
+<li>
+<p><strong>Version Weakness (Finding 29):</strong> Plugin versions use 12-character git SHAs. While a 12-char hex prefix provides 48 bits of entropy (making random collisions improbable), targeted collision attacks against shortened hashes are well-documented. With sufficient compute, an attacker could produce a malicious commit with the same 12-character prefix as a legitimate plugin version.</p>
+</li>
+</ol>
+<h3 id="cascade-effect">Cascade Effect</h3>
+<p>Fixing Finding 1 (cryptographic plugin signing) provides the highest cascade reduction in the entire codebase. With signature verification in place:</p>
+<ul>
+<li>Finding 2 is fully mitigated (signature covers the download)</li>
+<li>Finding 4 is partially mitigated (a signed, authentic plugin is unlikely to contain malicious symlinks)</li>
+<li>Finding 15 is partially mitigated (same reasoning)</li>
+<li>Finding 25 is partially mitigated (signed plugins have known expected sizes)</li>
+<li>Finding 29 is partially mitigated (signatures provide stronger version binding than hashes)</li>
+</ul>
+<p>However, Findings 4 and 15 still require independent fixes because the path traversal defense should be robust against any ZIP input, not just malicious plugins. Defense in depth requires that extraction is safe regardless of whether the source is trusted. As we'll detail in Chapter 5, the three-layer defense for ZIP extraction (pre-extraction validation, canonical path resolution, post-write TOCTOU verification) should be implemented even after signing infrastructure is in place.</p>
+<h3 id="implementation-dependency">Implementation Dependency</h3>
+<p>Findings 4 and 15 can be fixed independently with direct patches to <code>zipCache.ts</code>. The fix is a realpath-based boundary check:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Secure extraction with canonical path resolution</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">canonicalTarget</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">realpath</span><span class="p">(</span><span class="nx">targetDir</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">targetPrefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">canonicalTarget</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">sep</span>
+
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">relPath</span><span class="p">,</span><span class="w"> </span><span class="nx">data</span><span class="p">]</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nb">Object</span><span class="p">.</span><span class="nx">entries</span><span class="p">(</span><span class="nx">files</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">fullPath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">join</span><span class="p">(</span><span class="nx">canonicalTarget</span><span class="p">,</span><span class="w"> </span><span class="nx">relPath</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">resolvedPath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolve</span><span class="p">(</span><span class="nx">fullPath</span><span class="p">)</span>
+
+<span class="w">  </span><span class="c1">// Reject any path that escapes the extraction root</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">resolvedPath</span><span class="p">.</span><span class="nx">startsWith</span><span class="p">(</span><span class="nx">targetPrefix</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">resolvedPath</span><span class="w"> </span><span class="o">!==</span><span class="w"> </span><span class="nx">canonicalTarget</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span>
+<span class="w">      </span><span class="sb">`Zip entry escapes target directory: </span><span class="si">${</span><span class="nx">relPath</span><span class="si">}</span><span class="sb"> resolves to </span><span class="si">${</span><span class="nx">resolvedPath</span><span class="si">}</span><span class="sb">`</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Post-write verification catches symlink TOCTOU</span>
+<span class="w">  </span><span class="k">await</span><span class="w"> </span><span class="nx">writeFile</span><span class="p">(</span><span class="nx">fullPath</span><span class="p">,</span><span class="w"> </span><span class="nx">data</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">realWrittenPath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">realpath</span><span class="p">(</span><span class="nx">fullPath</span><span class="p">)</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">realWrittenPath</span><span class="p">.</span><span class="nx">startsWith</span><span class="p">(</span><span class="nx">targetPrefix</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">await</span><span class="w"> </span><span class="nx">unlink</span><span class="p">(</span><span class="nx">fullPath</span><span class="p">).</span><span class="k">catch</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{})</span>
+<span class="w">    </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span>
+<span class="w">      </span><span class="sb">`Zip extraction TOCTOU: </span><span class="si">${</span><span class="nx">relPath</span><span class="si">}</span><span class="sb"> wrote to </span><span class="si">${</span><span class="nx">realWrittenPath</span><span class="si">}</span><span class="sb"> outside target`</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Findings 1 and 2 require architecture changes (ECDSA signing infrastructure, marketplace integration, key management) and are addressed in Chapters 4 and 5.</p>
+<h2 id="23-chain-2-credential-storage">2.3 Chain 2: Credential Storage</h2>
+<p><strong>Severity:</strong> HIGH
+<strong>Findings:</strong> #7 (CVSS 7.1), #8 (CVSS 7.1), #10 (CVSS 6.5), #20 (CVSS 5.5), #30 (CVSS 4.7), #37 (CVSS 3.7), #39 (CVSS 3.3)
+<strong>Affected Files:</strong> <code>utils/secureStorage/index.ts</code>, <code>utils/secureStorage/plainTextStorage.ts</code>, <code>utils/secureStorage/macOsKeychainStorage.ts</code>, <code>utils/secureStorage/fallbackStorage.ts</code>
+<strong>Blast Radius:</strong> OAuth tokens, API keys, and trusted device tokens exposed on all non-macOS platforms and macOS fallback scenarios</p>
+<p>This chain targets the credential lifecycle from storage to retrieval, with every link weakening the protection of the most sensitive data in the system.</p>
+<h3 id="the-storage-decision-tree">The Storage Decision Tree</h3>
+<p>The current credential storage architecture makes a single platform check:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="s">&quot;getSecureStorage()&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">{</span><span class="s">&quot;process.platform === &#39;</span><span class="n">darwin</span><span class="s">&#39;?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="s">&quot;createFallbackStorage(keychain, plaintext)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="s">&quot;plainTextStorage&lt;br/&gt;#7: CWE-256 CVSS 7.1&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">{</span><span class="s">&quot;Keychain write succeeds?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">F</span><span class="p">[</span><span class="s">&quot;macOS Keychain&lt;br/&gt;(secure)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="s">&quot;plainTextStorage fallback&lt;br/&gt;#8: CWE-312 CVSS 7.1&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="s">&quot;~/.claude/.credentials.json&lt;br/&gt;chmod 0600&lt;br/&gt;Plaintext JSON&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">{</span><span class="s">&quot;writeFileSync then chmodSync&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">J</span><span class="p">[</span><span class="s">&quot;#30: TOCTOU race&lt;br/&gt;Permission window between write and chmod&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<p>Every non-macOS platform -- Linux desktops, WSL, Windows, Docker containers, CI/CD runners -- takes the plaintext path. On macOS, Docker containers and SSH sessions typically fail the keychain path and silently fall back to plaintext.</p>
+<h3 id="chain-links">Chain Links</h3>
+<ol>
+<li>
+<p><strong>Root (Findings 7 + 10):</strong> <code>getSecureStorage()</code> at <code>index.ts:9</code> returns <code>plainTextStorage</code> for all non-macOS platforms. The TODO comment "add libsecret support for Linux" confirms this is a known gap. OAuth tokens and API keys are stored as JSON with only <code>chmod 0600</code> protection.</p>
+</li>
+<li>
+<p><strong>Fallback Amplifier (Finding 8):</strong> On macOS, when keychain fails (Docker, SSH, CI), <code>fallbackStorage.ts</code> silently activates plaintext storage. The <code>createFallbackStorage</code> wrapper logs a warning but proceeds. The fallback path at <code>plainTextStorage.ts:57</code> writes credentials with <code>writeFileSync</code> then applies <code>chmodSync(0o600)</code> -- creating a TOCTOU window.</p>
+</li>
+<li>
+<p><strong>TOCTOU Race (Finding 30):</strong> The write-then-chmod pattern at <code>plainTextStorage.ts:57</code> creates a window where the file exists with default permissions (potentially <code>0o644</code>) before <code>chmodSync</code> applies <code>0o600</code>. Any process monitoring the directory can read credentials during this window.</p>
+</li>
+<li>
+<p><strong>Keychain Injection (Finding 20):</strong> The macOS keychain read path at <code>macOsKeychainStorage.ts:39</code> constructs shell commands with credential data. If a service name contains shell metacharacters, command injection is possible in the sync fallback path.</p>
+</li>
+<li>
+<p><strong>Process Argument Leak (Finding 37):</strong> The keychain fallback path at <code>macOsKeychainStorage.ts:118</code> passes credentials as command-line arguments, making them visible in <code>ps</code> output and <code>/proc/*/cmdline</code>.</p>
+</li>
+<li>
+<p><strong>Migration Race (Finding 39):</strong> <code>fallbackStorage.ts:37</code> implements credential migration from primary to fallback storage with a race condition -- concurrent migrations can corrupt the credential file.</p>
+</li>
+</ol>
+<h3 id="cascade-effect_1">Cascade Effect</h3>
+<p>Fixing Finding 7 (implementing <code>libsecret</code> for Linux and Windows Credential Manager for Windows) eliminates Findings 10 and 8 for their primary platforms. The plaintext path becomes a last-resort fallback rather than the default for 40%+ of installations.</p>
+<p>Fixing Finding 30 (atomic credential writes with <code>O_CREAT|O_EXCL</code>, <code>fsync</code>, and <code>rename</code>) eliminates the TOCTOU window regardless of which storage backend is active:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Atomic write: create temp file with correct permissions, then rename</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">tmpPath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">storagePath</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s1">&#39;.tmp.&#39;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">pid</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">openSync</span><span class="p">(</span><span class="nx">tmpPath</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;w&#39;</span><span class="p">,</span><span class="w"> </span><span class="mo">0o600</span><span class="p">)</span>
+<span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">writeSync</span><span class="p">(</span><span class="nx">fd</span><span class="p">,</span><span class="w"> </span><span class="nx">jsonStringify</span><span class="p">(</span><span class="nx">updated</span><span class="p">),</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;utf8&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">fsyncSync</span><span class="p">(</span><span class="nx">fd</span><span class="p">)</span>
+<span class="p">}</span><span class="w"> </span><span class="k">finally</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">closeSync</span><span class="p">(</span><span class="nx">fd</span><span class="p">)</span>
+<span class="p">}</span>
+<span class="nx">renameSync</span><span class="p">(</span><span class="nx">tmpPath</span><span class="p">,</span><span class="w"> </span><span class="nx">storagePath</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The credential storage chain has a strong dependency on the Auth Token Lifecycle chain (Chain 3). Secure credential storage is prerequisite to safe token rotation -- if the storage is plaintext, rotating tokens provides minimal additional security because both old and new tokens are equally exposed. This dependency drives the phase ordering in Chapter 3: credential storage (Phase 2) must precede token lifecycle hardening (Phase 3).</p>
+<h2 id="24-chain-3-auth-token-lifecycle">2.4 Chain 3: Auth Token Lifecycle</h2>
+<p><strong>Severity:</strong> HIGH
+<strong>Findings:</strong> #5 (CVSS 7.5), #13 (CVSS 6.5), #16 (CVSS 5.9), #32 (CVSS 4.3), #34 (CVSS 4.3), #41 (CVSS 3.1)
+<strong>Affected Files:</strong> <code>bridge/jwtUtils.ts</code>, <code>utils/auth.ts</code>, <code>bridge/trustedDevice.ts</code>
+<strong>Blast Radius:</strong> JWT tokens decoded without signature verification, env var tokens that never refresh, token prefixes leaked in debug logs</p>
+<p>This chain targets the complete lifecycle of authentication tokens from issuance through verification, refresh, and eventual expiration.</p>
+<h3 id="the-token-flow">The Token Flow</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Auth</span><span class="w"> </span><span class="n">Server</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">CLI</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Claude</span><span class="w"> </span><span class="n">Code</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">JWT</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">jwtUtils</span><span class="o">.</span><span class="n">ts</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Auth</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">auth</span><span class="o">.</span><span class="n">ts</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Trust</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">trustedDevice</span><span class="o">.</span><span class="n">ts</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Log</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Debug</span><span class="w"> </span><span class="n">Logs</span>
+
+<span class="w">    </span><span class="n">Server</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">Issue</span><span class="w"> </span><span class="n">JWT</span><span class="w"> </span><span class="p">(</span><span class="n">signed</span><span class="w"> </span><span class="n">server</span><span class="o">-</span><span class="n">side</span><span class="p">)</span>
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">JWT</span><span class="p">:</span><span class="w"> </span><span class="n">decodeJwtPayload</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">JWT</span><span class="p">:</span><span class="w"> </span><span class="c1">#5: Base64 decode ONLY&lt;br/&gt;No signature verification</span>
+<span class="w">    </span><span class="n">JWT</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">Payload</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="nb">exp</span><span class="w"> </span><span class="n">claim</span>
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="n">scheduleTokenRefresh</span><span class="p">(</span><span class="nb">exp</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">CLI</span><span class="p">:</span><span class="w"> </span><span class="c1">#16: Unverified exp controls timer&lt;br/&gt;Far-future exp suppresses refresh</span>
+
+<span class="w">    </span><span class="n">alt</span><span class="w"> </span><span class="n">Environment</span><span class="w"> </span><span class="n">Variable</span><span class="w"> </span><span class="n">Token</span>
+<span class="w">        </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Auth</span><span class="p">:</span><span class="w"> </span><span class="c1">#13: ANTHROPIC_API_KEY&lt;br/&gt;Never expires, never refreshes</span>
+<span class="w">        </span><span class="n">Auth</span><span class="o">-&gt;&gt;</span><span class="n">Auth</span><span class="p">:</span><span class="w"> </span><span class="n">Token</span><span class="w"> </span><span class="n">used</span><span class="w"> </span><span class="n">until</span><span class="w"> </span><span class="n">process</span><span class="w"> </span><span class="n">exit</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">alt</span><span class="w"> </span><span class="n">Device</span><span class="w"> </span><span class="n">Trust</span><span class="w"> </span><span class="n">Token</span>
+<span class="w">        </span><span class="n">Trust</span><span class="o">-&gt;&gt;</span><span class="n">Trust</span><span class="p">:</span><span class="w"> </span><span class="n">Read</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">keychain</span>
+<span class="w">        </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Trust</span><span class="p">:</span><span class="w"> </span><span class="c1">#34: CLAUDE_DEVICE_TOKEN&lt;br/&gt;env var overrides keychain</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">CLI</span><span class="o">-&gt;&gt;</span><span class="n">Log</span><span class="p">:</span><span class="w"> </span><span class="n">logForDebugging</span><span class="p">()</span>
+<span class="w">    </span><span class="n">Note</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="n">Log</span><span class="p">:</span><span class="w"> </span><span class="c1">#32: token.slice(0,15) logged&lt;br/&gt;#41: JWT prefix in debug output</span>
+</code></pre></div>
+
+<h3 id="chain-links_1">Chain Links</h3>
+<ol>
+<li>
+<p><strong>Root (Finding 5):</strong> <code>decodeJwtPayload()</code> at <code>jwtUtils.ts:21</code> performs base64 decoding without signature verification. The <code>exp</code> claim from the unverified payload directly controls token refresh scheduling. An attacker who can modify the JWT in transit (via corporate proxy, compromised DNS, or MITM on the bridge connection) can forge arbitrary claims.</p>
+</li>
+<li>
+<p><strong>Timer Manipulation (Finding 16):</strong> The <code>schedule()</code> function computes <code>delayMs = expiry * 1000 - Date.now() - refreshBufferMs</code> directly from the unverified <code>exp</code> claim. A far-future <code>exp</code> (year 2100) sets a delay of ~74 years, effectively suppressing token refresh forever. A near-past <code>exp</code> triggers constant refresh attempts (DoS). No bounds checking exists on the computed delay.</p>
+</li>
+<li>
+<p><strong>Token Persistence (Finding 13):</strong> Tokens provided via <code>ANTHROPIC_API_KEY</code> environment variable at <code>auth.ts:1260</code> never expire and never refresh. Even if the server revokes the token, the CLI continues using it until the process exits. In CI/CD pipelines, this means leaked tokens remain valid indefinitely.</p>
+</li>
+<li>
+<p><strong>Device Token Override (Finding 34):</strong> The <code>CLAUDE_DEVICE_TOKEN</code> environment variable at <code>trustedDevice.ts:46</code> overrides the keychain-stored device trust token. Combined with Finding 13, an attacker who sets this env var gains persistent device-level trust without keychain access.</p>
+</li>
+<li>
+<p><strong>Debug Log Leakage (Findings 32 + 41):</strong> Token prefixes appear in debug output at <code>jwtUtils.ts:112</code> and <code>jwtUtils.ts:110</code> via <code>token.slice(0, 15)</code>. While 15 characters of a token prefix have limited direct value, they confirm token format, aid in targeted attacks, and may violate compliance requirements for credential logging.</p>
+</li>
+</ol>
+<h3 id="cascade-effect_2">Cascade Effect</h3>
+<p>The primary fix for this chain is the <code>clampTokenRefreshDelay()</code> defense at the schedule function. This bounds the refresh delay to a safe range regardless of the JWT payload:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">MAX_TOKEN_LIFETIME_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">24</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">60</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">60</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1000</span><span class="w"> </span><span class="c1">// 24 hours</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">MIN_REFRESH_DELAY_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">10</span><span class="nx">_000</span><span class="w"> </span><span class="c1">// 10 seconds</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">clampTokenRefreshDelay</span><span class="p">(</span><span class="nx">rawDelayMs</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">rawDelayMs</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mf">0</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">rawDelayMs</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">MIN_REFRESH_DELAY_MS</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">MIN_REFRESH_DELAY_MS</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">rawDelayMs</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="nx">MAX_TOKEN_LIFETIME_MS</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">MAX_TOKEN_LIFETIME_MS</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">rawDelayMs</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This single function mitigates Findings 5 and 16 simultaneously. The ideal fix (client-side JWKS-based signature verification) requires server-side changes to publish a JWKS endpoint, making it a longer-term solution explored in Chapter 10. The clamp is an immediate compensating control that limits damage even without signature verification.</p>
+<p>Removing <code>token.slice(0, 15)</code> from debug log statements (Findings 32, 41) is a zero-risk, zero-dependency fix that can be applied in any phase.</p>
+<h2 id="25-chain-4-subagent-isolation">2.5 Chain 4: Subagent Isolation</h2>
+<p><strong>Severity:</strong> HIGH
+<strong>Findings:</strong> #3 (CVSS 7.8), #6 (CVSS 7.5), #14 (CVSS 6.2)
+<strong>Affected Files:</strong> <code>tools/AgentTool/runAgent.ts</code>, <code>tools/AgentTool/forkSubagent.ts</code>, <code>services/mcp/</code>
+<strong>Blast Radius:</strong> Subagents and MCP server tools execute with full parent process privileges; recursive forking possible</p>
+<p>This is the shortest chain but carries severe consequences. Three findings combine to create a scenario where a malicious plugin can achieve persistent, escalating access through the agent system.</p>
+<h3 id="the-exploitation-scenario">The Exploitation Scenario</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="s2">&quot;Malicious plugin defines agent&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="s2">&quot;runAgent() loads agent&lt;br/&gt;in parent process&lt;br/&gt;#3: CWE-269 CVSS 7.8&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="s2">&quot;Agent inherits all tools&lt;br/&gt;Name-based filtering only&lt;br/&gt;Not process-level isolation&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="s2">&quot;Agent accesses shared AppState&lt;br/&gt;Can read credentials, history&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="s2">&quot;Agent calls AgentTool&lt;br/&gt;to fork children&lt;br/&gt;#14: CWE-674 CVSS 6.2&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">{</span><span class="s2">&quot;isInForkChild() check&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s2">&quot;Only checks single-layer&lt;br/&gt;boilerplate tag&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="s2">&quot;Child agent spawned&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="s2">&quot;Child inherits all tools&lt;br/&gt;Including AgentTool&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">H</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">[</span><span class="s2">&quot;Child forks grandchild&lt;br/&gt;Recursive until OOM&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">J</span><span class="p">[</span><span class="s2">&quot;MCP server tool approved&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">K</span><span class="p">[</span><span class="s2">&quot;Tool executes in CLI process&lt;br/&gt;#6: CWE-250 CVSS 7.5&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">K</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span>
+</code></pre></div>
+
+<h3 id="chain-links_2">Chain Links</h3>
+<ol>
+<li>
+<p><strong>Root (Finding 3):</strong> <code>runAgent.ts:248</code> runs subagents in the parent Bun process. At lines 332-338, the agent shares <code>AppState</code>. At lines 465-479, tool restriction is name-based filtering -- not process-level isolation. At lines 567-575, agent frontmatter hooks execute in the parent context. A malicious subagent has full access to credentials, filesystem, network, and the tool registry.</p>
+</li>
+<li>
+<p><strong>MCP Amplifier (Finding 6):</strong> MCP server tools execute within the CLI process's security context with no sandboxing. The <code>services/mcp/channelPermissions.ts</code> implements permission prompts but not isolation. Once a user approves an MCP tool, it runs with complete CLI privileges. Combined with Finding 3, an MCP server can spawn agents that inherit the same unrestricted access.</p>
+</li>
+<li>
+<p><strong>Recursive Forking (Finding 14):</strong> <code>forkSubagent.ts:311</code> implements fork depth checking via <code>isInForkChild()</code>, which only detects a single-layer boilerplate tag. The function answers "am I in a fork child?" but not "how deep am I?" A child agent retains the <code>AgentTool</code>, enabling recursive forking. Each fork inherits the full tool set. The only limit is memory exhaustion.</p>
+</li>
+</ol>
+<h3 id="cascade-effect_3">Cascade Effect</h3>
+<p>This chain has a strong dependency on Chain 1 (Plugin Supply Chain). If plugin signing is implemented (Findings 1, 2), the probability of a malicious plugin being installed drops significantly. However, the subagent isolation fix is still necessary because:</p>
+<ol>
+<li>Legitimate plugins may be compromised through supply chain attacks</li>
+<li>MCP servers from the marketplace may contain vulnerabilities</li>
+<li>Defense in depth requires isolation regardless of source trust</li>
+</ol>
+<p>The fix architecture involves three layers:</p>
+<ul>
+<li><strong>Process isolation (Finding 3):</strong> <code>child_process.fork()</code> with IPC channels for plugin-sourced agents</li>
+<li><strong>Fork depth enforcement (Finding 14):</strong> <code>MAX_FORK_DEPTH=3</code> with cryptographic depth tracking via fork-depth tags</li>
+<li><strong>MCP sandboxing (Finding 6):</strong> seccomp-bpf profiles for Linux, sandbox-exec for macOS, capability-based restrictions per MCP server</li>
+</ul>
+<p>The implementation order matters: fork depth enforcement (a direct patch, ~4-6 hours) should be deployed before process isolation (an architecture change, ~40+ hours) because it provides immediate protection against recursive fork bombs.</p>
+<h2 id="26-chain-5-data-exfiltration">2.6 Chain 5: Data Exfiltration</h2>
+<p><strong>Severity:</strong> MEDIUM-HIGH
+<strong>Findings:</strong> #9 (CVSS 7.0), #24 (CVSS 5.3), #26 (CVSS 5.3), #33 (CVSS 4.3), #38 (CVSS 3.5), #43 (CVSS 2.7), #47 (CVSS 2.4), #49 (CVSS 1.8)
+<strong>Affected Files:</strong> <code>history.ts</code>, <code>services/analytics/datadog.ts</code>, <code>services/analytics/firstPartyEventLogger.ts</code>, <code>services/analytics/metadata.ts</code>, <code>services/analytics/config.ts</code>, <code>utils/debug.ts</code>
+<strong>Blast Radius:</strong> Conversation history, pasted secrets, telemetry metadata, debug artifacts</p>
+<p>This is the largest chain by finding count, connecting conversation history storage to telemetry pipelines to debug logging. The attack is not a single exploitation but a persistent accumulation of sensitive data across multiple unprotected channels.</p>
+<h3 id="the-data-accumulation">The Data Accumulation</h3>
+<div class="codehilite"><pre><span></span><code><span class="nx">flowchart</span><span class="w"> </span><span class="nx">LR</span>
+<span class="w">    </span><span class="nx">A</span><span class="p">[</span><span class="s">&quot;User pastes API key&lt;br/&gt;into session&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">B</span><span class="p">[</span><span class="s">&quot;history.ts:115&lt;br/&gt;#9: Plaintext JSONL&lt;br/&gt;CVSS 7.0&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">B</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">C</span><span class="p">[</span><span class="s">&quot;~/.claude/history.jsonl&lt;br/&gt;No encryption, no TTL&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">D</span><span class="p">[</span><span class="s">&quot;Session metadata&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">E</span><span class="p">[</span><span class="s">&quot;datadog.ts:14&lt;br/&gt;#24: Hardcoded client token&lt;br/&gt;CVSS 5.3&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">E</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">F</span><span class="p">[</span><span class="s">&quot;64+ event types&lt;br/&gt;sent to Datadog&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">G</span><span class="p">[</span><span class="s">&quot;Tool arguments&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">H</span><span class="p">[</span><span class="s">&quot;metadata.ts:291&lt;br/&gt;#47: Args in telemetry&lt;br/&gt;CVSS 2.4&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">H</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">F</span>
+
+<span class="w">    </span><span class="nx">I</span><span class="p">[</span><span class="s">&quot;Analytics config&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">J</span><span class="p">[</span><span class="s">&quot;firstPartyEventLogger.ts:95&lt;br/&gt;#38: GrowthBook remote config&lt;br/&gt;CVSS 3.5&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">J</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">F</span>
+
+<span class="w">    </span><span class="nx">K</span><span class="p">[</span><span class="s">&quot;Debug logging&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">L</span><span class="p">[</span><span class="s">&quot;debug.ts:221&lt;br/&gt;#43: Token prefixes, session IDs&lt;br/&gt;CVSS 2.7&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">L</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">M</span><span class="p">[</span><span class="s">&quot;Debug log files&lt;br/&gt;On disk&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">F</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">N</span><span class="p">[</span><span class="s">&quot;#33: No explicit consent UI&lt;br/&gt;#49: Opt-out incomplete&lt;br/&gt;CVSS 4.3 / 1.8&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">B</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">db6d28</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+<span class="w">    </span><span class="nx">style</span><span class="w"> </span><span class="nx">E</span><span class="w"> </span><span class="nx">fill</span><span class="p">:</span><span class="err">#</span><span class="nx">d29922</span><span class="p">,</span><span class="nx">color</span><span class="p">:</span><span class="err">#</span><span class="nx">fff</span>
+</code></pre></div>
+
+<h3 id="chain-links_3">Chain Links</h3>
+<ol>
+<li>
+<p><strong>Root (Finding 9):</strong> All conversation history including pasted secrets persists in plaintext JSONL at <code>~/.claude/history.jsonl</code>. The <code>history.ts:115</code> path stores small pastes inline, large pastes in <code>~/.claude/paste-cache/{sha256}.txt</code>. No secret detection, no redaction, no TTL, no purging.</p>
+</li>
+<li>
+<p><strong>Hardcoded Telemetry Token (Findings 24 + 26):</strong> <code>services/analytics/datadog.ts:13-14</code> contains a hardcoded Datadog client token. This token enables 64+ event types to be sent to a third-party analytics service. The token is visible in source code, making it extractable.</p>
+</li>
+<li>
+<p><strong>Third-Party Data Sharing (Finding 33):</strong> Telemetry data is sent to Datadog at <code>datadog.ts:160</code> without explicit user consent UI. While an opt-out mechanism exists, it is not prominently surfaced during onboarding.</p>
+</li>
+<li>
+<p><strong>Remote Configuration (Finding 38):</strong> The analytics pipeline is partially controlled by GrowthBook remote configuration at <code>firstPartyEventLogger.ts:95</code>. A compromised GrowthBook endpoint could enable additional data collection without CLI-side code changes.</p>
+</li>
+<li>
+<p><strong>Debug Log Leakage (Finding 43):</strong> Debug logs at <code>utils/debug.ts:221</code> may contain token prefixes, session IDs, and URLs. These logs persist on disk without rotation or sanitization.</p>
+</li>
+<li>
+<p><strong>Incomplete Opt-Out (Finding 49):</strong> Analytics opt-out at <code>services/analytics/config.ts:19</code> does not cover all data flows, leaving some telemetry active even when the user has opted out.</p>
+</li>
+</ol>
+<h3 id="cascade-effect_4">Cascade Effect</h3>
+<p>The conversation history fix (Finding 9) has the highest impact: implementing automatic secret detection and redaction prevents the most sensitive data from ever reaching disk. This reduces the value of all downstream data channels.</p>
+<p>The telemetry fixes (Findings 24, 26, 33) require both code changes (token rotation, data minimization) and process changes (explicit consent UI). These are addressed in Chapter 19.</p>
+<h2 id="27-chain-6-bridge-remote-session">2.7 Chain 6: Bridge Remote Session</h2>
+<p><strong>Severity:</strong> MEDIUM
+<strong>Findings:</strong> #12 (CVSS 6.5), #17 (CVSS 5.9), #18 (CVSS 5.9), #21 (CVSS 5.5), #22 (CVSS 5.4), #23 (CVSS 5.3), #28 (CVSS 5.0), #31 (CVSS 4.4), #42 (CVSS 3.1), #44 (CVSS 2.5), #45 (CVSS 3.2)
+<strong>Affected Files:</strong> <code>server/createDirectConnectSession.ts</code>, <code>remote/SessionsWebSocket.ts</code>, <code>upstreamproxy/relay.ts</code>, <code>upstreamproxy/upstreamproxy.ts</code>, <code>tools/WebFetchTool/utils.ts</code>, <code>services/api/client.ts</code>
+<strong>Blast Radius:</strong> Enterprise users with remote/bridge sessions and upstream proxy configurations</p>
+<p>This is the largest chain by affected file count, connecting remote session management through WebSocket communication to upstream proxy infrastructure. The attack scenario involves a compromised proxy intercepting and manipulating bridge sessions.</p>
+<h3 id="the-attack-scenario">The Attack Scenario</h3>
+<p>The chain enables a multi-step attack:</p>
+<ol>
+<li>Attacker compromises the upstream proxy or performs DNS spoofing on the proxy endpoint</li>
+<li>CA bundle is downloaded without certificate pinning (#18), allowing a forged CA to be installed</li>
+<li>The proxy intercepts the bridge WebSocket connection (#21, no client-side origin validation)</li>
+<li>Proxy credentials are visible in WebSocket headers (#22) and persist in memory (#23, #31)</li>
+<li>The <code>dangerouslySkipPermissions</code> flag is forwarded to the remote server (#12)</li>
+<li>Custom headers are injectable via environment variables (#28)</li>
+<li>The compromised session operates with no permission guardrails</li>
+</ol>
+<h3 id="key-fix-points">Key Fix Points</h3>
+<p>The highest-leverage fix in this chain is the localhost restriction for <code>dangerouslySkipPermissions</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// server/createDirectConnectSession.ts -- SECURE</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">parsedServerUrl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">URL</span><span class="p">(</span><span class="nx">serverUrl</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">isLocalServer</span><span class="w"> </span><span class="o">=</span>
+<span class="w">  </span><span class="nx">parsedServerUrl</span><span class="p">.</span><span class="nx">hostname</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;localhost&#39;</span><span class="w"> </span><span class="o">||</span>
+<span class="w">  </span><span class="nx">parsedServerUrl</span><span class="p">.</span><span class="nx">hostname</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;127.0.0.1&#39;</span><span class="w"> </span><span class="o">||</span>
+<span class="w">  </span><span class="nx">parsedServerUrl</span><span class="p">.</span><span class="nx">hostname</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;::1&#39;</span>
+
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">dangerouslySkipPermissions</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">isLocalServer</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">DirectConnectError</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;dangerouslySkipPermissions is only allowed for localhost connections. &#39;</span><span class="w"> </span><span class="o">+</span>
+<span class="w">      </span><span class="sb">`Refusing to send to remote server: </span><span class="si">${</span><span class="nx">parsedServerUrl</span><span class="p">.</span><span class="nx">hostname</span><span class="si">}</span><span class="sb">`</span>
+<span class="w">  </span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>This single check (Finding 12) prevents the most dangerous part of the chain -- sending permission bypass flags to remote servers. The remaining findings in this chain are defense-in-depth improvements that should be implemented but are not individually exploitable without the permission bypass.</p>
+<p>The CA certificate pinning fix (Finding 18) at <code>upstreamproxy/upstreamproxy.ts:254</code> validates downloaded certificates against known fingerprints, preventing proxy CA impersonation. The SSRF guard (Finding 17) at <code>WebFetchTool/utils.ts:262</code> blocks DNS rebinding attacks where a permitted domain resolves to internal IP addresses.</p>
+<h2 id="28-chain-7-bash-security-bypass">2.8 Chain 7: Bash Security Bypass</h2>
+<p><strong>Severity:</strong> MEDIUM
+<strong>Findings:</strong> #11 (CVSS 6.8), #19 (CVSS 5.9), #27 (CVSS 5.0), #35 (CVSS 4.0), #46 (CVSS 3.1)
+<strong>Affected Files:</strong> <code>tools/BashTool/bashSecurity.ts</code>, <code>tools/BashTool/bashPermissions.ts</code>, <code>tools/BashTool/modeValidation.ts</code>, <code>tools/FileWriteTool/FileWriteTool.ts</code>
+<strong>Blast Radius:</strong> All CLI users via the bash execution path</p>
+<p>This chain targets the command validation pipeline -- the most security-critical path in the entire codebase. The existing defenses are substantial (100+ injection patterns, 40+ validators), but the architecture has a fundamental fragility: it depends on a single parser that may diverge from real shell behavior.</p>
+<h3 id="the-parser-differential-problem">The Parser Differential Problem</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="s2">&quot;LLM generates command&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="s2">&quot;tryParseShellCommand()&lt;br/&gt;shell-quote tokenization&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">{</span><span class="s2">&quot;Parser output&lt;br/&gt;matches real shell?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s2">&quot;Yes (99.9%)&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="s2">&quot;Security validators&lt;br/&gt;check tokens&lt;br/&gt;100+ patterns&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;|</span><span class="s2">&quot;No (0.1%)&quot;</span><span class="o">|</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="s2">&quot;#11: Parser differential&lt;br/&gt;Validators operate on&lt;br/&gt;wrong tokens&lt;br/&gt;CWE-436 CVSS 6.8&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">F</span><span class="p">{</span><span class="s2">&quot;Validators pass?&quot;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">Yes</span><span class="o">|</span><span class="w"> </span><span class="n">G</span><span class="p">[</span><span class="s2">&quot;Command executes&lt;br/&gt;in real shell&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">F</span><span class="w"> </span><span class="o">--&gt;|</span><span class="n">No</span><span class="o">|</span><span class="w"> </span><span class="n">H</span><span class="p">[</span><span class="s2">&quot;Command blocked&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">I</span><span class="p">[</span><span class="s2">&quot;Command passes validators&lt;br/&gt;with different semantics&lt;br/&gt;than real shell&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">I</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">G</span>
+<span class="w">    </span><span class="n">G</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">J</span><span class="p">[</span><span class="s2">&quot;Real shell interprets&lt;br/&gt;command differently&lt;br/&gt;than validators expected&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">K</span><span class="p">[</span><span class="s2">&quot;#19: ReDoS in env var regex&lt;br/&gt;bashPermissions.ts:760&lt;br/&gt;CVSS 5.9&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">L</span><span class="p">[</span><span class="s2">&quot;Permission pipeline&lt;br/&gt;freezes&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">M</span><span class="p">[</span><span class="s2">&quot;#27: TOCTOU in FileWriteTool&lt;br/&gt;FileWriteTool.ts:267&lt;br/&gt;CVSS 5.0&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">N</span><span class="p">[</span><span class="s2">&quot;File contents change&lt;br/&gt;between check and write&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">O</span><span class="p">[</span><span class="s2">&quot;#35: acceptEdits auto-allows&lt;br/&gt;destructive commands&lt;br/&gt;CVSS 4.0&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">P</span><span class="p">[</span><span class="s2">&quot;rm, mv, chmod&lt;br/&gt;without prompt&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="chain-links_4">Chain Links</h3>
+<ol>
+<li>
+<p><strong>Root (Finding 11):</strong> <code>bashSecurity.ts:27</code> calls <code>tryParseShellCommand()</code> which uses the custom shell-quote parser. On parse failure, line 29 returns an empty array. Six dedicated misparsing validators cover known divergences, but they are reactive -- they cannot anticipate unknown parser bugs. The 450+ lines of heredoc handling in <code>isSafeHeredoc</code> increase the parser attack surface.</p>
+</li>
+<li>
+<p><strong>ReDoS (Finding 19):</strong> Complex regex patterns in <code>bashPermissions.ts:760</code> for environment variable stripping are susceptible to catastrophic backtracking. A crafted input could freeze the permission pipeline, effectively creating a denial-of-service against the security validation itself.</p>
+</li>
+<li>
+<p><strong>TOCTOU in File Write (Finding 27):</strong> <code>FileWriteTool/FileWriteTool.ts:267</code> has a race condition between the read-state check (verifying what the file currently contains) and the write operation. Between these two operations, the file could be replaced by a symlink or modified by another process.</p>
+</li>
+<li>
+<p><strong>Accept Edits Mode (Finding 35):</strong> <code>modeValidation.ts:37</code> auto-allows filesystem commands (including destructive operations like <code>rm</code>, <code>mv</code>, <code>chmod</code>) in acceptEdits mode without prompting the user. This bypasses the permission system for an entire class of dangerous operations.</p>
+</li>
+<li>
+<p><strong>Inherent Risk Acknowledgment (Finding 46):</strong> This INFO-level finding at <code>bashSecurity.ts:1</code> acknowledges that regex-based security validation cannot achieve the same correctness guarantees as a proper AST-based parser. It is the informational companion to Finding 11.</p>
+</li>
+</ol>
+<h3 id="cascade-effect_5">Cascade Effect</h3>
+<p>This chain is unique in that no single fix eliminates the root vulnerability. The parser differential problem (Finding 11) is architectural -- it requires adding a secondary parser (tree-sitter-bash) for cross-validation and implementing fuzz testing to discover unknown divergences. This is the most complex fix in the entire remediation plan.</p>
+<p>However, the compensating controls are effective:</p>
+<ul>
+<li>Fixing Finding 19 (replacing ReDoS-susceptible regex with iterative parsing) ensures the permission pipeline cannot be frozen</li>
+<li>Fixing Finding 27 (atomic file operations in FileWriteTool) closes the TOCTOU window</li>
+<li>Fixing Finding 35 (splitting acceptEdits mode for destructive vs. non-destructive operations) restores user prompts for dangerous commands</li>
+</ul>
+<h2 id="29-cross-chain-dependencies">2.9 Cross-Chain Dependencies</h2>
+<p>Three critical dependency relationships span across chains:</p>
+<h3 id="chain-1-plugin-supply-chain-chain-4-subagent-isolation">Chain 1 (Plugin Supply Chain) --&gt; Chain 4 (Subagent Isolation)</h3>
+<p>A malicious plugin (Chain 1) that defines a subagent exploits the lack of process isolation (Chain 4). Fixing Chain 1 reduces the probability of malicious plugins; fixing Chain 4 limits the damage if one gets through. Both chains must be hardened.</p>
+<h3 id="chain-2-credential-storage-chain-3-auth-token-lifecycle">Chain 2 (Credential Storage) --&gt; Chain 3 (Auth Token Lifecycle)</h3>
+<p>Token rotation (Chain 3) is only as secure as the storage where rotated tokens are kept (Chain 2). Implementing token rotation on a plaintext storage backend means both old and new tokens are equally exposed. This drives the phase ordering: credential storage encryption must precede token lifecycle hardening.</p>
+<h3 id="chain-5-data-exfiltration-chain-2-credential-storage">Chain 5 (Data Exfiltration) --&gt; Chain 2 (Credential Storage)</h3>
+<p>Plaintext conversation history (Chain 5, Finding 9) may contain credentials. Even if the credential storage is encrypted (Chain 2), secrets pasted during sessions remain exposed in history files. Both chains must be independently secured.</p>
+<h2 id="210-prioritization-framework">2.10 Prioritization Framework</h2>
+<p>Given the seven chains and their dependencies, the prioritization framework for Chapter 3's implementation roadmap follows this logic:</p>
+<ol>
+<li><strong>Fix the highest blast radius first:</strong> Plugin Supply Chain (Chain 1) affects every user who installs plugins</li>
+<li><strong>Fix prerequisites before dependents:</strong> Credential Storage (Chain 2) before Token Lifecycle (Chain 3)</li>
+<li><strong>Fix enablers before amplifiers:</strong> Plugin signing (Chain 1) before subagent isolation (Chain 4)</li>
+<li><strong>Fix high-urgency before low-urgency:</strong> Direct patches with known exploits before defense-in-depth improvements</li>
+<li><strong>Batch by affected subsystem:</strong> Group fixes that touch the same files to minimize merge conflicts and regression risk</li>
+</ol>
+<p>This prioritization produces the seven-phase roadmap detailed in Chapter 3, where each phase addresses one or more complete dependency chains while respecting the inter-chain dependencies documented in this chapter.</p>
+<div class="chapter-nav">
+  <a href="chapter-01.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-03.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>

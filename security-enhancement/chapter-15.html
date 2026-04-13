@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 15: MCP Server Sandboxing — Security Enhancement for Claude Code</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.container { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,17,23,0.95); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { text-decoration: underline; }
+.nav .title { color: var(--muted); font-size: 0.85rem; }
+h1 { font-size: 2.2rem; margin: 32px 0 16px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+h2 { font-size: 1.6rem; margin: 40px 0 16px; color: var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--text); }
+h4 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--muted); }
+p { margin: 12px 0; }
+a { color: var(--accent); }
+strong { color: var(--text); }
+em { color: var(--muted); font-style: italic; }
+ul, ol { margin: 12px 0 12px 28px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 4px 0 4px 20px; }
+code {
+  background: var(--code-bg); color: var(--green);
+  padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin: 16px 0;
+  overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: 0.85em; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+th { background: var(--card); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+blockquote {
+  border-left: 3px solid var(--red); margin: 16px 0;
+  padding: 12px 20px; background: var(--card); border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 4px 0; }
+.mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; text-align: center; }
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.chapter-nav {
+  display: flex; justify-content: space-between; margin-top: 64px;
+  padding-top: 24px; border-top: 1px solid var(--border);
+}
+.chapter-nav a {
+  color: var(--accent); text-decoration: none; padding: 8px 16px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem;
+}
+.chapter-nav a:hover { border-color: var(--accent); background: var(--card); }
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  .container { padding: 24px 16px 64px; }
+  pre { padding: 12px; font-size: 0.8em; }
+  table { font-size: 0.82em; }
+  .nav { padding: 8px 16px; }
+}
+.codehilite .k, .codehilite .kn, .codehilite .kd { color: #ff79c6; }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: #f1fa8c; }
+.codehilite .n, .codehilite .na { color: #50fa7b; }
+.codehilite .c, .codehilite .c1, .codehilite .cm { color: #6272a4; font-style: italic; }
+.codehilite .nf, .codehilite .nb { color: #8be9fd; }
+.codehilite .mi, .codehilite .mf { color: #bd93f9; }
+.codehilite .o, .codehilite .p { color: #f8f8f2; }
+.codehilite .nx { color: #f8f8f2; }
+.codehilite .kr { color: #ff79c6; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script>
+</head>
+<body>
+<nav class="nav">
+  <a href="index.html">&larr; Table of Contents</a>
+  <span class="title">Security Enhancement for Claude Code</span>
+  <a href="chapter-16.html">Next &rarr;</a>
+</nav>
+<div class="container">
+<h1 id="chapter-15-mcp-server-sandboxing">Chapter 15: MCP Server Sandboxing</h1>
+<p>Chapter 14 built the resource governance framework for the agent hierarchy -- cryptographic depth tracking, width limits, and per-agent budgets. But those controls govern <em>agents</em> within the Claude Code process tree. A separate and equally dangerous execution domain exists outside that tree: <strong>MCP server tools</strong>.</p>
+<p>MCP (Model Context Protocol) servers are external processes that provide tools to Claude Code. They run with the full privileges of the user who launched them. Finding 6 from the security audit -- CWE-250: Execution with Unnecessary Privileges (CVSS 7.5) -- identifies this as a HIGH severity issue. The finding is blunt: "MCP server tool calls execute within the CLI process's security context with no process-level sandboxing. Approved MCP tools run with the full capabilities of the CLI process."</p>
+<p>This chapter implements the sandbox that the audit found missing. We cover seccomp-bpf for Linux, sandbox-exec for macOS, capability-based restrictions per server, and network namespace isolation for untrusted MCP servers.</p>
+<hr />
+<h2 id="151-the-mcp-execution-model">15.1 The MCP Execution Model</h2>
+<h3 id="current-architecture-trust-everything">Current Architecture: Trust Everything</h3>
+<p>When a user installs an MCP server (via <code>.mcp.json</code> or the marketplace), the following trust chain is established:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">USER</span><span class="p">[</span><span class="s2">&quot;User installs MCP server&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CONFIG</span><span class="p">[</span><span class="s2">&quot;Server registered in .mcp.json&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CONFIG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SPAWN</span><span class="p">[</span><span class="s2">&quot;Claude Code spawns server process&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">SPAWN</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">DISCOVER</span><span class="p">[</span><span class="s2">&quot;Tool discovery: server declares tools&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">DISCOVER</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">CALL</span><span class="p">[</span><span class="s2">&quot;Agent calls MCP tool&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">CALL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PERM</span><span class="p">[</span><span class="s2">&quot;Permission check (user prompt or auto-allow)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">PERM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">EXEC</span><span class="p">[</span><span class="s2">&quot;Tool executes in server process&lt;br/&gt;with FULL user privileges&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">EXEC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">FS</span><span class="p">[</span><span class="s2">&quot;Full filesystem access&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">EXEC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">NET</span><span class="p">[</span><span class="s2">&quot;Full network access&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">EXEC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PROC</span><span class="p">[</span><span class="s2">&quot;Process spawning&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="n">EXEC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ENV</span><span class="p">[</span><span class="s2">&quot;Environment variables&quot;</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">EXEC</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">NET</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">PROC</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">ENV</span><span class="w"> </span><span class="n">fill</span><span class="p">:</span><span class="c1">#fce4ec</span>
+</code></pre></div>
+
+<p>The permission check at the PERM stage asks the user "Allow this tool call?" But that permission is binary -- allow or deny. There is no option to "allow with restricted filesystem" or "allow but block network." Once approved, the tool executes with the same privileges as the Claude Code process itself.</p>
+<h3 id="why-this-is-dangerous">Why This Is Dangerous</h3>
+<p>The audit finding describes the scenario precisely: "A malicious MCP server registered in a marketplace could define tools that appear benign (e.g., 'format_code') but internally execute arbitrary commands when approved. Once the user approves the tool, it runs with full CLI privileges."</p>
+<p>Consider a concrete attack:</p>
+<ol>
+<li>Attacker publishes "mcp-code-formatter" to the MCP marketplace</li>
+<li>Tool declares itself as <code>readOnlyHint: true</code> with description "Formats code using prettier"</li>
+<li>User installs it, trusts the marketplace listing</li>
+<li>Agent calls the tool with a code snippet</li>
+<li>Instead of formatting, the server reads <code>~/.ssh/id_rsa</code> and <code>~/.aws/credentials</code></li>
+<li>Server returns the "formatted" code along with exfiltrated credentials as a side effect</li>
+<li>User sees properly formatted code and suspects nothing</li>
+</ol>
+<p>The self-reported <code>readOnlyHint: true</code> annotation is meaningless -- the server can do anything regardless of what it declares.</p>
+<h3 id="cvss-assessment">CVSS Assessment</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+<th>Justification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Attack Vector</td>
+<td>Network (AV:N)</td>
+<td>Malicious server distributed via marketplace</td>
+</tr>
+<tr>
+<td>Attack Complexity</td>
+<td>Low (AC:L)</td>
+<td>No special conditions needed</td>
+</tr>
+<tr>
+<td>Privileges Required</td>
+<td>None (PR:N)</td>
+<td>Server installed by user action</td>
+</tr>
+<tr>
+<td>User Interaction</td>
+<td>Required (UI:R)</td>
+<td>User must approve tool call</td>
+</tr>
+<tr>
+<td>Confidentiality</td>
+<td>High (C:H)</td>
+<td>Full filesystem read</td>
+</tr>
+<tr>
+<td>Integrity</td>
+<td>High (I:H)</td>
+<td>Full filesystem write</td>
+</tr>
+<tr>
+<td>Availability</td>
+<td>Low (A:L)</td>
+<td>Can consume resources</td>
+</tr>
+<tr>
+<td><strong>CVSS Score</strong></td>
+<td><strong>7.5 (HIGH)</strong></td>
+<td>CWE-250: Execution with Unnecessary Privileges</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="152-sandbox-architecture-overview">15.2 Sandbox Architecture Overview</h2>
+<p>The sandbox wraps every MCP server process in an OS-level confinement that restricts what the process can do, regardless of what the server code attempts. The sandbox has four layers:</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Layer 1: Process Isolation&quot;</span>
+<span class="w">        </span><span class="n">FORK</span><span class="p">[</span><span class="s">&quot;Separate process&lt;br/&gt;(already exists)&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Layer 2: Filesystem Sandbox&quot;</span>
+<span class="w">        </span><span class="n">FS</span><span class="p">[</span><span class="s">&quot;Restrict file access&lt;br/&gt;to declared paths only&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Layer 3: Syscall Filter&quot;</span>
+<span class="w">        </span><span class="n">SC</span><span class="p">[</span><span class="s">&quot;seccomp-bpf (Linux)&lt;br/&gt;sandbox-exec (macOS)&lt;br/&gt;Block dangerous syscalls&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Layer 4: Network Isolation&quot;</span>
+<span class="w">        </span><span class="n">NET</span><span class="p">[</span><span class="s">&quot;Network namespace (Linux)&lt;br/&gt;Block outbound connections&lt;br/&gt;for untrusted servers&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">FORK</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">NET</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">FORK</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fff3e0</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">SC</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">NET</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e1f5fe</span>
+</code></pre></div>
+
+<p>Each layer provides defense even if the other layers fail:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What It Prevents</th>
+<th>Failure Mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Process isolation</td>
+<td>Shared memory access, signal injection</td>
+<td>Does NOT prevent filesystem/network abuse</td>
+</tr>
+<tr>
+<td>Filesystem sandbox</td>
+<td>Reading secrets, writing backdoors</td>
+<td>Does NOT prevent network exfiltration</td>
+</tr>
+<tr>
+<td>Syscall filter</td>
+<td>Process spawning, raw socket creation</td>
+<td>Does NOT prevent allowed-but-abused syscalls</td>
+</tr>
+<tr>
+<td>Network isolation</td>
+<td>Data exfiltration, C2 communication</td>
+<td>Does NOT prevent local-only attacks</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="153-capability-declarations">15.3 Capability Declarations</h2>
+<p>Before implementing the sandbox, we need a way for MCP servers to declare what capabilities they actually need. This declaration serves two purposes: (1) the sandbox knows what to allow, and (2) the user knows what the server requires before installing it.</p>
+<h3 id="the-capability-schema">The Capability Schema</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">McpServerCapabilities</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">filesystem</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">read</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w">      </span><span class="c1">// Glob patterns for readable paths</span>
+<span class="w">    </span><span class="nx">write</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w">     </span><span class="c1">// Glob patterns for writable paths</span>
+<span class="w">    </span><span class="nx">execute</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w">   </span><span class="c1">// Glob patterns for executable paths</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="nx">network</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">outbound</span><span class="o">:</span><span class="w"> </span><span class="kt">NetworkRule</span><span class="p">[]</span><span class="w">  </span><span class="c1">// Allowed outbound connections</span>
+<span class="w">    </span><span class="nx">dns</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w">             </span><span class="c1">// Whether DNS resolution is needed</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="nx">process</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">spawn</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w">      </span><span class="c1">// Whether child process spawning is needed</span>
+<span class="w">    </span><span class="nx">maxChildren</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="c1">// Maximum child processes</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="nx">environment</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">read</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w">      </span><span class="c1">// Env vars the server needs to read</span>
+<span class="w">    </span><span class="nx">inherit</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w">    </span><span class="c1">// Whether to inherit all env vars</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">interface</span><span class="w"> </span><span class="nx">NetworkRule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">host</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w">          </span><span class="c1">// Hostname or IP pattern</span>
+<span class="w">  </span><span class="nx">port</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;*&#39;</span><span class="w">    </span><span class="c1">// Port number or wildcard</span>
+<span class="w">  </span><span class="nx">protocol</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;tcp&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;udp&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;tls&#39;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="example-capability-declarations">Example Capability Declarations</h3>
+<p>A legitimate code formatter:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;capabilities&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;filesystem&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;read&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;${workspaceFolder}/**/*.{ts,js,py}&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;write&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;${workspaceFolder}/**/*.{ts,js,py}&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;execute&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;network&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;outbound&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">      </span><span class="nt">&quot;dns&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;process&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;spawn&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;maxChildren&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;environment&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;read&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;NODE_ENV&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;HOME&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;inherit&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>A database query tool (needs network):</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;capabilities&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;filesystem&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;read&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;${workspaceFolder}/.env&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;write&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">      </span><span class="nt">&quot;execute&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;network&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;outbound&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;host&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;*.amazonaws.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5432</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;protocol&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tls&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">      </span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;dns&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;process&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;spawn&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;maxChildren&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;environment&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;read&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;DATABASE_URL&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;AWS_REGION&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;inherit&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="capability-verification-at-install-time">Capability Verification at Install Time</h3>
+<p>When a user installs an MCP server, Claude Code presents the capability requirements:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">Installing</span><span class="o">:</span><span class="w"> </span><span class="n">mcp</span><span class="o">-</span><span class="n">code</span><span class="o">-</span><span class="n">formatter</span><span class="w"> </span><span class="n">v1</span><span class="o">.</span><span class="mf">2.0</span>
+
+<span class="n">Required</span><span class="w"> </span><span class="n">capabilities</span><span class="o">:</span>
+<span class="w">  </span><span class="n">Filesystem</span><span class="o">:</span><span class="w"> </span><span class="n">Read</span><span class="o">/</span><span class="n">Write</span><span class="w"> </span><span class="o">*.</span><span class="n">ts</span><span class="o">,</span><span class="w"> </span><span class="o">*.</span><span class="n">js</span><span class="o">,</span><span class="w"> </span><span class="o">*.</span><span class="n">py</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">workspace</span>
+<span class="w">  </span><span class="n">Network</span><span class="o">:</span><span class="w">    </span><span class="n">None</span><span class="w"> </span><span class="o">(</span><span class="n">no</span><span class="w"> </span><span class="n">outbound</span><span class="w"> </span><span class="n">connections</span><span class="o">)</span>
+<span class="w">  </span><span class="n">Process</span><span class="o">:</span><span class="w">    </span><span class="n">May</span><span class="w"> </span><span class="n">spawn</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="n">child</span><span class="w"> </span><span class="n">processes</span>
+<span class="w">  </span><span class="n">Env</span><span class="w"> </span><span class="n">vars</span><span class="o">:</span><span class="w">   </span><span class="n">NODE_ENV</span><span class="o">,</span><span class="w"> </span><span class="n">HOME</span>
+
+<span class="n">Accept</span><span class="w"> </span><span class="n">these</span><span class="w"> </span><span class="n">capabilities</span><span class="o">?</span><span class="w"> </span><span class="o">[</span><span class="n">y</span><span class="o">/</span><span class="n">N</span><span class="o">]</span>
+</code></pre></div>
+
+<p>If a server later attempts to exceed its declared capabilities (reading a file outside its declared paths, connecting to a network host not in its outbound list), the sandbox blocks the operation and logs the violation.</p>
+<h3 id="undeclared-capabilities-default-to-denied">Undeclared Capabilities Default to Denied</h3>
+<p>The most important security property: <strong>capabilities that are not explicitly declared are denied.</strong> A server that declares no <code>network.outbound</code> rules cannot make any network connections. A server that declares no <code>filesystem.write</code> patterns cannot write to any files.</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">resolveCapabilities</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">declared</span><span class="o">:</span><span class="w"> </span><span class="kt">Partial</span><span class="o">&lt;</span><span class="nx">McpServerCapabilities</span><span class="o">&gt;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">McpServerCapabilities</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">filesystem</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">read</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.filesystem?.read</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">      </span><span class="nx">write</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.filesystem?.write</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">      </span><span class="nx">execute</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.filesystem?.execute</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">network</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">outbound</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.network?.outbound</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">      </span><span class="nx">dns</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.network?.dns</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">process</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">spawn</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.process?.spawn</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">maxChildren</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.process?.maxChildren</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nx">environment</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">read</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.environment?.read</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">      </span><span class="nx">inherit</span><span class="o">:</span><span class="w"> </span><span class="kt">declared?.environment?.inherit</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="154-linux-sandboxing-with-seccomp-bpf">15.4 Linux Sandboxing with seccomp-bpf</h2>
+<p>On Linux, the sandbox uses seccomp-bpf (Secure Computing with Berkeley Packet Filter) to restrict which system calls the MCP server process can make. seccomp-bpf operates at the kernel level -- no amount of application-level trickery can bypass it.</p>
+<h3 id="how-seccomp-bpf-works">How seccomp-bpf Works</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">App</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="nf">Process</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Kernel</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Linux</span><span class="w"> </span><span class="n">Kernel</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">BPF</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">seccomp</span><span class="o">-</span><span class="n">bpf</span><span class="w"> </span><span class="n">Filter</span>
+
+<span class="w">    </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">Kernel</span><span class="o">:</span><span class="w"> </span><span class="n">syscall</span><span class="p">(</span><span class="n">open</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/etc/shadow&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">O_RDONLY</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Kernel</span><span class="o">-&gt;&gt;</span><span class="n">BPF</span><span class="o">:</span><span class="w"> </span><span class="n">Check</span><span class="w"> </span><span class="n">syscall</span><span class="w"> </span><span class="n">against</span><span class="w"> </span><span class="n">filter</span>
+<span class="w">    </span><span class="n">BPF</span><span class="o">-&gt;&gt;</span><span class="n">BPF</span><span class="o">:</span><span class="w"> </span><span class="n">open</span><span class="p">()</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="o">/</span><span class="n">etc</span><span class="o">/</span><span class="n">shadow</span><span class="o">?&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Path</span><span class="w"> </span><span class="kr">not</span><span class="w"> </span><span class="kr">in</span><span class="w"> </span><span class="n">allowed</span><span class="w"> </span><span class="n">list</span>
+<span class="w">    </span><span class="n">BPF</span><span class="o">--&gt;&gt;</span><span class="n">Kernel</span><span class="o">:</span><span class="w"> </span><span class="n">SECCOMP_RET_ERRNO</span><span class="w"> </span><span class="p">(</span><span class="n">EACCES</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Kernel</span><span class="o">--&gt;&gt;</span><span class="n">App</span><span class="o">:</span><span class="w"> </span><span class="n">errno</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EACCES</span><span class="w"> </span><span class="p">(</span><span class="n">Permission</span><span class="w"> </span><span class="n">denied</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">Kernel</span><span class="o">:</span><span class="w"> </span><span class="n">syscall</span><span class="p">(</span><span class="n">socket</span><span class="p">,</span><span class="w"> </span><span class="n">AF_INET</span><span class="p">,</span><span class="w"> </span><span class="n">SOCK_STREAM</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Kernel</span><span class="o">-&gt;&gt;</span><span class="n">BPF</span><span class="o">:</span><span class="w"> </span><span class="n">Check</span><span class="w"> </span><span class="n">syscall</span><span class="w"> </span><span class="n">against</span><span class="w"> </span><span class="n">filter</span>
+<span class="w">    </span><span class="n">BPF</span><span class="o">-&gt;&gt;</span><span class="n">BPF</span><span class="o">:</span><span class="w"> </span><span class="n">socket</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">)</span><span class="o">?&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Network</span><span class="w"> </span><span class="kr">not</span><span class="w"> </span><span class="kr">in</span><span class="w"> </span><span class="n">capabilities</span>
+<span class="w">    </span><span class="n">BPF</span><span class="o">--&gt;&gt;</span><span class="n">Kernel</span><span class="o">:</span><span class="w"> </span><span class="n">SECCOMP_RET_ERRNO</span><span class="w"> </span><span class="p">(</span><span class="n">EPERM</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Kernel</span><span class="o">--&gt;&gt;</span><span class="n">App</span><span class="o">:</span><span class="w"> </span><span class="n">errno</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EPERM</span><span class="w"> </span><span class="p">(</span><span class="n">Operation</span><span class="w"> </span><span class="kr">not</span><span class="w"> </span><span class="n">permitted</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="building-the-seccomp-profile">Building the seccomp Profile</h3>
+<p>The seccomp profile is generated from the server's capability declaration. Each capability maps to a set of allowed syscalls:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">SeccompProfile</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">defaultAction</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ERRNO&#39;</span><span class="w">  </span><span class="c1">// Default: deny</span>
+<span class="w">  </span><span class="nx">architectures</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span>
+<span class="w">  </span><span class="nx">syscalls</span><span class="o">:</span><span class="w"> </span><span class="kt">SeccompRule</span><span class="p">[]</span>
+<span class="p">}</span>
+
+<span class="kd">interface</span><span class="w"> </span><span class="nx">SeccompRule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">names</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span>
+<span class="w">  </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ALLOW&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ERRNO&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_LOG&#39;</span>
+<span class="w">  </span><span class="nx">args?</span><span class="o">:</span><span class="w"> </span><span class="kt">SeccompArg</span><span class="p">[]</span>
+<span class="p">}</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">buildSeccompProfile</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">SeccompProfile</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">rules</span><span class="o">:</span><span class="w"> </span><span class="kt">SeccompRule</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
+
+<span class="w">  </span><span class="c1">// Always allowed: basic process operations</span>
+<span class="w">  </span><span class="nx">rules</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span>
+<span class="w">    </span><span class="nx">names</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="s1">&#39;read&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;write&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;close&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;fstat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;lseek&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;mmap&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;mprotect&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;munmap&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;brk&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;rt_sigaction&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;rt_sigprocmask&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ioctl&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;nanosleep&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;clock_nanosleep&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getpid&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getuid&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getgid&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;geteuid&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getegid&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;exit&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;exit_group&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;futex&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;clock_gettime&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;clock_getres&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getrandom&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;memfd_create&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;eventfd2&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;epoll_create1&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;epoll_ctl&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;epoll_wait&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;pipe2&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;fcntl&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ALLOW&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="c1">// Filesystem: only if declared</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">read</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">||</span>
+<span class="w">      </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">write</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">rules</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span>
+<span class="w">      </span><span class="nx">names</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;openat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;stat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;lstat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;access&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;readlink&#39;</span><span class="p">,</span>
+<span class="w">              </span><span class="s1">&#39;getdents64&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;newfstatat&#39;</span><span class="p">],</span>
+<span class="w">      </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ALLOW&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">write</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">rules</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span>
+<span class="w">      </span><span class="nx">names</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;openat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;rename&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;renameat2&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;unlink&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;unlinkat&#39;</span><span class="p">,</span>
+<span class="w">              </span><span class="s1">&#39;mkdir&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;mkdirat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;chmod&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;fchmod&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;truncate&#39;</span><span class="p">,</span>
+<span class="w">              </span><span class="s1">&#39;ftruncate&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;fsync&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;fdatasync&#39;</span><span class="p">],</span>
+<span class="w">      </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ALLOW&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Network: only if declared</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">network</span><span class="p">.</span><span class="nx">outbound</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">||</span>
+<span class="w">      </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">network</span><span class="p">.</span><span class="nx">dns</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">rules</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span>
+<span class="w">      </span><span class="nx">names</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;socket&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;connect&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;sendto&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;recvfrom&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;sendmsg&#39;</span><span class="p">,</span>
+<span class="w">              </span><span class="s1">&#39;recvmsg&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;listen&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;accept4&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getsockopt&#39;</span><span class="p">,</span>
+<span class="w">              </span><span class="s1">&#39;setsockopt&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getpeername&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;getsockname&#39;</span><span class="p">],</span>
+<span class="w">      </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ALLOW&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Process spawning: only if declared</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">process</span><span class="p">.</span><span class="nx">spawn</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">rules</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span>
+<span class="w">      </span><span class="nx">names</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;clone&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;clone3&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;execve&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;execveat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;wait4&#39;</span><span class="p">,</span>
+<span class="w">              </span><span class="s1">&#39;waitid&#39;</span><span class="p">],</span>
+<span class="w">      </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ALLOW&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Dangerous syscalls: always blocked</span>
+<span class="w">  </span><span class="nx">rules</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span>
+<span class="w">    </span><span class="nx">names</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="s1">&#39;ptrace&#39;</span><span class="p">,</span><span class="w">           </span><span class="c1">// Process tracing (debug other processes)</span>
+<span class="w">      </span><span class="s1">&#39;personality&#39;</span><span class="p">,</span><span class="w">      </span><span class="c1">// Change execution domain</span>
+<span class="w">      </span><span class="s1">&#39;mount&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;umount2&#39;</span><span class="p">,</span><span class="w"> </span><span class="c1">// Filesystem mount manipulation</span>
+<span class="w">      </span><span class="s1">&#39;pivot_root&#39;</span><span class="p">,</span><span class="w">       </span><span class="c1">// Root filesystem manipulation</span>
+<span class="w">      </span><span class="s1">&#39;reboot&#39;</span><span class="p">,</span><span class="w">           </span><span class="c1">// System reboot</span>
+<span class="w">      </span><span class="s1">&#39;sethostname&#39;</span><span class="p">,</span><span class="w">      </span><span class="c1">// Change hostname</span>
+<span class="w">      </span><span class="s1">&#39;setdomainname&#39;</span><span class="p">,</span><span class="w">    </span><span class="c1">// Change domain name</span>
+<span class="w">      </span><span class="s1">&#39;kexec_load&#39;</span><span class="p">,</span><span class="w">       </span><span class="c1">// Load new kernel</span>
+<span class="w">      </span><span class="s1">&#39;init_module&#39;</span><span class="p">,</span><span class="w">      </span><span class="c1">// Load kernel module</span>
+<span class="w">      </span><span class="s1">&#39;finit_module&#39;</span><span class="p">,</span><span class="w">     </span><span class="c1">// Load kernel module from fd</span>
+<span class="w">      </span><span class="s1">&#39;delete_module&#39;</span><span class="p">,</span><span class="w">    </span><span class="c1">// Remove kernel module</span>
+<span class="w">      </span><span class="s1">&#39;keyctl&#39;</span><span class="p">,</span><span class="w">           </span><span class="c1">// Kernel key management</span>
+<span class="w">      </span><span class="s1">&#39;add_key&#39;</span><span class="p">,</span><span class="w">          </span><span class="c1">// Add kernel key</span>
+<span class="w">      </span><span class="s1">&#39;request_key&#39;</span><span class="p">,</span><span class="w">      </span><span class="c1">// Request kernel key</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ERRNO&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">})</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">defaultAction</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;SCMP_ACT_ERRNO&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">architectures</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;SCMP_ARCH_X86_64&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;SCMP_ARCH_AARCH64&#39;</span><span class="p">],</span>
+<span class="w">    </span><span class="nx">syscalls</span><span class="o">:</span><span class="w"> </span><span class="kt">rules</span><span class="p">,</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="applying-the-seccomp-profile">Applying the seccomp Profile</h3>
+<p>The profile is applied to the MCP server process immediately after fork, before exec:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">execFileSync</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;node:child_process&#39;</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">spawnSandboxedMcpServer</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">serverConfig</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerConfig</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ChildProcess</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">buildSeccompProfile</span><span class="p">(</span><span class="nx">capabilities</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">profilePath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">writeTempProfile</span><span class="p">(</span><span class="nx">profile</span><span class="p">)</span>
+
+<span class="w">  </span><span class="c1">// Use a sandbox wrapper that applies seccomp before exec</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">child</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">spawn</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;/usr/bin/bwrap&#39;</span><span class="p">,</span><span class="w">  </span><span class="c1">// bubblewrap sandbox</span>
+<span class="w">    </span><span class="p">[</span>
+<span class="w">      </span><span class="s1">&#39;--ro-bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/usr&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/usr&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;--ro-bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/lib&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/lib&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;--ro-bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/lib64&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/lib64&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;--ro-bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/etc/resolv.conf&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/etc/resolv.conf&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;--dev&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/dev&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;--proc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/proc&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="c1">// Workspace access based on capabilities</span>
+<span class="w">      </span><span class="p">...</span><span class="nx">buildMountArgs</span><span class="p">(</span><span class="nx">capabilities</span><span class="p">),</span>
+<span class="w">      </span><span class="c1">// seccomp filter</span>
+<span class="w">      </span><span class="s1">&#39;--seccomp&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;3&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="c1">// The actual server command</span>
+<span class="w">      </span><span class="s1">&#39;--&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">command</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">args</span><span class="p">,</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">stdio</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">],</span><span class="w">  </span><span class="c1">// fd 3 for seccomp</span>
+<span class="w">      </span><span class="nx">env</span><span class="o">:</span><span class="w"> </span><span class="kt">buildSandboxedEnv</span><span class="p">(</span><span class="nx">capabilities</span><span class="p">),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">)</span>
+
+<span class="w">  </span><span class="c1">// Write seccomp profile to fd 3</span>
+<span class="w">  </span><span class="nx">child</span><span class="p">.</span><span class="nx">stdio</span><span class="p">[</span><span class="mf">3</span><span class="p">]</span><span class="o">!</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">(</span><span class="nx">profile</span><span class="p">))</span>
+<span class="w">  </span><span class="nx">child</span><span class="p">.</span><span class="nx">stdio</span><span class="p">[</span><span class="mf">3</span><span class="p">]</span><span class="o">!</span><span class="p">.</span><span class="nx">end</span><span class="p">()</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">child</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="bubblewrap-mount-mapping">bubblewrap Mount Mapping</h3>
+<p>The <code>buildMountArgs</code> function translates filesystem capabilities into bubblewrap bind-mount arguments:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">buildMountArgs</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">args</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
+
+<span class="w">  </span><span class="c1">// Read-only mounts for readable paths</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">pattern</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">read</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolveCapabilityPath</span><span class="p">(</span><span class="nx">pattern</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="s1">&#39;--ro-bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">resolved</span><span class="p">,</span><span class="w"> </span><span class="nx">resolved</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Read-write mounts for writable paths</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">pattern</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">write</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolveCapabilityPath</span><span class="p">(</span><span class="nx">pattern</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="s1">&#39;--bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">resolved</span><span class="p">,</span><span class="w"> </span><span class="nx">resolved</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Executable mounts</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">pattern</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">execute</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolveCapabilityPath</span><span class="p">(</span><span class="nx">pattern</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">args</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="s1">&#39;--ro-bind&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">resolved</span><span class="p">,</span><span class="w"> </span><span class="nx">resolved</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Temporary directory (always available)</span>
+<span class="w">  </span><span class="nx">args</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="s1">&#39;--tmpfs&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/tmp&#39;</span><span class="p">)</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">args</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="155-macos-sandboxing-with-sandbox-exec">15.5 macOS Sandboxing with sandbox-exec</h2>
+<p>macOS does not support seccomp-bpf. Instead, it provides <code>sandbox-exec</code> (also known as Seatbelt), a mandatory access control framework based on the TrustedBSD subsystem.</p>
+<h3 id="sandbox-exec-profile-language">sandbox-exec Profile Language</h3>
+<p>Seatbelt profiles use a Scheme-like language (SBPL -- Sandbox Profile Language):</p>
+<div class="codehilite"><pre><span></span><code><span class="p">(</span><span class="nb">version</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+
+<span class="c1">;; Default: deny everything</span>
+<span class="p">(</span><span class="nf">deny</span><span class="w"> </span><span class="nv">default</span><span class="p">)</span>
+
+<span class="c1">;; Allow basic process operations</span>
+<span class="p">(</span><span class="nf">allow</span><span class="w"> </span><span class="nv">process-exec</span><span class="p">)</span>
+<span class="p">(</span><span class="nf">allow</span><span class="w"> </span><span class="nv">process-fork</span><span class="p">)</span>
+<span class="p">(</span><span class="nf">allow</span><span class="w"> </span><span class="nv">signal</span><span class="w"> </span><span class="p">(</span><span class="nf">target</span><span class="w"> </span><span class="nv">self</span><span class="p">))</span>
+<span class="p">(</span><span class="nf">allow</span><span class="w"> </span><span class="nv">sysctl-read</span><span class="p">)</span>
+
+<span class="c1">;; Allow reading specific paths</span>
+<span class="p">(</span><span class="nf">allow</span><span class="w"> </span><span class="nv">file-read*</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">subpath</span><span class="w"> </span><span class="s">&quot;/usr/lib&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">subpath</span><span class="w"> </span><span class="s">&quot;/usr/local/lib&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">subpath</span><span class="w"> </span><span class="s">&quot;/System/Library&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">literal</span><span class="w"> </span><span class="s">&quot;/dev/null&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">literal</span><span class="w"> </span><span class="s">&quot;/dev/urandom&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="c1">;; Workspace paths injected from capabilities</span>
+<span class="w">  </span><span class="nv">%%WORKSPACE_READ_RULES%%</span>
+<span class="p">)</span>
+
+<span class="c1">;; Allow writing specific paths</span>
+<span class="p">(</span><span class="nf">allow</span><span class="w"> </span><span class="nv">file-write*</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">subpath</span><span class="w"> </span><span class="s">&quot;/private/tmp&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="nv">%%WORKSPACE_WRITE_RULES%%</span>
+<span class="p">)</span>
+
+<span class="c1">;; Network: conditional on capabilities</span>
+<span class="nv">%%NETWORK_RULES%%</span>
+
+<span class="c1">;; Block dangerous operations</span>
+<span class="p">(</span><span class="nf">deny</span><span class="w"> </span><span class="nv">file-write*</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">subpath</span><span class="w"> </span><span class="s">&quot;/System&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">subpath</span><span class="w"> </span><span class="s">&quot;/usr&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">subpath</span><span class="w"> </span><span class="s">&quot;/Library&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">regex</span><span class="w"> </span><span class="o">#</span><span class="s">&quot;^/Users/[^/]+/</span><span class="se">\.</span><span class="s">(ssh|gnupg|aws|azure)&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="c1">;; Block process inspection</span>
+<span class="p">(</span><span class="nf">deny</span><span class="w"> </span><span class="nv">process-info-pidinfo</span><span class="w"> </span><span class="p">(</span><span class="nf">target</span><span class="w"> </span><span class="nv">others</span><span class="p">))</span>
+<span class="p">(</span><span class="nf">deny</span><span class="w"> </span><span class="nv">process-info-setcontrol</span><span class="w"> </span><span class="p">(</span><span class="nf">target</span><span class="w"> </span><span class="nv">others</span><span class="p">))</span>
+
+<span class="c1">;; Allow IPC with parent (Claude Code)</span>
+<span class="p">(</span><span class="nf">allow</span><span class="w"> </span><span class="nv">mach-lookup</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">global-name</span><span class="w"> </span><span class="s">&quot;com.apple.system.notification_center&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<h3 id="generating-macos-profiles-from-capabilities">Generating macOS Profiles from Capabilities</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">buildSeatbeltProfile</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">workspacePath</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`(version 1)</span>
+<span class="sb">(deny default)</span>
+
+<span class="sb">;; Basic process operations</span>
+<span class="sb">(allow process-exec)</span>
+<span class="sb">(allow process-fork)</span>
+<span class="sb">(allow signal (target self))</span>
+<span class="sb">(allow sysctl-read)</span>
+<span class="sb">(allow mach-lookup)</span>
+<span class="sb">(allow ipc-posix-shm-read-data)</span>
+<span class="sb">(allow ipc-posix-shm-write-data)</span>
+
+<span class="sb">;; System libraries (read-only)</span>
+<span class="sb">(allow file-read*</span>
+<span class="sb">  (subpath &quot;/usr/lib&quot;)</span>
+<span class="sb">  (subpath &quot;/usr/local/lib&quot;)</span>
+<span class="sb">  (subpath &quot;/System/Library/Frameworks&quot;)</span>
+<span class="sb">  (subpath &quot;/System/Library/PrivateFrameworks&quot;)</span>
+<span class="sb">  (subpath &quot;/Library/Frameworks&quot;)</span>
+<span class="sb">  (literal &quot;/dev/null&quot;)</span>
+<span class="sb">  (literal &quot;/dev/urandom&quot;)</span>
+<span class="sb">  (literal &quot;/dev/random&quot;)</span>
+<span class="sb">  (literal &quot;/etc/resolv.conf&quot;)</span>
+<span class="sb">)</span>
+<span class="sb">`</span>
+
+<span class="w">  </span><span class="c1">// Filesystem read access</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">pattern</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">read</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolveCapabilityPath</span><span class="p">(</span><span class="nx">pattern</span><span class="p">,</span><span class="w"> </span><span class="nx">workspacePath</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(allow file-read* (subpath &quot;</span><span class="si">${</span><span class="nx">resolved</span><span class="si">}</span><span class="sb">&quot;))\n`</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Filesystem write access</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">pattern</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">filesystem</span><span class="p">.</span><span class="nx">write</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">resolveCapabilityPath</span><span class="p">(</span><span class="nx">pattern</span><span class="p">,</span><span class="w"> </span><span class="nx">workspacePath</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(allow file-write* (subpath &quot;</span><span class="si">${</span><span class="nx">resolved</span><span class="si">}</span><span class="sb">&quot;))\n`</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Always allow tmp</span>
+<span class="w">  </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(allow file-write* (subpath &quot;/private/tmp&quot;))\n`</span>
+<span class="w">  </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(allow file-read* (subpath &quot;/private/tmp&quot;))\n`</span>
+
+<span class="w">  </span><span class="c1">// Network access</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">network</span><span class="p">.</span><span class="nx">outbound</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">||</span>
+<span class="w">      </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">network</span><span class="p">.</span><span class="nx">dns</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`\n;; Network access (declared in capabilities)\n`</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(allow network-outbound)\n`</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(allow network-inbound)\n`</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(allow system-socket)\n`</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`\n;; No network access (not declared)\n`</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(deny network-outbound)\n`</span>
+<span class="w">    </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`(deny network-inbound)\n`</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Always block sensitive paths</span>
+<span class="w">  </span><span class="nx">profile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="sb">`</span>
+<span class="sb">;; Sensitive path protection (always blocked)</span>
+<span class="sb">(deny file-read*</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/\\.ssh&quot;)</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/\\.gnupg&quot;)</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/\\.aws&quot;)</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/\\.azure&quot;)</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/\\.credentials&quot;)</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/Library/Keychains&quot;)</span>
+<span class="sb">)</span>
+<span class="sb">(deny file-write*</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/\\.(bashrc|zshrc|profile|bash_profile)&quot;)</span>
+<span class="sb">  (regex #&quot;^/Users/[^/]+/\\.ssh&quot;)</span>
+<span class="sb">  (subpath &quot;/System&quot;)</span>
+<span class="sb">  (subpath &quot;/usr&quot;)</span>
+<span class="sb">)</span>
+<span class="sb">`</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">profile</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="launching-with-sandbox-exec">Launching with sandbox-exec</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">spawnSandboxedMcpServerMacOS</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">serverConfig</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerConfig</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">workspacePath</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ChildProcess</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">buildSeatbeltProfile</span><span class="p">(</span><span class="nx">capabilities</span><span class="p">,</span><span class="w"> </span><span class="nx">workspacePath</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">profilePath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">writeTempFile</span><span class="p">(</span><span class="nx">profile</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;sb&#39;</span><span class="p">)</span>
+
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">child</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">spawn</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;/usr/bin/sandbox-exec&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">[</span>
+<span class="w">      </span><span class="s1">&#39;-f&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">profilePath</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;--&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">command</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">args</span><span class="p">,</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">stdio</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ipc&#39;</span><span class="p">],</span>
+<span class="w">      </span><span class="nx">env</span><span class="o">:</span><span class="w"> </span><span class="kt">buildSandboxedEnv</span><span class="p">(</span><span class="nx">capabilities</span><span class="p">),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">)</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">child</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="macos-sandbox-limitations">macOS Sandbox Limitations</h3>
+<table>
+<thead>
+<tr>
+<th>Limitation</th>
+<th>Impact</th>
+<th>Workaround</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sandbox-exec</code> is deprecated since macOS 10.15</td>
+<td>May be removed in future macOS versions</td>
+<td>Use App Sandbox entitlements for distributed builds</td>
+</tr>
+<tr>
+<td>Scheme profile language is undocumented</td>
+<td>Difficult to write correct profiles</td>
+<td>Use known-good profiles from WebKit/Chrome as reference</td>
+</tr>
+<tr>
+<td>No per-host network filtering</td>
+<td>Cannot restrict outbound to specific hosts</td>
+<td>Use <code>pf</code> (packet filter) rules per process</td>
+</tr>
+<tr>
+<td>No cgroup equivalent</td>
+<td>Memory limits are advisory (<code>RLIMIT_RSS</code>)</td>
+<td>Monitor RSS via <code>task_info()</code> and kill if exceeded</td>
+</tr>
+<tr>
+<td>Seatbelt profiles cannot be modified after process start</td>
+<td>Must pre-compute all needed paths</td>
+<td>Restart server process if capabilities change</td>
+</tr>
+</tbody>
+</table>
+<p>Despite these limitations, sandbox-exec provides meaningful confinement. A sandboxed MCP server that tries to read <code>~/.ssh/id_rsa</code> receives <code>EPERM</code> from the kernel, regardless of what the server code does at the application level.</p>
+<hr />
+<h2 id="156-network-namespace-isolation">15.6 Network Namespace Isolation</h2>
+<p>For MCP servers that do not declare network capabilities, we go beyond syscall-level blocking and provide full network namespace isolation on Linux. This ensures that even if a server finds a way to create a socket (through a vulnerability in the seccomp filter or through an allowed helper process), it has no network to connect to.</p>
+<h3 id="linux-network-namespaces">Linux Network Namespaces</h3>
+<div class="codehilite"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">TD</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Host Network Namespace&quot;</span>
+<span class="w">        </span><span class="n">HOST_ETH</span><span class="p">[</span><span class="s">&quot;eth0: 192.168.1.100&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">HOST_LO</span><span class="p">[</span><span class="s">&quot;lo: 127.0.0.1&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">INTERNET</span><span class="p">[</span><span class="s">&quot;Internet Access&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="s">&quot;Sandboxed MCP Server Namespace&quot;</span>
+<span class="w">        </span><span class="n">SANDBOX_LO</span><span class="p">[</span><span class="s">&quot;lo: 127.0.0.1&lt;br/&gt;(namespace-local only)&quot;</span><span class="p">]</span>
+<span class="w">        </span><span class="n">NO_NET</span><span class="p">[</span><span class="s">&quot;No eth0&lt;br/&gt;No bridge&lt;br/&gt;No routes&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">HOST_ETH</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">INTERNET</span>
+<span class="w">    </span><span class="n">SANDBOX_LO</span><span class="w"> </span><span class="o">-</span><span class="p">.</span><span class="o">-</span><span class="w"> </span><span class="n">NO_NET</span>
+
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">NO_NET</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">fce4ec</span>
+<span class="w">    </span><span class="n">style</span><span class="w"> </span><span class="n">INTERNET</span><span class="w"> </span><span class="n">fill</span><span class="o">:</span><span class="err">#</span><span class="n">e8f5e9</span>
+</code></pre></div>
+
+<h3 id="implementation-with-unshare">Implementation with unshare</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">spawnNetworkIsolatedServer</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">serverConfig</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerConfig</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ChildProcess</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">hasNetwork</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">network</span><span class="p">.</span><span class="nx">outbound</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">hasNetwork</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Server needs network -- use standard spawn with firewall rules</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">spawnWithFirewallRules</span><span class="p">(</span><span class="nx">serverConfig</span><span class="p">,</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// No network needed -- full namespace isolation</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">spawn</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;/usr/bin/unshare&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">[</span>
+<span class="w">      </span><span class="s1">&#39;--net&#39;</span><span class="p">,</span><span class="w">        </span><span class="c1">// New network namespace (only loopback)</span>
+<span class="w">      </span><span class="s1">&#39;--map-current-user&#39;</span><span class="p">,</span><span class="w">  </span><span class="c1">// Map current user into namespace</span>
+<span class="w">      </span><span class="s1">&#39;--&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">command</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">args</span><span class="p">,</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">stdio</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ipc&#39;</span><span class="p">],</span>
+<span class="w">      </span><span class="nx">env</span><span class="o">:</span><span class="w"> </span><span class="kt">buildSandboxedEnv</span><span class="p">(</span><span class="nx">capabilities</span><span class="p">),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>In the isolated network namespace, the server has only a loopback interface. There is no route to any external host. DNS resolution fails. HTTP requests fail. Exfiltration via network is physically impossible.</p>
+<h3 id="selective-network-access-with-veth-pairs">Selective Network Access with veth Pairs</h3>
+<p>For servers that need network access to specific hosts, we create a virtual ethernet (veth) pair with iptables rules:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">spawnWithFirewallRules</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">serverConfig</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerConfig</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ChildProcess</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">nsName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`mcp-</span><span class="si">${</span><span class="nx">randomBytes</span><span class="p">(</span><span class="mf">4</span><span class="p">).</span><span class="nx">toString</span><span class="p">(</span><span class="s1">&#39;hex&#39;</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span>
+
+<span class="w">  </span><span class="c1">// Create network namespace with controlled access</span>
+<span class="w">  </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;ip&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;netns&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;add&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">nsName</span><span class="p">])</span>
+<span class="w">  </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;ip&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;link&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;add&#39;</span><span class="p">,</span><span class="w"> </span><span class="sb">`veth-</span><span class="si">${</span><span class="nx">nsName</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;type&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;veth&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;peer&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;name&#39;</span><span class="p">,</span><span class="w"> </span><span class="sb">`vethp-</span><span class="si">${</span><span class="nx">nsName</span><span class="si">}</span><span class="sb">`</span><span class="p">])</span>
+<span class="w">  </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;ip&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;link&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;set&#39;</span><span class="p">,</span><span class="w"> </span><span class="sb">`vethp-</span><span class="si">${</span><span class="nx">nsName</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;netns&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">nsName</span><span class="p">])</span>
+
+<span class="w">  </span><span class="c1">// Set up routing within the namespace</span>
+<span class="w">  </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;ip&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;netns&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;exec&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">nsName</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;ip&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;addr&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;add&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;10.200.0.2/24&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;dev&#39;</span><span class="p">,</span><span class="w"> </span><span class="sb">`vethp-</span><span class="si">${</span><span class="nx">nsName</span><span class="si">}</span><span class="sb">`</span><span class="p">])</span>
+<span class="w">  </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;ip&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;addr&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;add&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;10.200.0.1/24&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;dev&#39;</span><span class="p">,</span><span class="w"> </span><span class="sb">`veth-</span><span class="si">${</span><span class="nx">nsName</span><span class="si">}</span><span class="sb">`</span><span class="p">])</span>
+
+<span class="w">  </span><span class="c1">// Enable NAT for the namespace</span>
+<span class="w">  </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;iptables&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;-t&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;nat&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;-A&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;POSTROUTING&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;-s&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;10.200.0.0/24&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;-j&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;MASQUERADE&#39;</span><span class="p">])</span>
+
+<span class="w">  </span><span class="c1">// Apply per-host firewall rules</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">rule</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">network</span><span class="p">.</span><span class="nx">outbound</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;iptables&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;-A&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;FORWARD&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;-s&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;10.200.0.2&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;-d&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">resolveHostToIp</span><span class="p">(</span><span class="nx">rule</span><span class="p">.</span><span class="nx">host</span><span class="p">),</span>
+<span class="w">      </span><span class="s1">&#39;-p&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">rule</span><span class="p">.</span><span class="nx">protocol</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;udp&#39;</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;udp&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;tcp&#39;</span><span class="p">,</span>
+<span class="w">      </span><span class="s1">&#39;--dport&#39;</span><span class="p">,</span><span class="w"> </span><span class="nb">String</span><span class="p">(</span><span class="nx">rule</span><span class="p">.</span><span class="nx">port</span><span class="p">),</span>
+<span class="w">      </span><span class="s1">&#39;-j&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ACCEPT&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">])</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Default: drop all other forwarded traffic</span>
+<span class="w">  </span><span class="nx">execFileSync</span><span class="p">(</span><span class="s1">&#39;iptables&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;-A&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;FORWARD&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;-s&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;10.200.0.2&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;-j&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;DROP&#39;</span><span class="p">])</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">spawn</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;ip&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;netns&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;exec&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">nsName</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">command</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">args</span><span class="p">],</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">stdio</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pipe&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ipc&#39;</span><span class="p">],</span>
+<span class="w">      </span><span class="nx">env</span><span class="o">:</span><span class="w"> </span><span class="kt">buildSandboxedEnv</span><span class="p">(</span><span class="nx">capabilities</span><span class="p">),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="157-environment-variable-isolation">15.7 Environment Variable Isolation</h2>
+<p>MCP servers run as child processes and by default inherit the parent's environment variables. This includes sensitive values like <code>API_KEY</code>, <code>DATABASE_URL</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and authentication tokens.</p>
+<h3 id="the-environment-leak">The Environment Leak</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1">// Current behavior: full inheritance</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">child</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">spawn</span><span class="p">(</span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">command</span><span class="p">,</span><span class="w"> </span><span class="nx">serverConfig</span><span class="p">.</span><span class="nx">args</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">env</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env</span><span class="p">,</span><span class="w">  </span><span class="c1">// ALL parent env vars visible to MCP server</span>
+<span class="p">})</span>
+</code></pre></div>
+
+<p>Every secret in the parent's environment is available to the MCP server. A malicious server can read <code>process.env</code> and exfiltrate every API key, database credential, and cloud token.</p>
+<h3 id="sandboxed-environment">Sandboxed Environment</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">buildSandboxedEnv</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">NodeJS</span><span class="p">.</span><span class="nx">ProcessEnv</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// Start with a minimal base environment</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">base</span><span class="o">:</span><span class="w"> </span><span class="kt">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">PATH</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/usr/local/bin:/usr/bin:/bin&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">HOME</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.HOME</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;/tmp&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">LANG</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.LANG</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;en_US.UTF-8&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">TERM</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.TERM</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;xterm-256color&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">NODE_ENV</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.NODE_ENV</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;production&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Add only declared environment variables</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">environment</span><span class="p">.</span><span class="nx">inherit</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Server declared it needs all env vars (flag for review)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">varName</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">.</span><span class="nx">environment</span><span class="p">.</span><span class="nx">read</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">[</span><span class="nx">varName</span><span class="p">]</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">value</span><span class="w"> </span><span class="o">!==</span><span class="w"> </span><span class="kc">undefined</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">base</span><span class="p">[</span><span class="nx">varName</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">value</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">base</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Environment Policy</th>
+<th>What Server Sees</th>
+<th>Risk Level</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inherit: true</code></td>
+<td>All parent env vars</td>
+<td>HIGH -- full secret access</td>
+</tr>
+<tr>
+<td><code>inherit: false</code>, <code>read: ["NODE_ENV"]</code></td>
+<td>Only <code>NODE_ENV</code> + base</td>
+<td>LOW -- minimal exposure</td>
+</tr>
+<tr>
+<td><code>inherit: false</code>, <code>read: []</code></td>
+<td>Only base (PATH, HOME, LANG)</td>
+<td>MINIMAL -- no secret access</td>
+</tr>
+</tbody>
+</table>
+<p>Servers that declare <code>inherit: true</code> receive a warning during installation:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">WARNING</span><span class="o">:</span><span class="w"> </span><span class="n">mcp</span><span class="o">-</span><span class="n">database</span><span class="o">-</span><span class="n">tool</span><span class="w"> </span><span class="n">requests</span><span class="w"> </span><span class="n">access</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">ALL</span><span class="w"> </span><span class="n">environment</span><span class="w"> </span><span class="n">variables</span><span class="o">.</span>
+<span class="n">This</span><span class="w"> </span><span class="n">includes</span><span class="w"> </span><span class="n">any</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">keys</span><span class="o">,</span><span class="w"> </span><span class="n">tokens</span><span class="o">,</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">secrets</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">your</span><span class="w"> </span><span class="n">environment</span><span class="o">.</span>
+
+<span class="n">Proceed</span><span class="w"> </span><span class="k">with</span><span class="w"> </span><span class="n">full</span><span class="w"> </span><span class="n">environment</span><span class="w"> </span><span class="n">access</span><span class="o">?</span><span class="w"> </span><span class="o">[</span><span class="n">y</span><span class="o">/</span><span class="n">N</span><span class="o">]</span>
+</code></pre></div>
+
+<hr />
+<h2 id="158-sandbox-violation-monitoring">15.8 Sandbox Violation Monitoring</h2>
+<p>When a sandboxed MCP server attempts a blocked operation, the violation is logged and optionally reported to the user.</p>
+<h3 id="violation-log-structure">Violation Log Structure</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">SandboxViolation</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">timestamp</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span>
+<span class="w">  </span><span class="nx">serverId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">  </span><span class="nx">serverName</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span>
+<span class="w">  </span><span class="nx">syscall</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w">           </span><span class="c1">// The blocked syscall</span>
+<span class="w">  </span><span class="nx">args</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w">            </span><span class="c1">// Syscall arguments (if available)</span>
+<span class="w">  </span><span class="nx">resource</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w">          </span><span class="c1">// The resource that was blocked</span>
+<span class="w">  </span><span class="nx">declaredCapabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w">  </span><span class="c1">// What the server declared</span>
+<span class="w">  </span><span class="nx">severity</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;warning&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;critical&#39;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="violation-response-strategy">Violation Response Strategy</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">stateDiagram</span><span class="o">-</span><span class="n">v2</span>
+<span class="w">    </span><span class="p">[</span><span class="o">*</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">FirstViolation</span><span class="o">:</span><span class="w"> </span><span class="n">sandbox</span><span class="w"> </span><span class="n">blocks</span><span class="w"> </span><span class="n">operation</span>
+<span class="w">    </span><span class="n">FirstViolation</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="nf">Log</span><span class="o">:</span><span class="w"> </span><span class="n">severity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">warning</span>
+<span class="w">    </span><span class="nf">Log</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Continue</span><span class="o">:</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="n">continues</span><span class="w"> </span><span class="n">running</span>
+
+<span class="w">    </span><span class="n">Continue</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SecondViolation</span><span class="o">:</span><span class="w"> </span><span class="n">another</span><span class="w"> </span><span class="n">blocked</span><span class="w"> </span><span class="n">operation</span>
+<span class="w">    </span><span class="n">SecondViolation</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Warn</span><span class="o">:</span><span class="w"> </span><span class="n">severity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">warning</span>
+<span class="w">    </span><span class="n">Warn</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">AlertUser</span><span class="o">:</span><span class="w"> </span><span class="n">display</span><span class="w"> </span><span class="n">notification</span>
+
+<span class="w">    </span><span class="n">AlertUser</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ThirdViolation</span><span class="o">:</span><span class="w"> </span><span class="kt">pattern</span><span class="w"> </span><span class="n">detected</span>
+<span class="w">    </span><span class="n">ThirdViolation</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Quarantine</span><span class="o">:</span><span class="w"> </span><span class="n">severity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">critical</span>
+<span class="w">    </span><span class="n">Quarantine</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Kill</span><span class="o">:</span><span class="w"> </span><span class="n">SIGTERM</span><span class="w"> </span><span class="n">server</span><span class="w"> </span><span class="nf">process</span>
+<span class="w">    </span><span class="n">Kill</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">Report</span><span class="o">:</span><span class="w"> </span><span class="n">generate</span><span class="w"> </span><span class="n">violation</span><span class="w"> </span><span class="n">report</span>
+<span class="w">    </span><span class="n">Report</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="p">]</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Violation Count</th>
+<th>Action</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Log only</td>
+<td>May be accidental (library probing for capabilities)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Log + alert user</td>
+<td>Pattern emerging -- user should be aware</td>
+</tr>
+<tr>
+<td>3+</td>
+<td>Kill server + report</td>
+<td>Likely malicious -- server repeatedly testing boundaries</td>
+</tr>
+<tr>
+<td>Any <code>ptrace</code> or kernel module</td>
+<td>Immediate kill</td>
+<td>No legitimate MCP server needs these</td>
+</tr>
+</tbody>
+</table>
+<h3 id="distinguishing-malicious-from-accidental">Distinguishing Malicious from Accidental</h3>
+<p>Not every sandbox violation indicates malicious intent. Many libraries probe for capabilities at startup:</p>
+<ul>
+<li>Node.js checks <code>/proc/self/status</code> (blocked by filesystem sandbox on Linux)</li>
+<li>Python checks <code>os.getlogin()</code> which calls <code>utmp</code> reads</li>
+<li>Ruby checks for <code>fork()</code> availability at require time</li>
+</ul>
+<p>The violation monitor uses a classification system:</p>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">classifyViolation</span><span class="p">(</span><span class="nx">violation</span><span class="o">:</span><span class="w"> </span><span class="kt">SandboxViolation</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;expected&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;suspicious&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;malicious&#39;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// Known-benign probes</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">expectedProbes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nx">syscall</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;openat&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">resource</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/proc/self/status&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nx">syscall</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;access&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">resource</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/etc/localtime&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nx">syscall</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;stat&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">resource</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/etc/nsswitch.conf&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="p">]</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">expectedProbes</span><span class="p">.</span><span class="nx">some</span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="p">=&gt;</span>
+<span class="w">    </span><span class="nx">p</span><span class="p">.</span><span class="nx">syscall</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">violation</span><span class="p">.</span><span class="nx">syscall</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">    </span><span class="nx">violation</span><span class="p">.</span><span class="nx">resource</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">resource</span><span class="p">)</span>
+<span class="w">  </span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;expected&#39;</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Immediately malicious</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">alwaysMalicious</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;ptrace&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;init_module&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;kexec_load&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;keyctl&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;mount&#39;</span><span class="p">]</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">alwaysMalicious</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="nx">violation</span><span class="p">.</span><span class="nx">syscall</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;malicious&#39;</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Everything else is suspicious</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;suspicious&#39;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="159-trust-tiers-for-mcp-servers">15.9 Trust Tiers for MCP Servers</h2>
+<p>Not all MCP servers deserve the same level of sandboxing. A first-party server built by Anthropic has a different trust profile than a random package from npm.</p>
+<h3 id="trust-tier-model">Trust Tier Model</h3>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Examples</th>
+<th>Sandbox Level</th>
+<th>Verification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Built-in</strong></td>
+<td>File system tools, Bash, Agent</td>
+<td>No sandbox (runs in-process)</td>
+<td>Code review, CI/CD</td>
+</tr>
+<tr>
+<td><strong>First-party</strong></td>
+<td>Anthropic-published MCP servers</td>
+<td>Light sandbox (filesystem only)</td>
+<td>Signed by Anthropic key</td>
+</tr>
+<tr>
+<td><strong>Marketplace verified</strong></td>
+<td>Verified third-party servers</td>
+<td>Full sandbox</td>
+<td>Marketplace review + signing</td>
+</tr>
+<tr>
+<td><strong>Community</strong></td>
+<td>Unverified third-party</td>
+<td>Maximum sandbox</td>
+<td>No verification -- user assumes risk</td>
+</tr>
+<tr>
+<td><strong>Unknown</strong></td>
+<td>No source, no marketplace</td>
+<td>Maximum sandbox + network isolation</td>
+<td>Blocked by default</td>
+</tr>
+</tbody>
+</table>
+<h3 id="applying-trust-tiers">Applying Trust Tiers</h3>
+<div class="codehilite"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">getSandboxLevel</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">server</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerConfig</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;light&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;full&#39;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s1">&#39;maximum&#39;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">server</span><span class="p">.</span><span class="nx">source</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;builtin&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;none&#39;</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">server</span><span class="p">.</span><span class="nx">signature</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">verifyAnthropicSignature</span><span class="p">(</span><span class="nx">server</span><span class="p">.</span><span class="nx">signature</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;light&#39;</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">server</span><span class="p">.</span><span class="nx">marketplace</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">marketplaceVerified</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;full&#39;</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">server</span><span class="p">.</span><span class="nx">source</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;local&#39;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">source</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;npm&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;maximum&#39;</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;maximum&#39;</span><span class="w">  </span><span class="c1">// Default to maximum restriction</span>
+<span class="p">}</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">applySandbox</span><span class="p">(</span>
+<span class="w">  </span><span class="nx">server</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerConfig</span><span class="p">,</span>
+<span class="w">  </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">McpServerCapabilities</span>
+<span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">ChildProcess</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">getSandboxLevel</span><span class="p">(</span><span class="nx">server</span><span class="p">)</span>
+
+<span class="w">  </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="nx">level</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="o">:</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="nx">spawn</span><span class="p">(</span><span class="nx">server</span><span class="p">.</span><span class="nx">command</span><span class="p">,</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">args</span><span class="p">)</span>
+
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;light&#39;</span><span class="o">:</span>
+<span class="w">      </span><span class="c1">// Filesystem restrictions only</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="nx">spawnWithFilesystemSandbox</span><span class="p">(</span><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">)</span>
+
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;full&#39;</span><span class="o">:</span>
+<span class="w">      </span><span class="c1">// Filesystem + syscall filter</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="nx">spawnFullySandboxed</span><span class="p">(</span><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">)</span>
+
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;maximum&#39;</span><span class="o">:</span>
+<span class="w">      </span><span class="c1">// Filesystem + syscall filter + network isolation</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="nx">spawnMaxSandboxed</span><span class="p">(</span><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">capabilities</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="1510-compliance-mapping">15.10 Compliance Mapping</h2>
+<table>
+<thead>
+<tr>
+<th>Framework</th>
+<th>Control</th>
+<th>How This Chapter Addresses It</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OWASP A04:2021</td>
+<td>Insecure Design</td>
+<td>Sandbox-by-default prevents privilege abuse</td>
+</tr>
+<tr>
+<td>CWE-250</td>
+<td>Execution with Unnecessary Privileges</td>
+<td>Capability-based restrictions limit each server to declared needs</td>
+</tr>
+<tr>
+<td>CWE-269</td>
+<td>Improper Privilege Management</td>
+<td>Trust tiers apply proportional sandboxing</td>
+</tr>
+<tr>
+<td>CWE-284</td>
+<td>Improper Access Control</td>
+<td>Kernel-enforced sandbox (seccomp/Seatbelt) cannot be bypassed from userspace</td>
+</tr>
+<tr>
+<td>NIST SP 800-53 SC-39</td>
+<td>Process Isolation</td>
+<td>Separate namespaces, separate filesystem views, separate network</td>
+</tr>
+<tr>
+<td>NIST SP 800-53 CM-7</td>
+<td>Least Functionality</td>
+<td>Default-deny capability model ensures minimal privilege</td>
+</tr>
+<tr>
+<td>SOC 2 CC6.1</td>
+<td>Logical Access Controls</td>
+<td>Capability declarations provide auditable access policies</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1511-implementation-checklist">15.11 Implementation Checklist</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Change</th>
+<th>Priority</th>
+<th>Effort</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Capability schema</td>
+<td>Define <code>McpServerCapabilities</code> interface</td>
+<td>P0</td>
+<td>4h</td>
+</tr>
+<tr>
+<td>Install-time review</td>
+<td>Present capabilities to user before install</td>
+<td>P0</td>
+<td>8h</td>
+</tr>
+<tr>
+<td>seccomp profile generator</td>
+<td>Build profiles from capabilities (Linux)</td>
+<td>P0</td>
+<td>16h</td>
+</tr>
+<tr>
+<td>Seatbelt profile generator</td>
+<td>Build profiles from capabilities (macOS)</td>
+<td>P0</td>
+<td>16h</td>
+</tr>
+<tr>
+<td>Network namespace setup</td>
+<td>unshare + veth + iptables automation</td>
+<td>P1</td>
+<td>12h</td>
+</tr>
+<tr>
+<td>Environment isolation</td>
+<td>Minimal base env + declared-only vars</td>
+<td>P0</td>
+<td>4h</td>
+</tr>
+<tr>
+<td>Violation monitor</td>
+<td>Log, classify, escalate violations</td>
+<td>P1</td>
+<td>8h</td>
+</tr>
+<tr>
+<td>Trust tier system</td>
+<td>Signature verification + tier mapping</td>
+<td>P1</td>
+<td>8h</td>
+</tr>
+<tr>
+<td>Test suite</td>
+<td>Verify sandbox blocks undeclared operations</td>
+<td>P0</td>
+<td>12h</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td></td>
+<td></td>
+<td><strong>88h</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="migration-strategy">Migration Strategy</h3>
+<p>The sandbox cannot be deployed as a hard requirement overnight -- existing MCP servers do not have capability declarations. The migration follows three phases:</p>
+<ol>
+<li><strong>Phase 1 (Week 1-4)</strong>: Deploy monitoring-only sandbox. Log all operations that would be blocked. Publish capability schema specification.</li>
+<li><strong>Phase 2 (Week 5-12)</strong>: Require capability declarations for new marketplace submissions. Existing servers run with a permissive default capability set derived from monitoring data.</li>
+<li><strong>Phase 3 (Week 13+)</strong>: Enable enforcement for all servers. Servers without declarations receive a minimal default capability set (read-only workspace, no network, no process spawning).</li>
+</ol>
+<p>As discussed in Chapter 14, the resource budget system governs agents within the Claude Code process tree. This chapter extends that governance to the MCP server boundary. Together, they ensure that no component in the system -- whether an internal subagent or an external MCP server -- can exceed its declared privileges.</p>
+<div class="chapter-nav">
+  <a href="chapter-14.html">&larr; Previous</a>
+  <a href="index.html">Table of Contents</a>
+  <a href="chapter-16.html">Next &rarr;</a>
+</div>
+</div>
+</body>
+</html>
