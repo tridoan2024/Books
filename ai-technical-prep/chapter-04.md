@@ -1,11 +1,29 @@
 # Chapter 4: Application security and secure delivery
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Application security (27.0%), Secure SDLC (8.1%)
+> **Market evidence:** Application security (14.1%), Secure SDLC (2.9%); 312-posting snapshot, 2026-08-12
 > **Reader status:** PARTIAL / HAVE
 > **Why this chapter exists:** Detail standard and AI-specific application security practices, secure software development lifecycle (SDLC), continuous security gates, and automated validation inside build/deploy pipelines.
 
 ---
+
+## Edition 4.1 Expansion: AppSec for Systems Whose Data Can Become Control
+
+Application Security is a 14.1% PARTIAL skill: the reader already owns substantial product-security experience, but the market expects that experience to cover cloud-native and AI application boundaries explicitly.
+
+Preserve the familiar AppSec foundations—authentication, authorization, input handling, dependency security, SSRF defense, secrets, session integrity and secure delivery—but extend the model wherever data can influence execution. Prompts, retrieved documents, model outputs and tool responses can all become control inputs even when they are syntactically valid strings.
+
+A secure AI application therefore needs:
+
+- deterministic authorization around retrieval and tools;
+- constrained outbound network access and SSRF-resistant connectors;
+- typed schemas and semantic validation for model-generated arguments;
+- safe rendering of model output in browsers, terminals and downstream APIs;
+- provenance and signature checks for models and application artifacts;
+- test cases covering multi-turn and indirect attacks, not only request-local payloads;
+- ownership boundaries between product, platform, model and security teams.
+
+The Secure SDLC remains the delivery wrapper. It should make these controls repeatable through templates, libraries, policy tests and release evidence. The Staff-level outcome is not a longer checklist; it is a paved path that removes unsafe degrees of freedom while preserving a documented exception mechanism for novel research workloads.
 
 ## What You Must Be Able to Defend
 

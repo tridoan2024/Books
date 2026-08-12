@@ -1,11 +1,28 @@
 # Chapter 20: Distributed systems and multi-tenant inference isolation
 
 > **Part:** Part V — Systems, Data and Model Engineering
-> **Market evidence:** Distributed systems (17.1%), Multi-tenant AI isolation (6.3%), Inference & model serving security (0.9%)
+> **Market evidence:** Distributed systems (16.0%), Multi-tenant AI isolation (3.2%), Inference & model serving security (1.0%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** High-performance GPU serving clusters are extremely expensive resources that are naturally shared across multiple business units or external customers. This shared compute model introduces critical security risks: side-channel GPU memory timing leaks, cross-tenant data exfiltration, and resource-hogging Denial of Service (DoS) attacks. This chapter covers designing secure, multi-tenant model-serving architectures, detailing logical and physical GPU isolation utilizing Multi-Instance GPU (MIG) technology, network namespaces, and secure API proxy controls. For a Staff Security Engineer, this chapter provides the foundational blueprints for establishing absolute cryptographic and logical segregation across shared deep learning compute pools.
 
 ---
+
+## Edition 4.1 Expansion: Distributed Failure Is a Security Boundary
+
+Distributed Systems remains a 16.0% GAP. Security designs fail when they assume one authoritative decision, one instantaneous revocation or one globally consistent policy state. In a real inference platform, retries, caches, queues, replicas and regional partitions can extend authority after the control plane believes it was removed.
+
+Staff-level analysis should explicitly address:
+
+- **revocation propagation:** how quickly credentials, tenant policy and model permissions disappear from every cache and worker;
+- **retry semantics:** whether a retried tool action is idempotent or can duplicate a payment, deletion or external side effect;
+- **queue ownership:** how tenant and authorization context survive serialization without becoming attacker-controlled metadata;
+- **partial deployment:** what happens when different replicas run different model, prompt, guardrail or policy versions;
+- **load shedding:** which tenants and operations retain service during overload, and whether safety checks fail open;
+- **regional isolation:** how evidence, keys and policy updates behave during a network partition.
+
+Use explicit consistency requirements rather than saying “eventually consistent.” A usage counter may tolerate bounded staleness; a revoked tool grant may not. Where strong consistency is unavailable, compensate with short-lived capabilities, local deny lists, monotonic policy versions, bounded leases and a fail-closed path for high-impact actions.
+
+Multi-tenant inference isolation then becomes a consequence of ownership: every request, cache entry, queue message, accelerator allocation, artifact and log record must have an unambiguous tenant and policy context. If that context can be lost or rewritten between services, namespace and GPU controls alone cannot preserve isolation.
 
 ## What You Must Be Able to Defend
 
@@ -699,6 +716,12 @@ During a routine security audit of our multi-tenant GKE clusters, I noticed that
 
 #### Q18: What system-design gap should the reader close first?
 **Model Answer:** Practice reasoning about consistency, queues, retries, scheduling, tenancy and failure domains. Hardware architecture experience transfers, but production distributed-system operations are not evidenced in the resume.
+
+### Edition 4.1 Interview Drill
+
+#### Q19: A tool grant is revoked centrally, but queued agent work continues executing it for ten minutes. Diagnose and redesign the system.
+
+**Model answer:** The system treated authorization as metadata captured at enqueue time and assumed eventual consistency was acceptable for revocation. I would identify every cache, queue and worker that can extend the grant, then define a maximum revocation objective based on action impact. High-impact work should carry a short-lived, audience-restricted capability and be re-authorized immediately before the side effect; the queue message may identify the requested action but must not serve as permanent authority. Workers need monotonic policy versions or a local deny path that can invalidate work during control-plane partitions. Operations must be idempotent or protected by an idempotency key so replay after reauthorization does not duplicate effects. I would instrument revocation propagation and test it under backlog, regional partition and worker restart. The security property is bounded authority lifetime, not merely eventual convergence.
 
 ## Chapter Summary
 

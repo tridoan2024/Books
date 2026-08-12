@@ -1,11 +1,24 @@
 # Chapter 14: Kubernetes and container security
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Kubernetes security (32.4% core), Docker & containers (5.4% core - prerequisite)
+> **Market evidence:** Kubernetes security (22.1% core), Docker & containers (5.4% core - prerequisite); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** Kubernetes is the de facto operating system for production AI/ML workloads. Large Language Models are served, fine-tuned, and orchestrated at scale using containerized distributed frameworks like Ray, Kubeflow, Triton, and vLLM. Because these workloads require direct access to host accelerators (GPUs/TPUs) and dynamically execute untrusted inputs, securing the Kubernetes platform is the single most critical cloud defense. For a hardware-oriented security engineer, this chapter serves as the intellectual bridge, mapping kernel-level virtualization primitives to distributed cluster orchestration security.
 
 ---
+
+## Edition 4.1 Expansion: Kubernetes as an AI Security Control Plane
+
+The larger market sample confirms that Kubernetes security is not merely container hygiene; at 22.1% Core demand it is the second-largest gap in the reader's transition. Treat the cluster as a security control plane with four independently enforced layers:
+
+1. **Admission:** reject unsigned images, privileged workloads, unsafe host mounts, unrestricted capabilities and unapproved model artifacts before scheduling.
+2. **Identity:** bind each workload to a short-lived cloud and service identity; never inherit node identity or mount broad static credentials.
+3. **Runtime:** combine seccomp, AppArmor or SELinux, read-only filesystems, egress policy and an appropriate sandbox boundary. A namespace is an administrative boundary, not a hostile-code sandbox.
+4. **Resource isolation:** protect shared CPU, memory and accelerator capacity with quotas, priority classes, tenant-aware scheduling and explicit GPU isolation assumptions.
+
+For AI platforms, policy must also understand the workload's semantic assets: model identifier and digest, dataset class, permitted tools, accelerator assignment, outbound destinations and whether untrusted artifacts will be deserialized. A compliant Pod that can load an unsigned pickle checkpoint is still an unsafe AI workload.
+
+The Staff-level design objective is therefore not “secure Kubernetes.” It is to create a paved path in which the safest execution profile is the easiest profile to deploy, exceptions are time-bounded and observable, and every admitted workload can be traced to source, builder, artifact and approving policy version.
 
 ## What You Must Be Able to Defend
 
@@ -1081,6 +1094,12 @@ Transitioning to Kubernetes is a major architectural shift. When facing resistan
 4.  **Outcome:** By presenting a clear financial incentive, providing pre-built templates, and establishing a low-friction, phased implementation plan, I successfully convert the VP from an adversary into a key sponsor of the migration, delivering a highly secure, scalable, and compliant AI platform on schedule.
 
 ---
+
+### Edition 4.1 Interview Drill
+
+#### Q19: Design a Kubernetes execution tier for untrusted customer-supplied model artifacts. Which controls belong at admission, scheduling and runtime?
+
+**Model answer:** I would first classify the artifact as hostile code, because common model formats and loaders may execute code or trigger native-parser vulnerabilities. At admission, I would require an approved format, digest, provenance record and scanner result; reject privileged mode, host namespaces, host mounts, unsafe capabilities and unrestricted egress. At scheduling, I would place the workload on a dedicated node pool with taints and tolerations, strict quotas, tenant-aware placement and an explicit accelerator-isolation model. At runtime, I would use a sandboxed runtime where compatible, read-only filesystems, seccomp, mandatory access control, short-lived workload identity and deny-by-default network policy. The loader would run without production data access and publish only a newly validated artifact. Telemetry must record tenant, source digest, policy version, runtime class and outbound attempts. I would also define kill and quarantine paths that do not depend on the workload's namespace administrator.
 
 ## Chapter Summary
 

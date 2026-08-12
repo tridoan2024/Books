@@ -1,11 +1,25 @@
 # Chapter 10: Guardrails, safety filters and secure failure behaviour
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** AI guardrails & safety filters (17.1% core)
+> **Market evidence:** AI guardrails & safety filters (14.4% core); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** Guardrails and safety filters are the active shields of production LLM applications. However, in the industry, "guardrails" are frequently implemented as weak, soft prompt instructions or superficial text regexes. For a Ph.D.-level Staff Security Engineer with deep medical-device and embedded product-security experience, a guardrail is not a cosmetic filter; it is a **Deterministic Fail-Safe State Machine**. This chapter formalizes how to design, analyze, and implement robust runtime guardrail architectures and secure failure states that prevent systemic collapse when probabilistic models are compromised.
 
 ---
+
+## Edition 4.1 Expansion: Guardrails as a Layered Policy System
+
+Guardrails are the largest AI-specific gap at 14.4%. A production design should not describe “the guardrail” as one classifier. Separate controls by trust boundary and failure consequence:
+
+1. **Request controls:** authentication, tenant policy, rate and budget limits, input normalization and known-dangerous content handling.
+2. **Context controls:** authorization of retrieved documents, provenance checks, context-size limits and separation of instructions from untrusted data.
+3. **Action controls:** typed tool schemas, policy evaluation, argument validation, human approval for high-impact operations and idempotency protection.
+4. **Response controls:** sensitive-data detection, policy classification, citation or grounding checks and safe rendering.
+5. **System controls:** sandboxing, network egress, identity scope, resource quotas, logging and emergency disable paths.
+
+Each control needs a declared failure mode. A classifier timeout may fail open for a low-risk summarization request but must fail closed before a financial transfer or privileged administrative action. Where availability requires degradation, route to a reduced-capability path rather than silently bypassing policy.
+
+Evaluate the complete policy system, not only model accuracy. Measure bypass rate by attack family, false-positive cost by user journey, added latency, unavailable-policy behavior, disagreement between layers and the proportion of high-impact actions receiving deterministic enforcement. The Staff-level tradeoff is not safety versus usefulness in the abstract; it is which capability remains available under which evidence and which control failure.
 
 ## What You Must Be Able to Defend
 
@@ -947,6 +961,12 @@ I made the hard decision to **veto the bypass and enforce our Fail-Secure postur
 4.  **Outcome:** Leadership fully validated my decision. They recognized that enforcing our fail-secure invariants prevented a major corporate crisis. This incident cemented our policy that security invariants can never be bypassed for operational convenience, and we subsequently automated our database sanitization pipelines to permanently eliminate similar indirect injection vectors.
 
 ---
+
+### Edition 4.1 Interview Drill
+
+#### Q19: A guardrail service is unavailable. Should the AI product fail open or fail closed?
+
+**Model answer:** There is no universal answer; the action's impact determines the degraded mode. I would classify capabilities in advance. Read-only, low-sensitivity generation may continue with reduced limits, explicit user messaging and enhanced monitoring. Access to private retrieval, privileged tools, financial actions, code execution or irreversible side effects fails closed or routes to human approval. The application must not silently bypass policy because a dependency timed out. I would enforce the decision outside the model, set strict timeouts and circuit breakers, use cached policy only within a bounded version and lifetime, and prevent retry storms. The design also needs an independent kill switch and telemetry identifying every degraded decision. The Staff-level goal is graceful reduction of capability while preserving safety invariants, not maximizing availability of every feature.
 
 ## Chapter Summary
 

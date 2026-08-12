@@ -1,11 +1,15 @@
 # Chapter 23: Security assurance and AI governance
 
 > **Part:** Part VI — Assurance, Governance and Regulated Environments
-> **Market evidence:** ISO 27001 (9.9%), SOC 2 (9.9%), AI governance & NIST AI RMF (4.5%)
+> **Market evidence:** ISO 27001 (4.8%), SOC 2 (5.1%), AI governance & NIST AI RMF (2.9%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** Enterprise deployment of machine learning platforms demands more than technical controls; it requires formal security assurance, structured compliance mappings, and non-bypassable governance frameworks. This chapter details how to map complex distributed AI systems onto SOC 2 Type II trust criteria and ISO 27001 control domains, and how to execute the NIST AI Risk Management Framework (AI RMF). For a Staff Security Engineer, this chapter provides the operational translation layer, bridging raw infrastructure enclaves with auditable governance programs and programmatically signed compliance evidence.
 
 ---
+
+## Edition 4.1 Emphasis
+
+SOC 2 (5.1%) and ISO 27001 (4.8%) remain a valid peer merge, but AI Governance is only 2.9%. Teach assurance as an evidence system: identify the claim, map it to owned controls, collect trustworthy implementation and operating evidence, test exceptions, and make remediation traceable. NIST AI RMF organizes risk work; it does not replace technical threat modelling, evaluation or operational control verification.
 
 ## What You Must Be Able to Defend
 

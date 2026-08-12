@@ -1,7 +1,7 @@
 # Appendix A: Python for security and AI engineering
 
 > **Part:** Appendices
-> **Market evidence:** Python (46.8% core usage in security automation and AI/ML infrastructure)
+> **Market evidence:** Python (37.5% core); 312-posting snapshot, 2026-08-12
 > **Reader status:** HAVE (Extensive experience building secure tooling and deep systems automation)
 > **Why this appendix exists:** Security automation and AI engineering at a Staff+ level require a deep, non-abstracted mastery of Python's lower-level standard libraries. Whether you are building real-time compliance scanners, sanitizing subprocess environments in AI pipelines, parsing raw binary telemetry packets from proprietary gateways, or dynamically verifying the integrity of multi-gigabyte neural network weights, Python is the industry's lingua franca. This appendix provides the rigorous systems engineering and cryptographic depth necessary to implement secure, highly concurrent, and production-grade security tooling in Python.
 

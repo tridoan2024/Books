@@ -1,11 +1,25 @@
 # Chapter 9: Prompt injection, RAG and the LLM application trust boundary
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Prompt injection defence (17.1% core), OWASP LLM Top 10 (2.7% core), RAG security (1.8% core)
+> **Market evidence:** Prompt injection defence (7.4% core), OWASP LLM Top 10 (1.0%), RAG security (1.9%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** Prompt injection is the SQL injection equivalent of the generative AI era. Because LLMs process system instructions (control plane) and raw user inputs (data plane) within the same single context window, they are inherently vulnerable to hijacking. When LLMs are connected to internal enterprise databases via Retrieval-Augmented Generation (RAG), prompt injection transitions from a simple "chat bypass" to a high-severity data theft and remote system takeover vector. This chapter bridges the reader's basic agentic chat experience to the level of a Staff Security Engineer who can architect deterministic trust boundaries around non-deterministic model contexts.
 
 ---
+
+## Edition 4.1 Expansion: Prompt Injection Is an Authorization Failure
+
+Prompt injection remains a 7.4% GAP. Detection is useful, but the durable design principle is that untrusted text must not acquire authority merely because a model interpreted it as an instruction.
+
+Model the application with three classes of information:
+
+- **authority:** system policy, authenticated user intent and explicit grants;
+- **data:** retrieved documents, web pages, email, tool output and user-provided content;
+- **proposals:** model-generated tool calls, queries, responses and plans awaiting validation.
+
+The LLM may transform data into a proposal, but only deterministic code may convert a proposal into an authorized action. That conversion must verify actor, tenant, resource, operation, arguments, current policy and—where appropriate—human approval. Instruction hierarchy and delimiters improve behavior; they do not create a security boundary.
+
+For RAG, enforce authorization before retrieval and again before response assembly. Store provenance with chunks, prevent cross-tenant index access, constrain metadata filters, sanitize active content, and treat retrieved instructions as hostile. Test indirect injection through documents, tool output, image text and delayed multi-turn payloads. The success criterion is not that the model never follows malicious text; it is that following malicious text cannot cross a deterministic authorization or isolation boundary.
 
 ## What You Must Be Able to Defend
 

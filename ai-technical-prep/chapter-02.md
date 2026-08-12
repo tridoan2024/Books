@@ -1,11 +1,27 @@
 # Chapter 2: Influence, mentoring and written technical decisions
 
 > **Part:** Part I — Staff Scope and Interview Architecture
-> **Market evidence:** Cross-functional partnership (38.7%), Mentoring & growing engineers (32.4%), Written communication (10.8%)
+> **Market evidence:** Cross-functional partnership (33.7%), Mentoring & growing engineers (25.3%), Written communication (8.3%); 312-posting snapshot, 2026-08-12
 > **Reader status:** HAVE / PARTIAL / HAVE
 > **Why this chapter exists:** Explain how a Staff+ security engineer drives cross-functional alignment, mentors other engineers, and translates high-level strategy into solid written specs (RFCs, ADRs).
 
 ---
+
+## Edition 4.1 Expansion: Mentoring as an Engineering System
+
+Mentoring & Growing Engineers remains a 25.3% PARTIAL skill. At Staff scope, mentoring is not measured by the number of informal conversations. It is measured by increased independent decision quality across the organization.
+
+Use a progression model:
+
+1. **Demonstrate:** make reasoning, tradeoffs and evidence visible while solving a real problem.
+2. **Pair:** let the engineer own part of the decision while you supply constraints and feedback.
+3. **Review:** require them to present the design, threat model and failure analysis; challenge assumptions rather than rewriting the work.
+4. **Delegate:** transfer ownership with explicit decision rights and escalation conditions.
+5. **Multiply:** have the engineer teach, review or mentor the next person.
+
+Written artifacts make this scalable. Good RFCs, decision records, review rubrics and incident analyses preserve reasoning so engineers can learn without waiting for a meeting. Track outcomes such as review quality, independently led designs, reduced recurrence of defect classes, succession coverage and the time required for teams to make safe decisions.
+
+Avoid claiming mentorship success solely because someone was promoted; promotions have many causes. In interviews, describe the original capability gap, the concrete mechanisms used, evidence that decision quality changed, and what you learned when the first approach did not work.
 
 ## What You Must Be Able to Defend
 

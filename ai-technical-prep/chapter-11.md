@@ -1,11 +1,27 @@
 # Chapter 11: Security evaluations, benchmarks and release gates
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Evals & benchmarking (13.5% core), Safe rollout & canary (0.0% - editorial override)
+> **Market evidence:** Evals & benchmarking (8.7% core), Safe rollout & canary (0.3%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** In standard software engineering, we verify security using static analysis (SAST), dynamic analysis (DAST), and unit-testing suites. In machine learning, these deterministic tools fail. Because model weights are probabilistic black boxes, verifying their safety and security requires running comprehensive **Security Evaluations and Benchmarks**. If an enterprise automates the fine-tuning of foundation models on custom datasets, it must deploy an automated **Security Release Gate** that evaluates and blocks unaligned or hijacked models before they reach production. This chapter provides the bridge, translating classic software-testing automation into the probabilistic domain of LLM security evaluations.
 
 ---
+
+## Edition 4.1 Expansion: Evaluation Evidence Must Control Release
+
+Evals remain an 8.7% GAP and connect strongly to both agentic security and guardrails. The key distinction is between a benchmark that reports a score and a release gate that makes a defensible decision.
+
+Build the evaluation portfolio in layers:
+
+- **deterministic tests** for schemas, authorization, tool allowlists and known regressions;
+- **scenario suites** representing normal, adversarial and policy-sensitive user journeys;
+- **distributional tests** across languages, tenants, model versions and prompt variations;
+- **human review** for ambiguous harms and high-impact behavior;
+- **production monitors** that test whether pre-release assumptions remain true after deployment.
+
+Every metric needs a decision rule, confidence treatment and owner. A single average can conceal a catastrophic subgroup failure. Report the worst relevant slice, uncertainty, sample provenance and changes from the current production baseline. Protect the evaluation set from contamination and control who may change tests, thresholds and judge prompts.
+
+Safe rollout applies the evidence under uncertainty. Promote by immutable artifact digest; begin with offline and shadow evaluation; use a constrained canary; define automatic rollback signals; and retain an independent kill path. A canary is not safe if the new model can corrupt durable state before the monitor detects harm. High-impact tool actions require simulation, approval or reversible staging until evidence supports expansion.
 
 ## What You Must Be Able to Defend
 

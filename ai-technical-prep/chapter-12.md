@@ -1,11 +1,15 @@
 # Chapter 12: LLM red teaming and adversarial validation
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** LLM red teaming (28.8% core), MITRE ATLAS (0.9% core)
+> **Market evidence:** LLM red teaming (12.8% core), MITRE ATLAS (0.3%); 312-posting snapshot, 2026-08-12
 > **Reader status:** HAVE
 > **Why this chapter exists:** In traditional security, penetration testing identifies vulnerabilities by scanning network ports, analyzing web parameters (OWASP Top 10), and exploiting buffer overflows. In generative AI, these vectors are blind. The "vulnerabilities" of an LLM are embedded within its probabilistic attention layers. Finding these vulnerabilities requires **LLM Red Teaming**—the manual and automated exploration of a model's latent weights to force safety alignment failures. This chapter bridges the reader's deep pentesting background directly into the specialized field of machine-learning adversarial validation, establishing a rigorous framework for active model auditing.
 
 ---
+
+## Edition 4.1 Emphasis
+
+LLM Red Teaming is a 12.8% HAVE. Avoid turning the chapter into a jailbreak catalogue. A Staff program defines assets and impact, builds reproducible attack families, records model and system configuration, separates model behavior from exploitable system effects, and converts findings into regression tests, guardrail changes, authorization controls or monitoring. Report uncertainty and coverage honestly; a successful prompt is evidence about one configuration, not proof of universal compromise.
 
 ## What You Must Be Able to Defend
 

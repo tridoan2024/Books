@@ -1,11 +1,15 @@
 # Chapter 6: Identity, authorization, zero trust and secrets
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Identity & access management (17.1%), Secrets management (7.2%), Zero trust architecture (4.5%)
+> **Market evidence:** Identity & access management (12.8%), Secrets management (5.8%), Zero trust architecture (3.5%); 312-posting snapshot, 2026-08-12
 > **Reader status:** HAVE / GAP / GAP
 > **Why this chapter exists:** Establish authorization and authentication invariants, secure secrets management (e.g. HashiCorp Vault), zero-trust networking, SPIFFE/SPIRE, and credential rotation in complex distributed environments.
 
 ---
+
+## Edition 4.1 Emphasis
+
+Identity is a HAVE; secrets and zero-trust implementation remain gaps. Extend human IAM to workloads and agents: short-lived credentials, explicit delegation chains, audience-restricted tokens, tenant-bound authorization and revocation that reaches caches and queued work. Treat a secret manager as one component of a credential lifecycle, not proof of least privilege. The design must explain bootstrap trust, rotation, emergency revocation, auditability and behavior during identity-provider failure.
 
 ## What You Must Be Able to Defend
 

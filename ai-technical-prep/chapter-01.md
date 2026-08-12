@@ -1,11 +1,31 @@
 # Chapter 1: Staff+ scope, technical judgement and security strategy
 
 > **Part:** Part I — Staff Scope and Interview Architecture
-> **Market evidence:** Technical leadership (14.4% core), Strategy & roadmap (27.9% core)
+> **Market evidence:** Technical leadership (16.7% core), Strategy & roadmap (21.2% core); 312-posting snapshot, 2026-08-12
 > **Reader status:** HAVE / PARTIAL
 > **Why this chapter exists:** Preparing for a Staff or Principal security role is not a test of your coding speed or memorized syntax. It is an evaluation of your **Strategic Scope, Technical Judgement, and System-Level Influence**. At this seniority, you are expected to design security strategies for entire multi-cloud organizations, make complex technical trade-offs under high business pressure, and lead cross-functional engineering teams. This chapter calibrates the reader's Ph.D.-level engineering depth directly against the expectations of Staff/Principal interview loops, establishing a blueprint for high-impact technical leadership.
 
 ---
+
+## Edition 4.1 Expansion: Turning Market Evidence into a Security Roadmap
+
+Strategy & Roadmap remains a 21.2% PARTIAL skill. A Staff roadmap is not a list of desired controls. It is a sequence of risk-reduction bets constrained by engineering capacity, dependencies and evidence.
+
+For each initiative, define:
+
+| Element | Staff-level question |
+|---|---|
+| Problem | Which failure mode or business constraint are we changing? |
+| Baseline | What evidence shows the current exposure and operational cost? |
+| Outcome | Which measurable property must be true when the work is complete? |
+| Dependency | Which platform, identity, data or organizational capability must exist first? |
+| Adoption | How will product teams consume the control without bespoke security work? |
+| Verification | How will we know the control is deployed, effective and not routinely bypassed? |
+| Exit rule | When should the initiative stop, change direction or be retired? |
+
+Sequence foundational capabilities before dependent policy. For example, reliable workload identity and artifact inventory precede fine-grained authorization and provenance enforcement; trustworthy telemetry precedes detection and response automation. Reserve capacity for incident-driven work and explicitly document risks accepted because their opportunity cost exceeds current benefit.
+
+In an interview, make the prioritization mechanism visible. Explain why one risk is addressed now, why another is deferred, what evidence could reverse the decision, and how the roadmap produces leverage across multiple teams rather than accumulating one-off security projects.
 
 ## What You Must Be Able to Defend
 

@@ -1,11 +1,32 @@
 # Chapter 16: Infrastructure as code and secure deployment
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Terraform / IaC (14.4%)
+> **Market evidence:** Terraform / IaC (11.2%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** Cloud infrastructure is the foundation of modern AI platforms, making its automated provisioning a primary vector for systemic compromise. This chapter explains how to secure Infrastructure as Code (IaC) deployment pipelines, manage state files containing plaintext secrets, detect and remediate infrastructure drift, and enforce policy-as-code validation. For a Staff Security Engineer, this chapter provides a direct blueprint for building a secure, automated, and mathematically verifiable GitOps delivery pipeline for safety-critical and high-compliance environments.
 
 ---
+
+## Edition 4.1 Expansion: Treat Infrastructure Code as a Privileged Compiler
+
+Terraform and other IaC systems translate a repository change into durable cloud authority. The pipeline is therefore a privileged compiler, and its security model must cover source, dependencies, plan, state, credentials and apply-time effects.
+
+The production control sequence is:
+
+```text
+reviewed source
+  -> pinned modules/providers
+  -> isolated speculative plan
+  -> policy evaluation over the plan
+  -> human approval for exceptional risk
+  -> short-lived apply identity
+  -> signed result and evidence
+  -> independent drift detection
+```
+
+Plan-time policy is necessary but insufficient. Unknown values may conceal the final resource shape; a provider may perform side effects not obvious in the plan; an approved configuration can drift after deployment; and state can expose secrets even when source code does not. Separate the identity that creates a plan from the identity that applies it, constrain the apply identity by environment, encrypt and version state, and make state access a high-signal detection event.
+
+For AI infrastructure, policies should reason about public model endpoints, dataset residency, GPU node isolation, artifact provenance, logging requirements and whether training jobs can reach production data. The Staff-level artifact is not a collection of Terraform snippets. It is a deployment contract with tests demonstrating which unsafe transitions are impossible, which require explicit exception approval, and how drift is detected without trusting the deployment pipeline itself.
 
 ## What You Must Be Able to Defend
 
@@ -858,6 +879,12 @@ At my previous enterprise company, a product team was launching a clinical diagn
 
 #### Q18: What portfolio artifact demonstrates IaC security?
 **Model Answer:** A small multi-environment repository with remote state, policy tests, signed plans, least-privilege deployment identity, drift detection and a documented emergency path. Measure rejected unsafe changes, not invented risk-reduction percentages.
+
+### Edition 4.1 Interview Drill
+
+#### Q19: A Terraform plan passes policy checks but creates an unsafe resource after apply. Explain how this can happen and redesign the control system.
+
+**Model answer:** Plan-time policy can miss provider side effects, unknown values, defaults resolved only at apply, external mutations and post-deployment drift. I would keep plan checks but add pinned providers and modules, schema-aware policies, isolated applies with short-lived environment-specific identity, and post-apply verification against the actual cloud state. State would be encrypted, versioned and separately authorized because it can contain secrets and authoritative resource identifiers. An independent drift service—not the deployment pipeline—would continuously compare critical invariants and alert or remediate within a bounded scope. High-risk changes would require an explicit approval tied to the exact plan digest, so a later plan cannot reuse approval. Finally, I would test the controls with negative cases: public storage, broad trust policies, disabled logging, unsafe GPU-node exposure and changes made outside Terraform.
 
 ## Chapter Summary
 

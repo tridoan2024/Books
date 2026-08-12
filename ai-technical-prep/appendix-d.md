@@ -1,7 +1,7 @@
 # Appendix D: Secure API design and test automation
 
 > **Part:** Appendices
-> **Market evidence:** API design (4.5%), Testing & automation (1.8% core requirements in modern DevSecOps pipelines)
+> **Market evidence:** API design (4.2%), Testing & automation (2.2%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP (Establishing automated validation frameworks for AI and microservice APIs)
 > **Why this appendix exists:** Modern software architectures are built on APIs. For artificial intelligence and machine learning platforms, APIs act as the bridge between model-serving engines, vector databases, and user-facing clients. A failure in API-level authentication, schema validation, or output enforcement can render the strongest LLM guardrails entirely useless. This appendix teaches security engineers how to design secure API boundaries (covering REST, GraphQL, gRPC/Protobuf, and OpenAPI schemas) and establish robust automated testing. Crucially, it demonstrates how to mock non-deterministic LLM systems in test suites and build custom JSON Schema fuzzers to actively verify input validation boundaries.
 

@@ -1,11 +1,28 @@
 # Chapter 19: Incident response and containment for AI systems
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Incident response (29.7% core), AI incident response (0.0% - editorial override)
+> **Market evidence:** Incident response (19.6% core), AI incident response (0.0% - editorial override); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** Operational incidents in large-scale AI platforms are highly volatile. Unlike classic web servers where an incident is resolved by restoring a database backup, AI platforms face complex, multi-dimensional exploits like data poisoning, dynamic model extraction, and indirect prompt-injection hijacking. Under these scenarios, traditional incident response (IR) playbooks fail. For a Ph.D.-level Staff Security Engineer, this chapter provides the operational blueprint, bridging safety-critical medical-device containment (FDA recall regulations, ISO 14971 hazards) with real-time, automated cloud-scale AI incident response.
 
 ---
+
+## Edition 4.1 Expansion: AI Incident Command and Containment Decisions
+
+Incident Response is now a 19.6% GAP, the third-largest in the corpus. The missing Staff-level capability is not familiarity with the incident lifecycle; it is choosing containment under uncertainty when model, data, identity and infrastructure state may all be suspect.
+
+Classify the incident along four axes before choosing action:
+
+| Axis | Questions | Containment examples |
+|---|---|---|
+| Identity | Which human, workload, agent or tenant authority is compromised? | Revoke sessions, rotate grants, disable delegation paths |
+| Artifact | Which model, adapter, image, prompt template or dataset may be untrusted? | Quarantine digests, block promotion, roll back to attested versions |
+| Data | What was exposed, poisoned, retained or learned? | Stop ingestion, freeze lineage, isolate indexes and derived datasets |
+| Behavior | Is unsafe behavior deterministic, stochastic, tenant-specific or globally reproducible? | Disable tools, reduce autonomy, route to a safe model or suspend the feature |
+
+Containment must be reversible where possible and must preserve evidence. “Shut everything down” may destroy volatile state and create an availability incident larger than the original event; “monitor longer” may allow ongoing extraction. Define pre-authorized actions by severity, including who may disable a model, revoke organization-wide credentials, isolate a tenant, stop a training pipeline or invoke a clean-region failover.
+
+Recovery requires more than redeployment. Prove that identity, artifacts, data and policy are trustworthy; rerun security evaluations; restore telemetry coverage; and monitor explicit recurrence indicators. The post-incident review should produce control changes with owners and verification dates, not only a narrative timeline.
 
 ## What You Must Be Able to Defend
 
@@ -858,6 +875,12 @@ During peak operational hours at Abbott, our automated SIEM flagged a critical a
 6.  **Compliance Reporting:** I drafted the technical incident report for our Compliance Officer to submit to regulatory bodies (FDA, HIPAA), detailing our automated containment timelines and mathematically proving our data integrity was preserved, fully satisfying our regulatory compliance mandates.
 
 ---
+
+### Edition 4.1 Interview Drill
+
+#### Q19: A production agent may have executed unauthorized tools for several hours. What are your first containment decisions?
+
+**Model answer:** I would establish incident command and preserve the decision log, then bound identity, artifacts, data and behavior in parallel. I would disable or narrow the affected tool capability at the deterministic authorization layer, revoke delegated credentials and sessions, quarantine the implicated model, prompt or connector versions, and preserve queues and volatile evidence before destructive cleanup. If the feature is business-critical, I would route to a reduced-capability mode that cannot perform side effects rather than leaving the vulnerable path active. I would identify affected tenants and irreversible actions, notify legal or privacy owners when required, and create a clean reproduction environment. Recovery requires a known-good artifact and policy, credential rotation, replay-safe handling of queued work, rerun security evaluations and increased monitoring for recurrence. I would not declare recovery merely because error rates normalized; I need evidence that authority, artifacts, data and policy are trustworthy again.
 
 ## Chapter Summary
 

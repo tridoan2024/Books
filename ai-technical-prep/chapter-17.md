@@ -1,11 +1,15 @@
 # Chapter 17: CI/CD, software and model supply chains
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** CI/CD security (20.7%), Supply chain security (9.9%), Model provenance & supply chain (0.9%), Model & data lineage (0.0%), AI asset inventory (0.0%)
+> **Market evidence:** CI/CD security (16.7%), Supply chain security (3.5%), Model provenance & supply chain (0.3%), Model & data lineage (0.6%), AI asset inventory (0.0% - editorial override); 312-posting snapshot, 2026-08-12
 > **Reader status:** HAVE / GAP
 > **Why this chapter exists:** Software pipelines no longer process strictly static code; modern AI workloads introduce high-volume model weights, serialized neural datasets, and complex execution graphs that represent prime targets for supply-chain attacks. This chapter covers securing modern software and model supply chains, auditing SafeTensors formats, establishing Software Bills of Materials (SBOMs), and implementing Cosign/Sigstore cryptographic signatures for container images and model artifacts. For a Staff Security Engineer, this chapter provides the rigorous mathematical and procedural frameworks required to guarantee artifact provenance from commit to container runtime boot.
 
 ---
+
+## Edition 4.1 Emphasis
+
+CI/CD Security remains a 16.7% HAVE while generic supply-chain demand fell to 3.5%. Keep the chapter focused on one verifiable promotion chain: reviewed source, isolated build, pinned dependencies, signed provenance, immutable artifact identity, policy-controlled promotion and runtime verification. Apply the same chain to containers, models, adapters, prompt packages and evaluation bundles. Inventory is retained at measured zero because revocation and incident scope are impossible when deployed artifacts cannot be located.
 
 ## What You Must Be Able to Defend
 

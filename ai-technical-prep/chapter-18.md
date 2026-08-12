@@ -1,11 +1,34 @@
 # Chapter 18: Detection, observability and abuse monitoring for AI services
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Detection engineering (21.6%), Observability (9.9%), Abuse & misuse monitoring (5.4%)
+> **Market evidence:** Detection engineering (13.8%), Observability (14.1%), Abuse & misuse monitoring (4.5%); 312-posting snapshot, 2026-08-12
 > **Reader status:** PARTIAL / GAP / GAP
 > **Why this chapter exists:** Large Language Model (LLM) serving endpoints introduce complex, dynamic input surfaces that are invisible to traditional host-level and network IDS rules. Security engineers cannot rely on simple signatures to catch prompt injection, data exfiltration, or automated model extraction. This chapter details how to architect real-time observability pipelines, construct secure semantic logging streams, and implement statistical and textual heuristics to identify active extraction loops and data leakage attacks. For a Staff Security Engineer, this chapter is the definitive operational handbook for establishing runtime visibility and proactive defense across high-throughput AI workloads.
 
 ---
+
+## Edition 4.1 Expansion: Two First-Class Operational Modules
+
+Observability rose to 14.1% Core demand and is now slightly larger than Detection Engineering at 13.8%. This chapter retains one operational data path but treats the disciplines independently.
+
+### Module A: Observability and telemetry architecture
+
+Observability asks whether operators can explain system behavior from emitted evidence. For an AI service, telemetry must join conventional service signals with model and policy context:
+
+- request, trace and tenant identifiers without logging raw secrets or prompts by default;
+- model, adapter, prompt-template, guardrail and policy versions;
+- retrieval sources and tool decisions represented by safe identifiers;
+- token, latency, cost, refusal and fallback measurements;
+- deployment, dataset and evaluation lineage;
+- data-quality indicators describing missing, delayed or sampled telemetry.
+
+The telemetry pipeline needs its own threat model. Attackers can forge fields, cause cardinality explosions, exfiltrate data through labels, suppress events by exhausting buffers, or exploit sampling to hide rare abuse. Schema validation, bounded cardinality, tenant-aware access, cryptographic transport, retention controls and health signals for the telemetry system are security requirements.
+
+### Module B: Detection and abuse monitoring
+
+Detection converts evidence into an actionable hypothesis. Each rule should identify an actor or asset, a time window, expected baseline, confidence, response owner and safe automated action. AI abuse signals are often behavioral—systematic prompt variation, extraction-like coverage, tool-call anomalies or coordinated account activity—so single-request signatures are rarely sufficient.
+
+Measure detection quality with precision, recall where ground truth exists, alert volume, time to triage, time to containment and coverage of named abuse cases. A detection that cannot be safely investigated because the necessary evidence was never collected is an observability design failure, not a SOC performance problem.
 
 ## What You Must Be Able to Defend
 
@@ -673,6 +696,12 @@ Our enterprise API gateway was experiencing a severe surge in traffic that threa
 
 #### Q18: What detection evidence is present in the resume?
 **Model Answer:** Dynamic, ransomware, compromise and anomaly-detection systems are listed, supporting PARTIAL status. SIEM-scale production detection engineering, alert quality and response operations still require substantiation.
+
+### Edition 4.1 Interview Drill
+
+#### Q19: Design observability for an agentic AI service without turning the telemetry platform into a sensitive-data lake.
+
+**Model answer:** I would begin with the questions operators and investigators must answer, then define a minimal structured schema. Every event needs request, trace, tenant, model, policy and tool identifiers, outcome, latency, token or cost measures and lineage references, but raw prompts, retrieved documents and tool results are excluded by default. Sensitive payload capture requires a separate, access-controlled forensic path with justification, short retention and audit. At ingestion I would validate schemas, bound label cardinality, reject attacker-controlled field names and monitor dropped or delayed events. Access is tenant- and role-scoped; storage is encrypted; exports are controlled; retention differs by data class. Detection rules consume identifiers and derived features wherever possible. I would test whether the system survives cardinality attacks, backpressure and partial outages, and I would expose telemetry-health signals so missing evidence cannot be mistaken for normal behavior.
 
 ## Chapter Summary
 

@@ -1,11 +1,15 @@
 # Appendix C: TypeScript and JavaScript for AI applications
 
 > **Part:** Appendices
-> **Market evidence:** TypeScript / JavaScript (12.6% core usage in frontend AI portals, chat interfaces, and Node.js orchestrators)
+> **Market evidence:** TypeScript / JavaScript (10.6% core); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP (Addressing security vulnerabilities across dynamic web rendering and Node.js servers)
 > **Why this appendix exists:** The boom of generative AI has led to an explosion of client-side application interfaces. Frontend dashboards, chat interfaces (such as chatbot sidecars), and orchestration layers (like LangChain.js or custom Express-based gateways) are predominantly built using TypeScript or JavaScript. At a Staff+ level, you must secure these applications against client-side exploitation. This appendix covers client-side and full-stack security, focusing on preventing DOM-based Cross-Site Scripting (XSS) from non-deterministic LLM markdown outputs, securing client-side tokens, formulating robust Content Security Policies, and shielding Express/Vite servers from Prototype Pollution and subprocess injections.
 
 ---
+
+## Edition 4.1 Expansion: TypeScript at the AI Application Boundary
+
+TypeScript/JavaScript is now a 10.6% GAP. Expand practice around runtime schema validation, safe rendering, SSRF-resistant tool connectors, streaming cancellation, tenant propagation and explicit authorization around model-generated tool calls. Static types disappear at network and model boundaries, so validate every external object at runtime and preserve an auditable distinction between authenticated user intent, untrusted content and model proposals.
 
 ## 1. DOM XSS and Dynamic Output Rendering of LLM Generation
 

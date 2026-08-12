@@ -1,11 +1,15 @@
 # Chapter 22: Fine-tuning, training and model lifecycle controls
 
 > **Part:** Part V — Systems, Data and Model Engineering
-> **Market evidence:** Fine-tuning & training (8.1%), PyTorch (4.5%)
+> **Market evidence:** Fine-tuning & training (6.7%), PyTorch (4.2%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP / HAVE
 > **Why this chapter exists:** The machine learning training and fine-tuning loop represents the ultimate cryptographic boundary of model intelligence. If an attacker injects backdoors during optimization, or if the training parameters leak sensitive training data, the model's integrity is permanently compromised. This chapter details how to secure PyTorch-based training loops, implement Differentially Private Stochastic Gradient Descent (DP-SGD), configure cryptographic model watermarking, and intercept backdoor injections. For a Staff Security Engineer, this chapter provides the mathematical foundations and architectural controls required to enforce sovereign privacy and integrity guarantees directly within active neural optimization runs.
 
 ---
+
+## Edition 4.1 Emphasis
+
+Fine-tuning and Training remains a 6.7% GAP. Prioritize lifecycle controls over framework syntax: dataset authorization and lineage, isolated execution, dependency and checkpoint integrity, secrets and egress control, reproducible configuration, evaluation before promotion and secure disposal of intermediate artifacts. PyTorch is implementation support, not the learning objective; the same security contract must survive a change of training framework or managed platform.
 
 ## What You Must Be Able to Defend
 

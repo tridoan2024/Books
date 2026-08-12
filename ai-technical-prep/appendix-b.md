@@ -1,11 +1,15 @@
 # Appendix B: Memory-safe systems: Rust and C/C++
 
 > **Part:** Appendices
-> **Market evidence:** Rust (10.8%), C / C++ (11.7% in high-performance serving, model kernels, and firmware)
+> **Market evidence:** Rust (8.3%), C / C++ (8.7%), Go (3.5%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP / HAVE (Bridging the gap between manual memory architectures and compile-time safe systems)
 > **Why this appendix exists:** Systems-level security is the bedrock of modern AI deployment. Deep learning kernels (e.g., llama.cpp, ggml, vLLM custom CUDA kernels, and Triton engines) are heavily written in C, C++, or Rust to achieve maximum hardware utilization on GPUs and TPUs. However, C and C++ require manual memory orchestration, exposing systems to devastating classes of security defects. This appendix teaches security engineers how to audit low-level memory vulnerabilities, apply aggressive compiler-level hardening flags to legacy C/C++ stacks, and leverage Rust's compile-time ownership, lifetimes, and safe Foreign Function Interface (FFI) primitives to build bulletproof systems.
 
 ---
+
+## Edition 4.1 Expansion: Go for Security Infrastructure Interviews
+
+Go appears at 3.5% Core demand and is added here as a compact bridge rather than a new chapter. For interview preparation, be able to discuss context cancellation, bounded goroutines, channel ownership, race detection, safe HTTP timeouts, structured error handling, dependency pinning and least-privilege service identity. The security objective is predictable concurrency and resource ownership in gateways, controllers and telemetry services—not language trivia.
 
 ## 1. Comparing Paradigms: Memory Safety in Systems Programming
 

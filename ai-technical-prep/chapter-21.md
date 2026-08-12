@@ -1,11 +1,29 @@
 # Chapter 21: Secure data pipelines and data modelling
 
 > **Part:** Part V — Systems, Data and Model Engineering
-> **Market evidence:** Data pipelines (18.0%), SQL & data modelling (7.2%)
+> **Market evidence:** Data pipelines (10.6%), SQL & data modelling (6.7%); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP
 > **Why this chapter exists:** Large language and multimodal models are trained on massive datasets containing billions of data tokens, representing a primary vector for compliance failure, training-data poisoning, and privacy leakage. Modern training data pipelines must extract, transform, and load (ETL) data from unstructured customer logs while systematically removing Protected Health Information (PHI) and Personally Identifiable Information (PII) to comply with HIPAA, GDPR, and CCPA regulations. This chapter covers securing distributed data ingestion, designing secure metadata schemas, executing field-level cryptographic tokenization, and auditing dataset lineage. For a Staff Security Engineer, this chapter provides a direct, production-grade guide to establishing mathematical and physical privacy boundaries inside high-throughput training data pipelines.
 
 ---
+
+## Edition 4.1 Expansion: Data Contracts for Training, Retrieval and Evidence
+
+Data Pipelines remains a top-ten gap at 10.6%. A secure pipeline needs a data contract that survives ingestion, transformation, storage, retrieval, training and deletion. The contract should state:
+
+- owner, permitted purposes and approved consumers;
+- sensitivity, residency, retention and deletion requirements;
+- schema and semantic validation rules;
+- provenance and transformation lineage;
+- integrity expectations and quarantine conditions;
+- whether content may enter training, retrieval, evaluation or telemetry systems;
+- which derived artifacts inherit the original restrictions.
+
+Do not equate encryption with authorization. A training worker that can decrypt an entire lake still has excessive authority even when every object is encrypted. Partition by purpose and tenant, issue short-lived workload access, minimize fields before the trust boundary, and make bulk reads or cross-purpose joins observable.
+
+Poisoning defenses require both statistical and provenance evidence. Statistical outliers can be legitimate rare data; signed provenance can faithfully identify a malicious but authorized source. Combine source reputation, schema checks, duplication analysis, content safety tests, distribution-shift measures and human review for high-impact datasets. Preserve rejected records and decision evidence separately so investigators can reconstruct why material was admitted.
+
+Deletion is a lifecycle operation, not a database statement. Track propagation into caches, vector indexes, materialized datasets, checkpoints, adapters, backups and evaluation corpora. When influence cannot be removed precisely from trained weights, document the limitation, assess exposure, and use retraining or compensating controls rather than claiming deletion that the architecture cannot prove.
 
 ## What You Must Be Able to Defend
 
@@ -688,6 +706,12 @@ During a continuous learning training cycle, our machine learning research team 
 
 #### Q18: What portfolio project proves this gap is closing?
 **Model Answer:** Build a small lineage-aware pipeline with tenant-scoped ingestion, schema validation, quarantine, encrypted storage, deletion propagation and adversarial tests. Publish synthetic data only.
+
+### Edition 4.1 Interview Drill
+
+#### Q19: A customer invokes deletion rights after their records contributed to a fine-tuned model. What can you promise technically?
+
+**Model answer:** I would separate source deletion from removal of model influence. We can locate and delete or restrict source records, derived tables, vector entries, caches and future training inputs if lineage is complete. We can also identify checkpoints, adapters and evaluation sets that consumed the data. We generally cannot prove that a specific record's influence was removed from an already trained model by deleting the source. Depending on sensitivity and contractual obligations, options include retraining from a clean lineage point, replacing an adapter, unlearning techniques with independently validated limits, output controls and continued monitoring. I would give privacy and legal teams an evidence-backed statement of what was deleted, what derived artifacts remain, what uncertainty exists and what remediation was selected. The architecture should make this decision cheaper through dataset versioning, lineage, purpose tags and modular training artifacts.
 
 ## Chapter Summary
 

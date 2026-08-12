@@ -1,11 +1,27 @@
 # Chapter 15: Cloud security architecture across AWS, GCP and Azure
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** AWS (27.9% core), GCP (18.0% core), Azure (16.2% core)
+> **Market evidence:** AWS (23.7% core), GCP (16.3% core), Azure (13.5% core); 312-posting snapshot, 2026-08-12
 > **Reader status:** GAP / GAP / HAVE
 > **Why this chapter exists:** Large Scale AI pipelines are inherently distributed and multi-cloud. It is common for an enterprise to store datasets in AWS S3, execute GPU training runs in GCP Vertex AI, and serve low-latency inference APIs via Azure OpenAI. Managing the security posture across these disparate platforms is the single most complex challenge in modern AI platforms. For a hardware-oriented Staff Security Engineer, this chapter maps physical host and network boundaries onto logical, software-defined cloud constructs (IAM, OIDC federation, VPC Peering, and KMS Key rings), establishing a unified framework for secure multi-cloud AI engineering.
 
 ---
+
+## Edition 4.1 Expansion: Multi-Cloud Without Lowest-Common-Denominator Security
+
+AWS (23.7%) and GCP (16.3%) are now the first and fourth largest measured gaps. The correct response is not to memorize two consoles. Define a provider-neutral security contract, then prove how each cloud satisfies it.
+
+| Security contract | AWS implementation examples | GCP implementation examples | Failure to prevent |
+|---|---|---|---|
+| Workload identity without static keys | IAM roles, STS, IRSA/Pod Identity | Workload Identity Federation, service accounts | Credential theft and cross-environment replay |
+| Private service access | VPC endpoints, PrivateLink, private subnets | Private Service Connect, VPC Service Controls | Data exfiltration through public control/data planes |
+| Central evidence | CloudTrail, Config, GuardDuty, Security Hub | Audit Logs, Asset Inventory, Security Command Center | Unprovable changes and fragmented detection |
+| Key and secret boundaries | KMS, CloudHSM, Secrets Manager | Cloud KMS/HSM, Secret Manager | Broad operator access to plaintext secrets |
+| Organization guardrails | Organizations, SCPs, delegated administration | Organization Policy, folders and projects | Account/project drift and local administrator bypass |
+
+Do not force identical implementations. Require identical invariants: no long-lived workload credentials, private paths for sensitive data, centrally owned evidence, deny-by-default organization controls, and independent recovery identities. Azure remains valuable because the reader already evidences it; use that experience to explain the invariant first, then contrast the AWS and GCP mechanism.
+
+A strong interview answer also addresses ownership. Platform teams build the landing zones and paved paths; service teams own workload configuration; security owns invariants, policy tests and exception governance; incident response owns emergency containment paths that do not depend on a compromised production identity plane.
 
 ## What You Must Be Able to Defend
 
@@ -928,6 +944,12 @@ This was a critical, severity-1 security incident representing a severe **Data P
     *   *automated policy Gates:* I deployed our `posture_check.py` auditor into our central Terraform git hooks, permanently blocking any future commit that attempts to configure `"Principal": "*"` inside S3 bucket policies.
 
 ---
+
+### Edition 4.1 Interview Drill
+
+#### Q19: Your company is expanding an Azure-hosted AI service into AWS and GCP. How do you prevent the migration from producing three unrelated security models?
+
+**Model answer:** I would define provider-neutral invariants before selecting services: workloads use short-lived identity, sensitive data stays on private paths, organization controls are centrally governed, evidence is exported to an independent security account or project, keys have separated administration, and production recovery has a protected identity path. I would then map each invariant to AWS, GCP and Azure mechanisms and test the mapping as code. I would not demand identical implementations because the providers' identity and network semantics differ. Landing-zone teams own account or project structure and shared services; workload teams consume paved paths; security owns invariant tests and exception policy. The migration plan would include evidence parity, incident containment, key recovery and rollback—not only resource deployment. Success means a reviewer can start from one security contract and prove its implementation in each cloud without relying on console screenshots or provider-specific tribal knowledge.
 
 ## Chapter Summary
 

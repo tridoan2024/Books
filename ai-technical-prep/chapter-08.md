@@ -1,11 +1,15 @@
 # Chapter 8: Agentic AI security: identity, delegation and tool boundaries
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Agentic AI security (40.5% core), Agent delegation & authorization (0.0% - editorial override), Agent & tool sandboxing (0.0% - editorial override)
+> **Market evidence:** Agentic AI security (29.5% core), Agent delegation & authorization (0.3%), Agent & tool sandboxing (0.0% - editorial override); 312-posting snapshot, 2026-08-12
 > **Reader status:** HAVE
 > **Why this chapter exists:** Agentic security is the gravitational center of production LLM systems. While prompt injection and guardrails protect the LLM's direct input/output interfaces, autonomous agentic systems introduce delegation, tool execution, and dynamic execution environments. Securing these requires transitioning from traditional identity and access management (IAM) to multi-hop cryptographic delegation and strict container/sandbox isolation.
 
 ---
+
+## Edition 4.1 Emphasis
+
+Agentic AI Security remains the strongest role-specific HAVE at 29.5%. Edition 4.1 adds explicit separation between model reasoning and authority: an agent may propose a plan, but deterministic policy grants capabilities; every delegated capability is scoped by actor, tenant, tool, resource, operation, budget and expiry; and tool execution occurs inside a boundary appropriate to hostile input. Agent delegation is now measured at 0.3%; sandboxing remains a declared editorial override because prompt policy cannot contain arbitrary code or network effects.
 
 ## What You Must Be Able to Defend
 
