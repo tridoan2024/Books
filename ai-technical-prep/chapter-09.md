@@ -1,7 +1,7 @@
 # Chapter 9: Prompt injection, RAG and the LLM application trust boundary
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Prompt injection defence (7.4% core), OWASP LLM Top 10 (1.0%), RAG security (1.9%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Prompt injection defence (5.6%), OWASP LLM Top 10 (0.6%), RAG security (4.2%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** Prompt injection is the SQL injection equivalent of the generative AI era. Because LLMs process system instructions (control plane) and raw user inputs (data plane) within the same single context window, they are inherently vulnerable to hijacking. When LLMs are connected to internal enterprise databases via Retrieval-Augmented Generation (RAG), prompt injection transitions from a simple "chat bypass" to a high-severity data theft and remote system takeover vector. This chapter bridges the reader's basic agentic chat experience to the level of a Staff Security Engineer who can architect deterministic trust boundaries around non-deterministic model contexts.
 
@@ -20,6 +20,21 @@ Model the application with three classes of information:
 The LLM may transform data into a proposal, but only deterministic code may convert a proposal into an authorized action. That conversion must verify actor, tenant, resource, operation, arguments, current policy and—where appropriate—human approval. Instruction hierarchy and delimiters improve behavior; they do not create a security boundary.
 
 For RAG, enforce authorization before retrieval and again before response assembly. Store provenance with chunks, prevent cross-tenant index access, constrain metadata filters, sanitize active content, and treat retrieved instructions as hostile. Test indirect injection through documents, tool output, image text and delayed multi-turn payloads. The success criterion is not that the model never follows malicious text; it is that following malicious text cannot cross a deterministic authorization or isolation boundary.
+
+## Edition 4.2 Expansion: RAG Authorization and Corpus Operations
+
+The securing-AI segment places Prompt Injection at 25.3% Core demand, while aggregate RAG Security rose from 1.9% to 4.2%. The operational risk is broader than malicious text: stale authorization, poisoned corpora, unsafe parsers, cross-tenant metadata and deletion failures can all make retrieval violate the application's security claim.
+
+Design retrieval as an authorization-preserving data system:
+
+1. Bind every document and chunk to owner, tenant, purpose, sensitivity, provenance and lifecycle state.
+2. Authorize before search so prohibited candidates never enter ranking, then authorize selected sources again before context assembly.
+3. Treat embeddings and indexes as derived sensitive data with the same residency and deletion obligations as their sources.
+4. Isolate ingestion parsers and active-content conversion from production credentials and networks.
+5. Version the corpus, embedding model, chunker and retrieval policy so an answer can be reproduced during evaluation or incident response.
+6. Measure retrieval authorization failures, stale-index duration, poisoned-source detection, unsupported-answer rate and deletion propagation.
+
+Hybrid retrieval and reranking add more policy boundaries, not fewer. A reranker must not reintroduce results filtered by authorization, and query rewriting must not broaden tenant or purpose scope.
 
 ## What You Must Be Able to Defend
 
@@ -960,6 +975,12 @@ As a Staff Security Engineer, I manage risk by balancing security integrity with
     *   We register pgvector RLS migration as a critical "Security Debt" ticket in the corporate registry, with a hard commitment from leadership to prioritize and complete the migration in the next sprint (within 30 days post-launch). This collaborative, phased approach protects the enterprise while supporting business velocity.
 
 ---
+
+### Edition 4.2 Interview Drill
+
+#### Q20: A user loses access to a project, but the RAG assistant continues citing that project's documents. Where did the design fail?
+
+**Model answer:** Access was probably enforced only during ingestion or in the application UI, while the vector index retained stale chunks without request-time authorization. I would stop affected retrieval, preserve query and citation evidence, and invalidate cached results. The redesign binds authorization metadata to every indexed unit and filters candidates using the caller's current identity before ranking, with a second check before context assembly. Access changes publish an invalidation event, but high-sensitivity retrieval also performs online authorization against a bounded-latency policy source. I would test revocation under index lag, cache reuse and query rewriting, then measure the maximum interval between source authorization change and retrieval enforcement.
 
 ## Chapter Summary
 

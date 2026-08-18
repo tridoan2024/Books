@@ -1,7 +1,7 @@
 # Chapter 13: Attacks on models: poisoning, extraction, inversion and membership inference
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Adversarial ML (2.2% core), Training data poisoning (1.3%), Privacy attacks on models (1.3%), Model extraction & theft (0.3%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Adversarial ML (1.4%), Training data poisoning (1.0%), Privacy attacks on models (0.8%), Model extraction & theft (0.6%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** While prompt injection and RAG security target the application layer, model-level attacks target the neural network weights directly. These are "academic" attack classes that represent the theoretical limits of model privacy and integrity under active adversary observation. For a Ph.D. with deep hardware security and cryptanalysis experience, this chapter serves as the intellectual bridge, mapping hardware side-channel timing and power analysis concepts onto machine-learning model parameter extraction, dataset poisoning, and membership inference.
 

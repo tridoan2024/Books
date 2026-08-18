@@ -1,7 +1,7 @@
 # Chapter 6: Identity, authorization, zero trust and secrets
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Identity & access management (12.8%), Secrets management (5.8%), Zero trust architecture (3.5%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Identity & access management (12.5%), Secrets management (5.4%), Zero trust architecture (3.6%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** HAVE / GAP / GAP
 > **Why this chapter exists:** Establish authorization and authentication invariants, secure secrets management (e.g. HashiCorp Vault), zero-trust networking, SPIFFE/SPIRE, and credential rotation in complex distributed environments.
 

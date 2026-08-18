@@ -1,7 +1,7 @@
 # Chapter 19: Incident response and containment for AI systems
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Incident response (19.6% core), AI incident response (0.0% - editorial override); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Incident response (16.9%), AI incident response (0.0% - editorial override); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** Operational incidents in large-scale AI platforms are highly volatile. Unlike classic web servers where an incident is resolved by restoring a database backup, AI platforms face complex, multi-dimensional exploits like data poisoning, dynamic model extraction, and indirect prompt-injection hijacking. Under these scenarios, traditional incident response (IR) playbooks fail. For a Ph.D.-level Staff Security Engineer, this chapter provides the operational blueprint, bridging safety-critical medical-device containment (FDA recall regulations, ISO 14971 hazards) with real-time, automated cloud-scale AI incident response.
 

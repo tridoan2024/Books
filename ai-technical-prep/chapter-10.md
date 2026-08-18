@@ -1,7 +1,7 @@
 # Chapter 10: Guardrails, safety filters and secure failure behaviour
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** AI guardrails & safety filters (14.4% core); 312-posting snapshot, 2026-08-12
+> **Market evidence:** AI guardrails & safety filters (11.9%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** Guardrails and safety filters are the active shields of production LLM applications. However, in the industry, "guardrails" are frequently implemented as weak, soft prompt instructions or superficial text regexes. For a Ph.D.-level Staff Security Engineer with deep medical-device and embedded product-security experience, a guardrail is not a cosmetic filter; it is a **Deterministic Fail-Safe State Machine**. This chapter formalizes how to design, analyze, and implement robust runtime guardrail architectures and secure failure states that prevent systemic collapse when probabilistic models are compromised.
 

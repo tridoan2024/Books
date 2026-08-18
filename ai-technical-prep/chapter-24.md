@@ -1,7 +1,7 @@
 # Chapter 24: Government authorization and privacy engineering
 
 > **Part:** Part VI — Assurance, Governance and Regulated Environments
-> **Market evidence:** FedRAMP (4.5%), GDPR / privacy (5.8%), HIPAA (1.6%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** FedRAMP (3.2%), GDPR / privacy (7.1%), HIPAA (2.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP / GAP / HAVE
 > **Why this chapter exists:** Staff security engineers must translate cloud architecture and AI data flows into authorization boundaries, privacy obligations and evidence that assessors can verify. This chapter focuses on engineering those controls, not memorizing framework language.
 
@@ -9,7 +9,7 @@
 
 ## Edition 4.1 Emphasis
 
-Privacy (5.8%) now slightly exceeds FedRAMP (4.5%). Lead with system and data boundaries rather than framework recitation. A defensible design identifies regulated data and derived artifacts, purpose and lawful use, identities and locations, retention and deletion paths, third parties, incident obligations and the evidence proving each control operates. Explicitly distinguish deletion of records from removal of their influence on models; do not claim a technical guarantee the lifecycle cannot provide.
+Privacy (5.8%) now slightly exceeds FedRAMP (3.2%). Lead with system and data boundaries rather than framework recitation. A defensible design identifies regulated data and derived artifacts, purpose and lawful use, identities and locations, retention and deletion paths, third parties, incident obligations and the evidence proving each control operates. Explicitly distinguish deletion of records from removal of their influence on models; do not claim a technical guarantee the lifecycle cannot provide.
 
 ## What You Must Be Able to Defend
 

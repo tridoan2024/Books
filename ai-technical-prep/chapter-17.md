@@ -1,7 +1,7 @@
 # Chapter 17: CI/CD, software and model supply chains
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** CI/CD security (16.7%), Supply chain security (3.5%), Model provenance & supply chain (0.3%), Model & data lineage (0.6%), AI asset inventory (0.0% - editorial override); 312-posting snapshot, 2026-08-12
+> **Market evidence:** CI/CD security (18.1%), Supply chain security (4.2%), Model provenance & supply chain (0.4%), Model & data lineage (1.0%), AI asset inventory (0.6% - editorial override); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** HAVE / GAP
 > **Why this chapter exists:** Software pipelines no longer process strictly static code; modern AI workloads introduce high-volume model weights, serialized neural datasets, and complex execution graphs that represent prime targets for supply-chain attacks. This chapter covers securing modern software and model supply chains, auditing SafeTensors formats, establishing Software Bills of Materials (SBOMs), and implementing Cosign/Sigstore cryptographic signatures for container images and model artifacts. For a Staff Security Engineer, this chapter provides the rigorous mathematical and procedural frameworks required to guarantee artifact provenance from commit to container runtime boot.
 
@@ -10,6 +10,16 @@
 ## Edition 4.1 Emphasis
 
 CI/CD Security remains a 16.7% HAVE while generic supply-chain demand fell to 3.5%. Keep the chapter focused on one verifiable promotion chain: reviewed source, isolated build, pinned dependencies, signed provenance, immutable artifact identity, policy-controlled promotion and runtime verification. Apply the same chain to containers, models, adapters, prompt packages and evaluation bundles. Inventory is retained at measured zero because revocation and incident scope are impossible when deployed artifacts cannot be located.
+
+## Edition 4.2 Expansion: MLOps as a Controlled Promotion System
+
+MLOps crossed the aggregate inclusion threshold at 6.0% and reaches 9.5% in securing-AI roles. It does not need a separate chapter because its security boundary is the promotion chain already owned here.
+
+Treat each model release as a bundle rather than a weight file. The bundle includes model and adapter digests, training configuration, dataset lineage, code and container identity, evaluation results, guardrail and prompt versions, intended serving environment, approvals and rollback target. Promotion changes the bundle's trust state; copying an artifact does not.
+
+The control plane should enforce immutable identities across registry, deployment and telemetry; separation between experiment, evaluation and production identities; evaluation tied to the exact candidate digest; automatic rejection when lineage or critical evidence is missing; inventory sufficient for revocation; and rollback of the complete known-good bundle.
+
+MLOps security succeeds when the organization can answer what is running, why it was approved, which data and code produced it, and how to remove it everywhere.
 
 ## What You Must Be Able to Defend
 
@@ -778,6 +788,12 @@ At my previous company, a security bulletin announced an active backdoor inside 
 
 #### Q18: How do you balance emergency patching with provenance?
 **Model Answer:** Use a predesigned emergency pipeline that preserves review, identity and evidence with shorter approvals. Never solve urgency by allowing untracked manual production artifacts.
+
+### Edition 4.2 Interview Drill
+
+#### Q20: Design a secure promotion workflow for a fine-tuned model from experimentation to production.
+
+**Model answer:** I would assign the candidate an immutable digest and assemble a release bundle containing code, base model, adapter, dataset lineage, training configuration, image, SBOM, evaluations, policy versions and approvals. Experiment identities may write candidates but cannot promote them. An isolated stage evaluates the exact digest, signs the evidence and checks policy. Promotion records a trust-state transition; production pulls only approved digests and verifies provenance at deployment. Telemetry reports the same release identity, and rollback restores a previously approved complete bundle. Finally, inventory and revocation tests prove that a compromised digest can be found and disabled across every endpoint.
 
 ## Chapter Summary
 

@@ -1,7 +1,7 @@
 # Chapter 4: Application security and secure delivery
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Application security (14.1%), Secure SDLC (2.9%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Application security (12.1%), Secure SDLC (2.0%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** PARTIAL / HAVE
 > **Why this chapter exists:** Detail standard and AI-specific application security practices, secure software development lifecycle (SDLC), continuous security gates, and automated validation inside build/deploy pipelines.
 

@@ -1,7 +1,7 @@
 # Chapter 1: Staff+ scope, technical judgement and security strategy
 
 > **Part:** Part I — Staff Scope and Interview Architecture
-> **Market evidence:** Technical leadership (16.7% core), Strategy & roadmap (21.2% core); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Technical leadership (15.7%), Strategy & roadmap (20.6%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** HAVE / PARTIAL
 > **Why this chapter exists:** Preparing for a Staff or Principal security role is not a test of your coding speed or memorized syntax. It is an evaluation of your **Strategic Scope, Technical Judgement, and System-Level Influence**. At this seniority, you are expected to design security strategies for entire multi-cloud organizations, make complex technical trade-offs under high business pressure, and lead cross-functional engineering teams. This chapter calibrates the reader's Ph.D.-level engineering depth directly against the expectations of Staff/Principal interview loops, establishing a blueprint for high-impact technical leadership.
 

@@ -1,7 +1,7 @@
 # Chapter 14: Kubernetes and container security
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Kubernetes security (22.1% core), Docker & containers (5.4% core - prerequisite); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Kubernetes security (19.6%), Docker & containers (6.9% - prerequisite); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** Kubernetes is the de facto operating system for production AI/ML workloads. Large Language Models are served, fine-tuned, and orchestrated at scale using containerized distributed frameworks like Ray, Kubeflow, Triton, and vLLM. Because these workloads require direct access to host accelerators (GPUs/TPUs) and dynamically execute untrusted inputs, securing the Kubernetes platform is the single most critical cloud defense. For a hardware-oriented security engineer, this chapter serves as the intellectual bridge, mapping kernel-level virtualization primitives to distributed cluster orchestration security.
 

@@ -1,7 +1,7 @@
 # Chapter 2: Influence, mentoring and written technical decisions
 
 > **Part:** Part I — Staff Scope and Interview Architecture
-> **Market evidence:** Cross-functional partnership (33.7%), Mentoring & growing engineers (25.3%), Written communication (8.3%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Cross-functional partnership (35.9%), Mentoring & growing engineers (27.8%), Written communication (6.9%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** HAVE / PARTIAL / HAVE
 > **Why this chapter exists:** Explain how a Staff+ security engineer drives cross-functional alignment, mentors other engineers, and translates high-level strategy into solid written specs (RFCs, ADRs).
 

@@ -1,7 +1,7 @@
 # Chapter 15: Cloud security architecture across AWS, GCP and Azure
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** AWS (23.7% core), GCP (16.3% core), Azure (13.5% core); 312-posting snapshot, 2026-08-12
+> **Market evidence:** AWS (26.2%), GCP (18.1%), Azure (17.5%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP / GAP / HAVE
 > **Why this chapter exists:** Large Scale AI pipelines are inherently distributed and multi-cloud. It is common for an enterprise to store datasets in AWS S3, execute GPU training runs in GCP Vertex AI, and serve low-latency inference APIs via Azure OpenAI. Managing the security posture across these disparate platforms is the single most complex challenge in modern AI platforms. For a hardware-oriented Staff Security Engineer, this chapter maps physical host and network boundaries onto logical, software-defined cloud constructs (IAM, OIDC federation, VPC Peering, and KMS Key rings), establishing a unified framework for secure multi-cloud AI engineering.
 
@@ -9,7 +9,7 @@
 
 ## Edition 4.1 Expansion: Multi-Cloud Without Lowest-Common-Denominator Security
 
-AWS (23.7%) and GCP (16.3%) are now the first and fourth largest measured gaps. The correct response is not to memorize two consoles. Define a provider-neutral security contract, then prove how each cloud satisfies it.
+AWS (26.2%) and GCP (18.1%) are now the first and fourth largest measured gaps. The correct response is not to memorize two consoles. Define a provider-neutral security contract, then prove how each cloud satisfies it.
 
 | Security contract | AWS implementation examples | GCP implementation examples | Failure to prevent |
 |---|---|---|---|

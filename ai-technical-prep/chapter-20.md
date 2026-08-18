@@ -1,7 +1,7 @@
 # Chapter 20: Distributed systems and multi-tenant inference isolation
 
 > **Part:** Part V — Systems, Data and Model Engineering
-> **Market evidence:** Distributed systems (16.0%), Multi-tenant AI isolation (3.2%), Inference & model serving security (1.0%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Distributed systems (15.1%), Multi-tenant AI isolation (3.2%), Inference & model serving security (1.6%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** High-performance GPU serving clusters are extremely expensive resources that are naturally shared across multiple business units or external customers. This shared compute model introduces critical security risks: side-channel GPU memory timing leaks, cross-tenant data exfiltration, and resource-hogging Denial of Service (DoS) attacks. This chapter covers designing secure, multi-tenant model-serving architectures, detailing logical and physical GPU isolation utilizing Multi-Instance GPU (MIG) technology, network namespaces, and secure API proxy controls. For a Staff Security Engineer, this chapter provides the foundational blueprints for establishing absolute cryptographic and logical segregation across shared deep learning compute pools.
 

@@ -1,7 +1,7 @@
 # Chapter 18: Detection, observability and abuse monitoring for AI services
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Detection engineering (13.8%), Observability (14.1%), Abuse & misuse monitoring (4.5%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Detection engineering (11.9%), Observability (15.5%), Abuse & misuse monitoring (3.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** PARTIAL / GAP / GAP
 > **Why this chapter exists:** Large Language Model (LLM) serving endpoints introduce complex, dynamic input surfaces that are invisible to traditional host-level and network IDS rules. Security engineers cannot rely on simple signatures to catch prompt injection, data exfiltration, or automated model extraction. This chapter details how to architect real-time observability pipelines, construct secure semantic logging streams, and implement statistical and textual heuristics to identify active extraction loops and data leakage attacks. For a Staff Security Engineer, this chapter is the definitive operational handbook for establishing runtime visibility and proactive defense across high-throughput AI workloads.
 
@@ -29,6 +29,14 @@ The telemetry pipeline needs its own threat model. Attackers can forge fields, c
 Detection converts evidence into an actionable hypothesis. Each rule should identify an actor or asset, a time window, expected baseline, confidence, response owner and safe automated action. AI abuse signals are often behavioral—systematic prompt variation, extraction-like coverage, tool-call anomalies or coordinated account activity—so single-request signatures are rarely sufficient.
 
 Measure detection quality with precision, recall where ground truth exists, alert volume, time to triage, time to containment and coverage of named abuse cases. A detection that cannot be safely investigated because the necessary evidence was never collected is an observability design failure, not a SOC performance problem.
+
+## Edition 4.2 Expansion: Product Abuse as a Security Engineering Discipline
+
+Abuse and Misuse Monitoring is only 3.4% aggregate demand but reaches 14.7% in securing-AI roles. That asymmetry means it is role-specific rather than a general platform keyword.
+
+Build abuse controls around named behaviors and impact: automated extraction, credential sharing, policy evasion, coordinated account creation, prohibited tool use, denial of wallet and repeated attempts to access protected corpora. Combine request, account, tenant, payment, device, network, model and tool signals over time; single-prompt classification is rarely sufficient.
+
+The response ladder should be proportional and reversible: add friction, reduce rate or capability, require stronger verification, route to review, suspend a feature, isolate a tenant or disable an account. Preserve an appeal path because false positives can disproportionately affect unusual but legitimate research and security testing. Evaluate evasion resistance, attacker cost, user harm, operational load and time to containment—not only classifier accuracy.
 
 ## What You Must Be Able to Defend
 
@@ -702,6 +710,12 @@ Our enterprise API gateway was experiencing a severe surge in traffic that threa
 #### Q19: Design observability for an agentic AI service without turning the telemetry platform into a sensitive-data lake.
 
 **Model answer:** I would begin with the questions operators and investigators must answer, then define a minimal structured schema. Every event needs request, trace, tenant, model, policy and tool identifiers, outcome, latency, token or cost measures and lineage references, but raw prompts, retrieved documents and tool results are excluded by default. Sensitive payload capture requires a separate, access-controlled forensic path with justification, short retention and audit. At ingestion I would validate schemas, bound label cardinality, reject attacker-controlled field names and monitor dropped or delayed events. Access is tenant- and role-scoped; storage is encrypted; exports are controlled; retention differs by data class. Detection rules consume identifiers and derived features wherever possible. I would test whether the system survives cardinality attacks, backpressure and partial outages, and I would expose telemetry-health signals so missing evidence cannot be mistaken for normal behavior.
+
+### Edition 4.2 Interview Drill
+
+#### Q20: How would you detect model extraction without blocking legitimate high-volume customers?
+
+**Model answer:** I would avoid a single global request threshold. Extraction evidence is behavioral: systematic coverage of output space, repeated near-neighbor queries, unusual sampling or response-metadata use, many accounts sharing infrastructure, and activity inconsistent with the tenant's declared workload. I would aggregate signals across account, tenant, payment and network identities. Response begins with bounded friction—lower sampling freedom, tighter rate and token budgets, stronger verification and removal of sensitive response metadata—before suspension. Enterprise customers receive contracted limits and a path for expected batch use. I would validate the detector with replay and red-team campaigns and measure false-positive impact by customer segment.
 
 ## Chapter Summary
 

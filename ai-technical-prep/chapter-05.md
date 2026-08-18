@@ -1,7 +1,7 @@
 # Chapter 5: Offensive validation and vulnerability reduction
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Penetration testing (14.4%), Vulnerability management (11.9%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Penetration testing (12.3%), Vulnerability management (10.9%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** HAVE
 > **Why this chapter exists:** Close the loop between identifying vulnerabilities (through pentesting, AST, and DAST) and systematically mitigating, prioritizing, and managing them at scale.
 

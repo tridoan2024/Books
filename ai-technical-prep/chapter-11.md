@@ -1,7 +1,7 @@
 # Chapter 11: Security evaluations, benchmarks and release gates
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Evals & benchmarking (8.7% core), Safe rollout & canary (0.3%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Evals & benchmarking (7.5%), Safe rollout & canary (0.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** In standard software engineering, we verify security using static analysis (SAST), dynamic analysis (DAST), and unit-testing suites. In machine learning, these deterministic tools fail. Because model weights are probabilistic black boxes, verifying their safety and security requires running comprehensive **Security Evaluations and Benchmarks**. If an enterprise automates the fine-tuning of foundation models on custom datasets, it must deploy an automated **Security Release Gate** that evaluates and blocks unaligned or hijacked models before they reach production. This chapter provides the bridge, translating classic software-testing automation into the probabilistic domain of LLM security evaluations.
 

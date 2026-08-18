@@ -1,7 +1,7 @@
 # Chapter 21: Secure data pipelines and data modelling
 
 > **Part:** Part V — Systems, Data and Model Engineering
-> **Market evidence:** Data pipelines (10.6%), SQL & data modelling (6.7%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Data pipelines (13.1%), SQL & data modelling (8.5%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** Large language and multimodal models are trained on massive datasets containing billions of data tokens, representing a primary vector for compliance failure, training-data poisoning, and privacy leakage. Modern training data pipelines must extract, transform, and load (ETL) data from unstructured customer logs while systematically removing Protected Health Information (PHI) and Personally Identifiable Information (PII) to comply with HIPAA, GDPR, and CCPA regulations. This chapter covers securing distributed data ingestion, designing secure metadata schemas, executing field-level cryptographic tokenization, and auditing dataset lineage. For a Staff Security Engineer, this chapter provides a direct, production-grade guide to establishing mathematical and physical privacy boundaries inside high-throughput training data pipelines.
 

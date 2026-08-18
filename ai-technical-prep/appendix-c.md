@@ -1,7 +1,7 @@
 # Appendix C: TypeScript and JavaScript for AI applications
 
 > **Part:** Appendices
-> **Market evidence:** TypeScript / JavaScript (10.6% core); 312-posting snapshot, 2026-08-12
+> **Market evidence:** TypeScript / JavaScript (11.5%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP (Addressing security vulnerabilities across dynamic web rendering and Node.js servers)
 > **Why this appendix exists:** The boom of generative AI has led to an explosion of client-side application interfaces. Frontend dashboards, chat interfaces (such as chatbot sidecars), and orchestration layers (like LangChain.js or custom Express-based gateways) are predominantly built using TypeScript or JavaScript. At a Staff+ level, you must secure these applications against client-side exploitation. This appendix covers client-side and full-stack security, focusing on preventing DOM-based Cross-Site Scripting (XSS) from non-deterministic LLM markdown outputs, securing client-side tokens, formulating robust Content Security Policies, and shielding Express/Vite servers from Prototype Pollution and subprocess injections.
 

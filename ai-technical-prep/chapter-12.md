@@ -1,7 +1,7 @@
 # Chapter 12: LLM red teaming and adversarial validation
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** LLM red teaming (12.8% core), MITRE ATLAS (0.3%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** LLM red teaming (8.9%), MITRE ATLAS (0.2%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** HAVE
 > **Why this chapter exists:** In traditional security, penetration testing identifies vulnerabilities by scanning network ports, analyzing web parameters (OWASP Top 10), and exploiting buffer overflows. In generative AI, these vectors are blind. The "vulnerabilities" of an LLM are embedded within its probabilistic attention layers. Finding these vulnerabilities requires **LLM Red Teaming**—the manual and automated exploration of a model's latent weights to force safety alignment failures. This chapter bridges the reader's deep pentesting background directly into the specialized field of machine-learning adversarial validation, establishing a rigorous framework for active model auditing.
 

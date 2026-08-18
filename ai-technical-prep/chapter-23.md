@@ -1,7 +1,7 @@
 # Chapter 23: Security assurance and AI governance
 
 > **Part:** Part VI — Assurance, Governance and Regulated Environments
-> **Market evidence:** ISO 27001 (4.8%), SOC 2 (5.1%), AI governance & NIST AI RMF (2.9%); 312-posting snapshot, 2026-08-12
+> **Market evidence:** ISO 27001 (5.4%), SOC 2 (5.2%), AI governance & NIST AI RMF (4.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** GAP
 > **Why this chapter exists:** Enterprise deployment of machine learning platforms demands more than technical controls; it requires formal security assurance, structured compliance mappings, and non-bypassable governance frameworks. This chapter details how to map complex distributed AI systems onto SOC 2 Type II trust criteria and ISO 27001 control domains, and how to execute the NIST AI Risk Management Framework (AI RMF). For a Staff Security Engineer, this chapter provides the operational translation layer, bridging raw infrastructure enclaves with auditable governance programs and programmatically signed compliance evidence.
 
@@ -9,7 +9,24 @@
 
 ## Edition 4.1 Emphasis
 
-SOC 2 (5.1%) and ISO 27001 (4.8%) remain a valid peer merge, but AI Governance is only 2.9%. Teach assurance as an evidence system: identify the claim, map it to owned controls, collect trustworthy implementation and operating evidence, test exceptions, and make remediation traceable. NIST AI RMF organizes risk work; it does not replace technical threat modelling, evaluation or operational control verification.
+SOC 2 (5.2%) and ISO 27001 (5.4%) remain a valid peer merge, but AI Governance is only 2.9%. Teach assurance as an evidence system: identify the claim, map it to owned controls, collect trustworthy implementation and operating evidence, test exceptions, and make remediation traceable. NIST AI RMF organizes risk work; it does not replace technical threat modelling, evaluation or operational control verification.
+
+## Edition 4.2 Expansion: AI Governance as Executable Decision Rights
+
+AI Governance rose to 15.8% Core demand in securing-AI roles, even though aggregate demand is 4.4%. It is promoted from a supporting mapping exercise to a first-class chapter module.
+
+Governance should specify who may make which decision using what evidence:
+
+| Decision | Required evidence | Technical enforcement |
+|---|---|---|
+| Approve a use case | purpose, users, data classes, harm analysis | registered use-case identity |
+| Admit a model | provenance, license, security review | registry policy |
+| Release a version | evaluations, residual risk, rollback | promotion gate |
+| Grant high-impact tools | scoped authority and human-control design | authorization policy |
+| Accept an exception | rationale, compensating controls, expiry | time-bounded policy exception |
+| Retire a system | inventory, retention and dependency plan | deployment and credential revocation |
+
+NIST AI RMF and assurance standards help organize these responsibilities, but the engineering test is whether an unapproved transition is technically blocked or immediately visible. Keep decision records tied to immutable system and evidence identities, and measure expired exceptions, unregistered systems, overdue reviews and revocation time.
 
 ## What You Must Be Able to Defend
 
@@ -699,6 +716,12 @@ Thirty minutes before a high-revenue customer launch, our automated GRC scanner 
 
 #### Q18: How do you explain governance to an engineer?
 **Model Answer:** It defines who can make which model decisions, what evidence is required, and how exceptions and incidents are handled. Good governance reduces ambiguity and rework rather than adding ceremonial approval.
+
+### Edition 4.2 Interview Drill
+
+#### Q19: What is the difference between an AI governance committee and an enforceable AI governance system?
+
+**Model answer:** A committee can discuss and approve risk, but an enforceable system translates decision rights into identities, evidence and technical gates. Every use case and release has an owner, purpose, data classification, model and policy identity, required evaluations, residual-risk decision and expiry conditions. Registry and deployment controls prevent unapproved promotion; authorization policy constrains high-impact tools; inventory makes revocation possible; and exceptions expire automatically. Human review remains necessary for ambiguous risk, but it operates on reproducible evidence and cannot be bypassed through an alternate deployment path.
 
 ## Chapter Summary
 

@@ -1,7 +1,7 @@
 # Chapter 3: Threat modelling for AI and distributed systems
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Threat modelling (16.7% core); 312-posting snapshot, 2026-08-12
+> **Market evidence:** Threat modelling (13.1%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
 > **Reader status:** HAVE
 > **Why this chapter exists:** Threat modeling is the shared language of Staff and Principal system-design interviews. For a Ph.D. with deep hardware and firmware security experience, the challenge is not learning how to identify threat vectors. Rather, it is translating deterministic, hardware-bound threat models (such as securing CAN FD buses, HSMs, or secure boot) into the probabilistic, non-deterministic domain of distributed AI systems. This chapter provides the translation layer, establishing a rigorous methodology for threat-modeling AI systems using MITRE ATLAS and OWASP LLM Top 10 frameworks.
 
