@@ -1,7 +1,7 @@
 # Chapter 16: Infrastructure as code and secure deployment
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Terraform / IaC (11.7%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Terraform / IaC (10.7%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** Cloud infrastructure is the foundation of modern AI platforms, making its automated provisioning a primary vector for systemic compromise. This chapter explains how to secure Infrastructure as Code (IaC) deployment pipelines, manage state files containing plaintext secrets, detect and remediate infrastructure drift, and enforce policy-as-code validation. For a Staff Security Engineer, this chapter provides a direct blueprint for building a secure, automated, and mathematically verifiable GitOps delivery pipeline for safety-critical and high-compliance environments.
 

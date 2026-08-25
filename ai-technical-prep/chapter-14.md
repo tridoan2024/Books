@@ -1,7 +1,7 @@
 # Chapter 14: Kubernetes and container security
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Kubernetes security (19.6%), Docker & containers (6.9% - prerequisite); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Kubernetes security (18.5%), Docker & containers (7.0%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** Kubernetes is the de facto operating system for production AI/ML workloads. Large Language Models are served, fine-tuned, and orchestrated at scale using containerized distributed frameworks like Ray, Kubeflow, Triton, and vLLM. Because these workloads require direct access to host accelerators (GPUs/TPUs) and dynamically execute untrusted inputs, securing the Kubernetes platform is the single most critical cloud defense. For a hardware-oriented security engineer, this chapter serves as the intellectual bridge, mapping kernel-level virtualization primitives to distributed cluster orchestration security.
 
@@ -9,7 +9,9 @@
 
 ## Edition 4.1 Expansion: Kubernetes as an AI Security Control Plane
 
-The larger market sample confirms that Kubernetes security is not merely container hygiene; at 22.1% Core demand it is the second-largest gap in the reader's transition. Treat the cluster as a security control plane with four independently enforced layers:
+The larger market sample confirms that Kubernetes security is not merely container hygiene; it remains a major gap at 18.5% aggregate and 18.3% target-role demand. Treat the cluster as a security control plane with four independently enforced layers:
+
+Edition 4.3 adds a practice emphasis on proving that the controls survive operational exceptions: emergency deployments, GPU scheduling pressure, temporary debugging access, admission-controller outages and workloads that request broader network or filesystem access. Record who can authorize each exception, how it expires and which telemetry proves the boundary was restored.
 
 1. **Admission:** reject unsigned images, privileged workloads, unsafe host mounts, unrestricted capabilities and unapproved model artifacts before scheduling.
 2. **Identity:** bind each workload to a short-lived cloud and service identity; never inherit node identity or mount broad static credentials.

@@ -1,7 +1,7 @@
 # Chapter 24: Government authorization and privacy engineering
 
 > **Part:** Part VI — Assurance, Governance and Regulated Environments
-> **Market evidence:** FedRAMP (3.2%), GDPR / privacy (7.1%), HIPAA (2.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** FedRAMP (2.9%), GDPR / privacy (6.3%), HIPAA (4.4%), FDA / medical device (4.0%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP / GAP / HAVE
 > **Why this chapter exists:** Staff security engineers must translate cloud architecture and AI data flows into authorization boundaries, privacy obligations and evidence that assessors can verify. This chapter focuses on engineering those controls, not memorizing framework language.
 

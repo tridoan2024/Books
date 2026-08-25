@@ -1,15 +1,15 @@
 # Chapter 2: Influence, mentoring and written technical decisions
 
 > **Part:** Part I — Staff Scope and Interview Architecture
-> **Market evidence:** Cross-functional partnership (35.9%), Mentoring & growing engineers (27.8%), Written communication (6.9%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
-> **Reader status:** HAVE / PARTIAL / HAVE
+> **Market evidence:** Cross-functional partnership (37.4%), Mentoring & growing engineers (27.0%), Written communication (5.7%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
+> **Reader status:** GAP / PARTIAL / HAVE
 > **Why this chapter exists:** Explain how a Staff+ security engineer drives cross-functional alignment, mentors other engineers, and translates high-level strategy into solid written specs (RFCs, ADRs).
 
 ---
 
 ## Edition 4.1 Expansion: Mentoring as an Engineering System
 
-Mentoring & Growing Engineers remains a 25.3% PARTIAL skill. At Staff scope, mentoring is not measured by the number of informal conversations. It is measured by increased independent decision quality across the organization.
+Mentoring & Growing Engineers remains a 27.0% aggregate and 26.0% target-role PARTIAL skill. At Staff scope, mentoring is not measured by the number of informal conversations. It is measured by increased independent decision quality across the organization.
 
 Use a progression model:
 
@@ -22,6 +22,20 @@ Use a progression model:
 Written artifacts make this scalable. Good RFCs, decision records, review rubrics and incident analyses preserve reasoning so engineers can learn without waiting for a meeting. Track outcomes such as review quality, independently led designs, reduced recurrence of defect classes, succession coverage and the time required for teams to make safe decisions.
 
 Avoid claiming mentorship success solely because someone was promoted; promotions have many causes. In interviews, describe the original capability gap, the concrete mechanisms used, evidence that decision quality changed, and what you learned when the first approach did not work.
+
+## Edition 4.3 Expansion: Cross-Functional Partnership as a Practised Engineering Skill
+
+Cross-functional partnership is now the largest measured gap: 37.4% aggregate and 48.9% across securing-AI roles. Treat it as an engineering system rather than a personality trait.
+
+For each major security initiative, create a stakeholder map recording decision owners, implementers, operators, reviewers, affected users, incentives, constraints and escalation paths. Before proposing a control, write the shared outcome, the non-negotiable security invariant, the product or operational cost, and two feasible implementation options. Use short decision records to capture disagreement, evidence, the chosen tradeoff, owner and review date.
+
+Practise three artifacts:
+
+1. A one-page stakeholder and incentive map for an AI-security rollout.
+2. A decision memo that resolves a security-versus-delivery disagreement without hiding residual risk.
+3. A follow-through ledger showing commitments, owners, dates, unresolved objections and measurable outcomes.
+
+Interview evidence should name the conflicting incentives, how understanding was established, what changed in the design, and how the result was verified. Do not substitute meeting attendance for partnership evidence.
 
 ## What You Must Be Able to Defend
 

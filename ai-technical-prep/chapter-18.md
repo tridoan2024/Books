@@ -1,7 +1,7 @@
 # Chapter 18: Detection, observability and abuse monitoring for AI services
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Detection engineering (11.9%), Observability (15.5%), Abuse & misuse monitoring (3.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Detection engineering (10.4%), Observability (15.1%), Abuse & misuse monitoring (2.9%); target-role abuse monitoring 12.2%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** PARTIAL / GAP / GAP
 > **Why this chapter exists:** Large Language Model (LLM) serving endpoints introduce complex, dynamic input surfaces that are invisible to traditional host-level and network IDS rules. Security engineers cannot rely on simple signatures to catch prompt injection, data exfiltration, or automated model extraction. This chapter details how to architect real-time observability pipelines, construct secure semantic logging streams, and implement statistical and textual heuristics to identify active extraction loops and data leakage attacks. For a Staff Security Engineer, this chapter is the definitive operational handbook for establishing runtime visibility and proactive defense across high-throughput AI workloads.
 
@@ -9,7 +9,7 @@
 
 ## Edition 4.1 Expansion: Two First-Class Operational Modules
 
-Observability rose to 14.1% Core demand and is now slightly larger than Detection Engineering at 13.8%. This chapter retains one operational data path but treats the disciplines independently.
+Observability is now 15.1% aggregate and 13.7% target-role demand, while Detection Engineering is 10.4% aggregate. Abuse monitoring remains strongly role-specific at 12.2% target demand despite only 2.9% aggregate demand. This chapter retains one operational data path but treats the disciplines independently.
 
 ### Module A: Observability and telemetry architecture
 
@@ -32,7 +32,11 @@ Measure detection quality with precision, recall where ground truth exists, aler
 
 ## Edition 4.2 Expansion: Product Abuse as a Security Engineering Discipline
 
-Abuse and Misuse Monitoring is only 3.4% aggregate demand but reaches 14.7% in securing-AI roles. That asymmetry means it is role-specific rather than a general platform keyword.
+Abuse and Misuse Monitoring is only 2.9% aggregate demand but reaches 12.2% in securing-AI roles. That asymmetry means it is role-specific rather than a general platform keyword.
+
+## Edition 4.3 Focus: Connect Signals to Decisions
+
+The new evidence strengthens observability as a target-role requirement. For each important AI-security invariant, document the event source, required identity and tenant context, expected cardinality, detection logic, retention, privacy constraint, alert owner and containment action. A dashboard without an owner or response threshold is visibility, not an operational control.
 
 Build abuse controls around named behaviors and impact: automated extraction, credential sharing, policy evasion, coordinated account creation, prohibited tool use, denial of wallet and repeated attempts to access protected corpora. Combine request, account, tenant, payment, device, network, model and tool signals over time; single-prompt classification is rarely sufficient.
 

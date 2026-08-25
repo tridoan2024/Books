@@ -1,13 +1,17 @@
 # Chapter 11: Security evaluations, benchmarks and release gates
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Evals & benchmarking (7.5%), Safe rollout & canary (0.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Evals & benchmarking (7.2%), Safe rollout & canary (0.9%); target-role demand 17.6%, 3.1%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** In standard software engineering, we verify security using static analysis (SAST), dynamic analysis (DAST), and unit-testing suites. In machine learning, these deterministic tools fail. Because model weights are probabilistic black boxes, verifying their safety and security requires running comprehensive **Security Evaluations and Benchmarks**. If an enterprise automates the fine-tuning of foundation models on custom datasets, it must deploy an automated **Security Release Gate** that evaluates and blocks unaligned or hijacked models before they reach production. This chapter provides the bridge, translating classic software-testing automation into the probabilistic domain of LLM security evaluations.
 
 ---
 
 ## Edition 4.1 Expansion: Evaluation Evidence Must Control Release
+
+## Edition 4.3 Focus: Evaluation Coverage as a Release Contract
+
+Evals increased to 17.6% target-role demand. Extend every release gate beyond aggregate pass rates: require scenario coverage, severity-weighted failures, subgroup and tenant slices, tool-action correctness, regression comparison, uncertainty bounds, named owners and an explicit rollback condition. The artifact to practise is a release decision packet that makes the evidence and residual risk reviewable without rerunning the entire experiment.
 
 Evals remain an 8.7% GAP and connect strongly to both agentic security and guardrails. The key distinction is between a benchmark that reports a score and a release gate that makes a defensible decision.
 

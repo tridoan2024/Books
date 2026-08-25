@@ -1,7 +1,7 @@
 # Chapter 17: CI/CD, software and model supply chains
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** CI/CD security (18.1%), Supply chain security (4.2%), Model provenance & supply chain (0.4%), Model & data lineage (1.0%), AI asset inventory (0.6% - editorial override); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** CI/CD security (17.3%), Supply chain security (3.5%), Model provenance & supply chain (0.3%), Model & data lineage (1.0%), AI asset inventory (0.6%), MLOps (7.3%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** HAVE / GAP
 > **Why this chapter exists:** Software pipelines no longer process strictly static code; modern AI workloads introduce high-volume model weights, serialized neural datasets, and complex execution graphs that represent prime targets for supply-chain attacks. This chapter covers securing modern software and model supply chains, auditing SafeTensors formats, establishing Software Bills of Materials (SBOMs), and implementing Cosign/Sigstore cryptographic signatures for container images and model artifacts. For a Staff Security Engineer, this chapter provides the rigorous mathematical and procedural frameworks required to guarantee artifact provenance from commit to container runtime boot.
 
@@ -9,7 +9,7 @@
 
 ## Edition 4.1 Emphasis
 
-CI/CD Security remains a 16.7% HAVE while generic supply-chain demand fell to 3.5%. Keep the chapter focused on one verifiable promotion chain: reviewed source, isolated build, pinned dependencies, signed provenance, immutable artifact identity, policy-controlled promotion and runtime verification. Apply the same chain to containers, models, adapters, prompt packages and evaluation bundles. Inventory is retained at measured zero because revocation and incident scope are impossible when deployed artifacts cannot be located.
+CI/CD Security remains a 17.3% aggregate HAVE while generic supply-chain demand is 3.5%. Keep the chapter focused on one verifiable promotion chain: reviewed source, isolated build, pinned dependencies, signed provenance, immutable artifact identity, policy-controlled promotion and runtime verification. Apply the same chain to containers, models, adapters, prompt packages and evaluation bundles. Inventory remains an editorial requirement because revocation and incident scope are impossible when deployed artifacts cannot be located.
 
 ## Edition 4.2 Expansion: MLOps as a Controlled Promotion System
 

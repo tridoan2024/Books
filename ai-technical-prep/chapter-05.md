@@ -1,7 +1,7 @@
 # Chapter 5: Offensive validation and vulnerability reduction
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Penetration testing (12.3%), Vulnerability management (10.9%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Penetration testing (9.5%), Vulnerability management (10.0%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** HAVE
 > **Why this chapter exists:** Close the loop between identifying vulnerabilities (through pentesting, AST, and DAST) and systematically mitigating, prioritizing, and managing them at scale.
 
@@ -9,7 +9,7 @@
 
 ## Edition 4.1 Emphasis
 
-Penetration Testing (14.4%) and Vulnerability Management (11.9%) remain strong HAVEs. The transition value is connecting offensive evidence to durable risk reduction: reproduce the exploit, identify the violated invariant, find every affected asset, choose systemic remediation, validate the fix, and add a regression or detection. AI testing must include indirect inputs, multi-turn state, tool authority and cost/resource abuse without treating probabilistic behavior as automatically exploitable.
+Penetration Testing (9.5%) and Vulnerability Management (10.0%) remain strong HAVEs. The transition value is connecting offensive evidence to durable risk reduction: reproduce the exploit, identify the violated invariant, find every affected asset, choose systemic remediation, validate the fix, and add a regression or detection. AI testing must include indirect inputs, multi-turn state, tool authority and cost/resource abuse without treating probabilistic behavior as automatically exploitable.
 
 ## What You Must Be Able to Defend
 

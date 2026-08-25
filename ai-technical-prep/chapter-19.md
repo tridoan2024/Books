@@ -1,7 +1,7 @@
 # Chapter 19: Incident response and containment for AI systems
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** Incident response (16.9%), AI incident response (0.0% - editorial override); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Incident response (14.2%), AI incident response (editorial override); target-role incident response 16.0%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** Operational incidents in large-scale AI platforms are highly volatile. Unlike classic web servers where an incident is resolved by restoring a database backup, AI platforms face complex, multi-dimensional exploits like data poisoning, dynamic model extraction, and indirect prompt-injection hijacking. Under these scenarios, traditional incident response (IR) playbooks fail. For a Ph.D.-level Staff Security Engineer, this chapter provides the operational blueprint, bridging safety-critical medical-device containment (FDA recall regulations, ISO 14971 hazards) with real-time, automated cloud-scale AI incident response.
 
@@ -9,7 +9,9 @@
 
 ## Edition 4.1 Expansion: AI Incident Command and Containment Decisions
 
-Incident Response is now a 19.6% GAP, the third-largest in the corpus. The missing Staff-level capability is not familiarity with the incident lifecycle; it is choosing containment under uncertainty when model, data, identity and infrastructure state may all be suspect.
+Incident Response remains a major GAP at 14.2% aggregate and 16.0% target-role demand. The missing Staff-level capability is not familiarity with the incident lifecycle; it is choosing containment under uncertainty when model, data, identity and infrastructure state may all be suspect.
+
+Edition 4.3 practice should include a decision table for revoking model versions, prompts, retrieval corpora, tool credentials and tenant access independently. For each action, record blast radius, evidence preserved, recovery dependency, customer impact and the condition for re-enablement.
 
 Classify the incident along four axes before choosing action:
 

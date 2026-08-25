@@ -1,7 +1,7 @@
 # Chapter 7: Cryptography and hardware-backed roots of trust
 
 > **Part:** Part II — Threat Modelling and Product Security
-> **Market evidence:** Cryptography (9.1%), Secure boot & root of trust (3.0%), Firmware security (3.2%), HSM / secure element (1.6%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Cryptography (8.1%), Secure boot & root of trust (2.6%), Firmware security (3.8%), HSM / secure element (1.2%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** HAVE / GAP / GAP / HAVE
 > **Why this chapter exists:** Explore the physical-silicon foundation of trust—Secure Boot, hardware security modules (HSMs), trusted execution environments (TEEs), secure enclave VM classes (like AMD SEV-SNP/Intel SGX), firmware auditing, and cryptographically attested boots.
 

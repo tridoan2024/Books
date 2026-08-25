@@ -1,7 +1,7 @@
 # Chapter 15: Cloud security architecture across AWS, GCP and Azure
 
 > **Part:** Part IV — Cloud and AI Platform Security
-> **Market evidence:** AWS (26.2%), GCP (18.1%), Azure (17.5%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** AWS (24.5%), GCP (17.0%), Azure (16.6%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP / GAP / HAVE
 > **Why this chapter exists:** Large Scale AI pipelines are inherently distributed and multi-cloud. It is common for an enterprise to store datasets in AWS S3, execute GPU training runs in GCP Vertex AI, and serve low-latency inference APIs via Azure OpenAI. Managing the security posture across these disparate platforms is the single most complex challenge in modern AI platforms. For a hardware-oriented Staff Security Engineer, this chapter maps physical host and network boundaries onto logical, software-defined cloud constructs (IAM, OIDC federation, VPC Peering, and KMS Key rings), establishing a unified framework for secure multi-cloud AI engineering.
 
@@ -9,7 +9,9 @@
 
 ## Edition 4.1 Expansion: Multi-Cloud Without Lowest-Common-Denominator Security
 
-AWS (26.2%) and GCP (18.1%) are now the first and fourth largest measured gaps. The correct response is not to memorize two consoles. Define a provider-neutral security contract, then prove how each cloud satisfies it.
+AWS (24.5% aggregate; 26.0% target-role) and GCP (17.0% aggregate; 19.1% target-role) remain major measured gaps. The correct response is not to memorize two consoles. Define a provider-neutral security contract, then prove how each cloud satisfies it.
+
+Edition 4.3 practice should produce one side-by-side implementation matrix for identity federation, organization policy, network isolation, key management, logging, workload identity and break-glass access across AWS, GCP and Azure. Each row must name the provider control, its failure mode and the evidence used to verify it continuously.
 
 | Security contract | AWS implementation examples | GCP implementation examples | Failure to prevent |
 |---|---|---|---|

@@ -1,7 +1,7 @@
 # Chapter 8: Agentic AI security: identity, delegation and tool boundaries
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Agentic AI security (33.5%), Agent delegation & authorization (0.4%), Agent & tool sandboxing (0.0% - editorial override); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Agentic AI security (34.7%), Agent delegation & authorization (0.3%), Agent & tool sandboxing (editorial override); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** HAVE
 > **Why this chapter exists:** Agentic security is the gravitational center of production LLM systems. While prompt injection and guardrails protect the LLM's direct input/output interfaces, autonomous agentic systems introduce delegation, tool execution, and dynamic execution environments. Securing these requires transitioning from traditional identity and access management (IAM) to multi-hop cryptographic delegation and strict container/sandbox isolation.
 
@@ -9,7 +9,7 @@
 
 ## Edition 4.1 Emphasis
 
-Agentic AI Security remains the strongest role-specific HAVE at 29.5%. Edition 4.1 adds explicit separation between model reasoning and authority: an agent may propose a plan, but deterministic policy grants capabilities; every delegated capability is scoped by actor, tenant, tool, resource, operation, budget and expiry; and tool execution occurs inside a boundary appropriate to hostile input. Agent delegation is now measured at 0.3%; sandboxing remains a declared editorial override because prompt policy cannot contain arbitrary code or network effects.
+Agentic AI Security remains the strongest role-specific HAVE at 55.0%. Edition 4.1 adds explicit separation between model reasoning and authority: an agent may propose a plan, but deterministic policy grants capabilities; every delegated capability is scoped by actor, tenant, tool, resource, operation, budget and expiry; and tool execution occurs inside a boundary appropriate to hostile input. Agent delegation is measured at 0.3% aggregate and 0.8% target-role demand; sandboxing remains a declared editorial override because prompt policy cannot contain arbitrary code or network effects.
 
 ## What You Must Be Able to Defend
 

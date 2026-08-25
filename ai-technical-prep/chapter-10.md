@@ -1,7 +1,7 @@
 # Chapter 10: Guardrails, safety filters and secure failure behaviour
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** AI guardrails & safety filters (11.9%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** AI guardrails & safety filters (10.9% aggregate; 30.5% target-role); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** Guardrails and safety filters are the active shields of production LLM applications. However, in the industry, "guardrails" are frequently implemented as weak, soft prompt instructions or superficial text regexes. For a Ph.D.-level Staff Security Engineer with deep medical-device and embedded product-security experience, a guardrail is not a cosmetic filter; it is a **Deterministic Fail-Safe State Machine**. This chapter formalizes how to design, analyze, and implement robust runtime guardrail architectures and secure failure states that prevent systemic collapse when probabilistic models are compromised.
 
@@ -9,7 +9,7 @@
 
 ## Edition 4.1 Expansion: Guardrails as a Layered Policy System
 
-Guardrails are the largest AI-specific gap at 14.4%. A production design should not describe “the guardrail” as one classifier. Separate controls by trust boundary and failure consequence:
+Guardrails remain the largest AI-specific gap at 30.5% target-role and 10.9% aggregate demand. A production design should not describe “the guardrail” as one classifier. Separate controls by trust boundary and failure consequence:
 
 1. **Request controls:** authentication, tenant policy, rate and budget limits, input normalization and known-dangerous content handling.
 2. **Context controls:** authorization of retrieved documents, provenance checks, context-size limits and separation of instructions from untrusted data.

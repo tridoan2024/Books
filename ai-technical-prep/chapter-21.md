@@ -1,7 +1,7 @@
 # Chapter 21: Secure data pipelines and data modelling
 
 > **Part:** Part V — Systems, Data and Model Engineering
-> **Market evidence:** Data pipelines (13.1%), SQL & data modelling (8.5%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** Data pipelines (12.8%), SQL & data modelling (9.4%), MLOps (7.3%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** Large language and multimodal models are trained on massive datasets containing billions of data tokens, representing a primary vector for compliance failure, training-data poisoning, and privacy leakage. Modern training data pipelines must extract, transform, and load (ETL) data from unstructured customer logs while systematically removing Protected Health Information (PHI) and Personally Identifiable Information (PII) to comply with HIPAA, GDPR, and CCPA regulations. This chapter covers securing distributed data ingestion, designing secure metadata schemas, executing field-level cryptographic tokenization, and auditing dataset lineage. For a Staff Security Engineer, this chapter provides a direct, production-grade guide to establishing mathematical and physical privacy boundaries inside high-throughput training data pipelines.
 
@@ -9,7 +9,9 @@
 
 ## Edition 4.1 Expansion: Data Contracts for Training, Retrieval and Evidence
 
-Data Pipelines remains a top-ten gap at 10.6%. A secure pipeline needs a data contract that survives ingestion, transformation, storage, retrieval, training and deletion. The contract should state:
+Data Pipelines remains a major gap at 12.8% aggregate and 13.7% target-role demand. SQL and data modelling also increased to 9.4% aggregate and 9.9% target-role demand. A secure pipeline needs a data contract that survives ingestion, transformation, storage, retrieval, training and deletion. The contract should state:
+
+Edition 4.3 practice should include executable checks for tenant keys, purpose restrictions, provenance, schema evolution, deletion propagation and reconciliation between source, warehouse, feature, vector and training stores. SQL exercises should demonstrate how authorization and retention rules survive joins and derived datasets rather than focusing only on query syntax.
 
 - owner, permitted purposes and approved consumers;
 - sensitivity, residency, retention and deletion requirements;

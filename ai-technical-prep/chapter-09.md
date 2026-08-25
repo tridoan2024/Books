@@ -1,15 +1,15 @@
 # Chapter 9: Prompt injection, RAG and the LLM application trust boundary
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** Prompt injection defence (5.6%), OWASP LLM Top 10 (0.6%), RAG security (4.2%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
-> **Reader status:** GAP
+> **Market evidence:** Prompt injection defence (4.6%), OWASP LLM Top 10 (0.4%), RAG security (4.0%); target-role demand 19.8%, 2.3%, 6.1%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
+> **Reader status:** HAVE for prompt-injection defence; GAP for RAG security and supporting taxonomies
 > **Why this chapter exists:** Prompt injection is the SQL injection equivalent of the generative AI era. Because LLMs process system instructions (control plane) and raw user inputs (data plane) within the same single context window, they are inherently vulnerable to hijacking. When LLMs are connected to internal enterprise databases via Retrieval-Augmented Generation (RAG), prompt injection transitions from a simple "chat bypass" to a high-severity data theft and remote system takeover vector. This chapter bridges the reader's basic agentic chat experience to the level of a Staff Security Engineer who can architect deterministic trust boundaries around non-deterministic model contexts.
 
 ---
 
 ## Edition 4.1 Expansion: Prompt Injection Is an Authorization Failure
 
-Prompt injection remains a 7.4% GAP. Detection is useful, but the durable design principle is that untrusted text must not acquire authority merely because a model interpreted it as an instruction.
+Prompt injection is now classified HAVE, with 19.8% target-role demand. Detection is useful, but the durable design principle is that untrusted text must not acquire authority merely because a model interpreted it as an instruction. Preserve this chapter as advanced reinforcement while directing new study toward the remaining RAG-security gap.
 
 Model the application with three classes of information:
 
@@ -23,7 +23,11 @@ For RAG, enforce authorization before retrieval and again before response assemb
 
 ## Edition 4.2 Expansion: RAG Authorization and Corpus Operations
 
-The securing-AI segment places Prompt Injection at 25.3% Core demand, while aggregate RAG Security rose from 1.9% to 4.2%. The operational risk is broader than malicious text: stale authorization, poisoned corpora, unsafe parsers, cross-tenant metadata and deletion failures can all make retrieval violate the application's security claim.
+The securing-AI segment places Prompt Injection at 19.8% Core demand and RAG Security at 6.1%, while aggregate RAG Security is 4.0%. The operational risk is broader than malicious text: stale authorization, poisoned corpora, unsafe parsers, cross-tenant metadata and deletion failures can all make retrieval violate the application's security claim.
+
+## Edition 4.3 Update: Preserve Mastery, Shift Incremental Practice to RAG
+
+The status change does not make prompt injection unimportant; it means the reader already has defensible evidence. Continue advanced attack-chain and authorization-boundary drills, but spend new project time on corpus provenance, authorization-aware retrieval, deletion propagation, parser isolation and reproducible retrieval evaluation.
 
 Design retrieval as an authorization-preserving data system:
 

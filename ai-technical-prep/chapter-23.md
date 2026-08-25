@@ -1,7 +1,7 @@
 # Chapter 23: Security assurance and AI governance
 
 > **Part:** Part VI — Assurance, Governance and Regulated Environments
-> **Market evidence:** ISO 27001 (5.4%), SOC 2 (5.2%), AI governance & NIST AI RMF (4.4%); 496-posting aggregate; 95 securing-AI roles, 2026-08-18
+> **Market evidence:** ISO 27001 (4.8%), SOC 2 (4.7%), AI governance & NIST AI RMF (5.1%); target-role AI governance 17.6%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** Enterprise deployment of machine learning platforms demands more than technical controls; it requires formal security assurance, structured compliance mappings, and non-bypassable governance frameworks. This chapter details how to map complex distributed AI systems onto SOC 2 Type II trust criteria and ISO 27001 control domains, and how to execute the NIST AI Risk Management Framework (AI RMF). For a Staff Security Engineer, this chapter provides the operational translation layer, bridging raw infrastructure enclaves with auditable governance programs and programmatically signed compliance evidence.
 
@@ -9,11 +9,13 @@
 
 ## Edition 4.1 Emphasis
 
-SOC 2 (5.2%) and ISO 27001 (5.4%) remain a valid peer merge, but AI Governance is only 2.9%. Teach assurance as an evidence system: identify the claim, map it to owned controls, collect trustworthy implementation and operating evidence, test exceptions, and make remediation traceable. NIST AI RMF organizes risk work; it does not replace technical threat modelling, evaluation or operational control verification.
+SOC 2 (4.7%) and ISO 27001 (4.8%) remain a valid peer merge, while AI Governance has risen to 5.1% aggregate and 17.6% target-role demand. Teach assurance as an evidence system: identify the claim, map it to owned controls, collect trustworthy implementation and operating evidence, test exceptions, and make remediation traceable. NIST AI RMF organizes risk work; it does not replace technical threat modelling, evaluation or operational control verification.
 
 ## Edition 4.2 Expansion: AI Governance as Executable Decision Rights
 
-AI Governance rose to 15.8% Core demand in securing-AI roles, even though aggregate demand is 4.4%. It is promoted from a supporting mapping exercise to a first-class chapter module.
+AI Governance rose to 17.6% Core demand in securing-AI roles and 5.1% aggregate demand. It remains a first-class chapter module rather than a supporting mapping exercise.
+
+Edition 4.3 adds a governance evidence packet exercise: define the use-case owner, model and data provenance, risk tier, required evaluations, deployment boundary, approved tools, residual-risk approver, monitoring owner, exception expiry and retirement trigger. The packet must be generated from operational workflows where possible, not maintained as a disconnected questionnaire.
 
 Governance should specify who may make which decision using what evidence:
 
