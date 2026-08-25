@@ -11,8 +11,6 @@
 
 Data Pipelines remains a major gap at 12.8% aggregate and 13.7% target-role demand. SQL and data modelling also increased to 9.4% aggregate and 9.9% target-role demand. A secure pipeline needs a data contract that survives ingestion, transformation, storage, retrieval, training and deletion. The contract should state:
 
-Edition 4.3 practice should include executable checks for tenant keys, purpose restrictions, provenance, schema evolution, deletion propagation and reconciliation between source, warehouse, feature, vector and training stores. SQL exercises should demonstrate how authorization and retention rules survive joins and derived datasets rather than focusing only on query syntax.
-
 - owner, permitted purposes and approved consumers;
 - sensitivity, residency, retention and deletion requirements;
 - schema and semantic validation rules;
@@ -20,6 +18,10 @@ Edition 4.3 practice should include executable checks for tenant keys, purpose r
 - integrity expectations and quarantine conditions;
 - whether content may enter training, retrieval, evaluation or telemetry systems;
 - which derived artifacts inherit the original restrictions.
+
+## Edition 4.3 Focus: Executable Data-Contract Checks
+
+Edition 4.3 practice should include executable checks for tenant keys, purpose restrictions, provenance, schema evolution, deletion propagation and reconciliation between source, warehouse, feature, vector and training stores. SQL exercises should demonstrate how authorization and retention rules survive joins and derived datasets rather than focusing only on query syntax.
 
 Do not equate encryption with authorization. A training worker that can decrypt an entire lake still has excessive authority even when every object is encrypted. Partition by purpose and tenant, issue short-lived workload access, minimize fields before the trust boundary, and make bulk reads or cross-purpose joins observable.
 
@@ -31,9 +33,9 @@ Deletion is a lifecycle operation, not a database statement. Track propagation i
 
 At the Staff or Principal level, you must be able to design, defend, and audit the cryptographic privacy boundaries inside your organization's machine learning training pipelines. In architectural reviews and regulatory audits, you must defend:
 
-1.  **Field-Level Cryptographic Tokenization:** How to securely anonymize sensitive matching identifiers (such as patient or customer IDs) using cryptographically salted, irreversible hashing enclaves, allowing cross-dataset matching without exposing plaintext keys.
+1.  **Field-Level Cryptographic Tokenization:** How to protect sensitive matching identifiers using keyed HMAC or vault-backed tokenization with domain separation and controlled key management, allowing authorized cross-dataset matching without exposing plaintext identifiers.
 2.  **Deterministic Column-Level Encryption:** How to implement non-bypassable, field-level encryption for high-risk attributes (such as medical clinical diagnostics codes or financial transactions) using a securely managed cloud KMS key ring.
-3.  **Automated PHI/PII Extraction and Redaction:** How to architect high-throughput ETL pipelines that parse unstructured customer logs, execute name-entity recognition (NER) and regex scrubbing, and redact all 18 HIPAA-defined PHI identifiers prior to write-to-disk.
+3.  **Automated PHI/PII Extraction and Redaction:** How to architect high-throughput ETL pipelines that parse unstructured customer logs, execute named-entity recognition (NER) and regex scrubbing, and remove or transform the 18 HIPAA Safe Harbor identifier categories before persistence, with validation appropriate to the residual risk.
 4.  **Non-Repudiable Dataset Lineage Logging:** How to construct immutable audit trails (using WORM storage and digital signatures) that map dataset provenance, tracing a model's weights back to the exact version of the training files.
 5.  **Poisoning and Integrity Audits:** How to implement statistical and cryptographic anomaly gates inside ingestion streams to block adversarial training-data poisoning campaigns.
 

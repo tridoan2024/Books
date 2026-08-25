@@ -3,7 +3,7 @@
 > **Part:** Part II — Threat Modelling and Product Security
 > **Market evidence:** Penetration testing (9.5%), Vulnerability management (10.0%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** HAVE
-> **Why this chapter exists:** Close the loop between identifying vulnerabilities (through pentesting, AST, and DAST) and systematically mitigating, prioritizing, and managing them at scale.
+> **Why this chapter exists:** Close the loop between identifying vulnerabilities (through pentesting, SAST, and DAST) and systematically mitigating, prioritizing, and managing them at scale.
 
 ---
 
@@ -19,7 +19,7 @@ In senior-level security leadership, you must maintain a robust offensive testin
 2.  **Continuous Offensive Security vs. Point-in-Time Audits:** Why annual or biannual penetration testing is insufficient, and how to defend continuous automated validation (e.g., BAS, continuous red-teaming).
 3.  **Strict SLA Enforcement & Escalation Structures:** How to defend organizational SLA timelines (e.g., 24-hour SLA for production Criticals) and manage business-level pushback during high-priority releases.
 4.  **Remediation at Scale via Root-Cause Elimination:** How to defend investing in systemic code changes (Paved Paths) that eliminate whole classes of vulnerabilities rather than playing "vulnerability whack-a-mole."
-5.  **Audit and Posture Auditing Verifiability:** How to prove to auditors, customers, and regulatory bodies (such as FDA or HIPAA) that all identified security issues have been properly remediated or formally waived.
+5.  **Audit and Remediation Verifiability:** How to prove to auditors, customers, and regulatory bodies (such as FDA or HIPAA) that all identified security issues have been properly remediated or formally waived.
 
 ---
 

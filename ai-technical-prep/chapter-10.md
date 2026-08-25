@@ -1,13 +1,17 @@
 # Chapter 10: Guardrails, safety filters and secure failure behaviour
 
 > **Part:** Part III — AI and LLM Security
-> **Market evidence:** AI guardrails & safety filters (10.9% aggregate; 30.5% target-role); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
+> **Market evidence:** AI guardrails & safety filters (10.9% aggregate; 30.5% target-role), AI alignment (1.0% aggregate; 2.3% target-role); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
 > **Why this chapter exists:** Guardrails and safety filters are the active shields of production LLM applications. However, in the industry, "guardrails" are frequently implemented as weak, soft prompt instructions or superficial text regexes. For a Ph.D.-level Staff Security Engineer with deep medical-device and embedded product-security experience, a guardrail is not a cosmetic filter; it is a **Deterministic Fail-Safe State Machine**. This chapter formalizes how to design, analyze, and implement robust runtime guardrail architectures and secure failure states that prevent systemic collapse when probabilistic models are compromised.
 
 ---
 
 ## Edition 4.1 Expansion: Guardrails as a Layered Policy System
+
+Edition 4.1 established the layered-policy model: guardrails belong at multiple trust boundaries rather than in one classifier.
+
+## Edition 4.3 Focus: Guardrails as the Largest AI-Specific Gap
 
 Guardrails remain the largest AI-specific gap at 30.5% target-role and 10.9% aggregate demand. A production design should not describe “the guardrail” as one classifier. Separate controls by trust boundary and failure consequence:
 
@@ -38,16 +42,16 @@ At the Staff or Principal level, you must be able to architect and defend the ru
 In medical device security (ISO 14971) and safety-critical automotive systems (ISO 26262), we reason about security through **Hazard Analysis** and **Fail-Safe Design**. If a cardiac pacemaker or an active driver-assist system experiences an unexpected hardware fault, a sensor failure, or an invalid memory read, the system is engineered to transition instantly to a deterministic **Safe State**:
 
 ```
-[ Active Operational State ] ─── (Unexpected Fault / Threat Detected) ───► [ Transit to Safe State ]
+[ Active Operational State ] ─── (Unexpected Fault / Threat Detected) ───► [ Transition to Safe State ]
                                                                                    │
                                                                                    ▼
-                                                                           - Cardiac: Pace-Safe 70 BPM
-                                                                           - Car: Controlled deceleration
+                                                                           - Medical: device-specific, validated fallback mode
+                                                                           - Vehicle: vehicle-specific minimal-risk condition
 ```
 
 In generative AI, we introduce a probabilistic, non-deterministic execution engine (the LLM) into safety-critical data flows. If an LLM experiences "hallucination," "prompt hijacking," or "excessive agency," we cannot allow the system to output corrupted diagnostic medical reports, execute unauthorized billing wire-transfers, or stall system threads.
 
-A Staff Security Engineer does not treat guardrails as passive "content moderators." Rather, we treat them as **Dynamic Cryptographic Circuit Breakers**. If the model output violates our security invariants, the circuit breaker trips, zeroes active session variables, revokes downstream API tokens, and falls back to an immutable, deterministic safe state.
+A Staff Security Engineer does not treat guardrails as passive "content moderators." Rather, we treat them as **deterministic policy-enforcement circuit breakers**. If the model output violates our security invariants, the circuit breaker trips, zeroes active session variables, revokes downstream API tokens, and falls back to an immutable, deterministic safe state.
 
 ---
 

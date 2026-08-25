@@ -2,7 +2,7 @@
 
 > **Part:** Part V — Systems, Data and Model Engineering
 > **Market evidence:** Fine-tuning & training (7.3%), PyTorch (6.3%), MLOps (7.3%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
-> **Reader status:** GAP / HAVE
+> **Reader status:** GAP / HAVE / GAP
 > **Why this chapter exists:** The machine learning training and fine-tuning loop represents the ultimate cryptographic boundary of model intelligence. If an attacker injects backdoors during optimization, or if the training parameters leak sensitive training data, the model's integrity is permanently compromised. This chapter details how to secure PyTorch-based training loops, implement Differentially Private Stochastic Gradient Descent (DP-SGD), configure cryptographic model watermarking, and intercept backdoor injections. For a Staff Security Engineer, this chapter provides the mathematical foundations and architectural controls required to enforce sovereign privacy and integrity guarantees directly within active neural optimization runs.
 
 ---
@@ -18,23 +18,23 @@ At the Staff or Principal level, you must be able to design, implement, and defe
 1.  **Differentially Private SGD (DP-SGD) Mechanics:** How to mathematically enforce Differential Privacy inside active training loops using individual gradient L2-norm clipping and Gaussian noise additions, and how to track privacy budgets ($\epsilon, \delta$) across training runs.
 2.  **Backdoor and Poisoning Interception:** How to audit and filter training batches for poisoned data anomalies and hidden trigger backdoor neurons prior to executing optimization steps.
 3.  **Model Watermarking:** How statistical or trigger-based watermarking may contribute evidence of model provenance, and why robustness, false positives, removal attacks and independent validation prevent it from serving as a non-bypassable cryptographic proof of ownership.
-4.  **Secure Distributed Training Communication:** How to secure gradient exchanges in distributed multi-GPU training environments (such as PyTorch DDP or Horovod) utilizing TLS-encrypted gRPC tunnels and mutual certificate validation.
+4.  **Secure Distributed Training Communication:** How to secure gradient exchanges using authenticated, encrypted transport appropriate to the distributed-training backend, including protected NCCL or MPI fabrics and mTLS for control-plane services.
 5.  **Secure Weight Checkpointing and Export:** How to establish cryptographic sign-offs and integrity validation for model checkpoint files stored in central repositories, preventing tampering during fine-tuning.
 
 ---
 
 ## Engineering Context
 
-In classical application security, software execution is deterministic. Once a binary is compiled, its execution path is static and can be verified via cryptographic hashes.
+Compiled software can still exhibit concurrency, input-dependent behavior and runtime nondeterminism. Cryptographic hashes verify artifact identity and integrity; they do not verify every execution path.
 
-In deep learning, model compilation occurs dynamically through **Weight Optimization**. The model's behavior is formed by running Stochastic Gradient Descent (SGD) over millions of training samples. If an attacker injects a backdoor during this training phase, they can alter model behavior under specific, subtle trigger conditions without changing standard diagnostic performance.
+In deep learning, model behavior is learned during **weight optimization**. The model's behavior is formed by running Stochastic Gradient Descent (SGD) over millions of training samples. If an attacker injects a backdoor during this training phase, they can alter model behavior under specific, subtle trigger conditions without changing standard diagnostic performance.
 
 ```
 [ Ingress Batches ] ──► [ Individual Gradients ] ──► [ L2 Gradient Clipping (C) ] ──► [ Gaussian Noise (σC) ] ──► [ Weight Update ]
                                                                                                            (DP-SGD Step)
 ```
 
-Furthermore, traditional training loops are highly vulnerable to **Membership Inference Attacks**. By analyzing the exact logprobs or generation patterns of a deployed model, an attacker can mathematically infer whether a specific, sensitive patient record was included in the training set.
+Furthermore, traditional training loops are highly vulnerable to **Membership Inference Attacks**. By analyzing the exact logprobs or generation patterns of a deployed model, an attacker can statistically infer whether a specific, sensitive patient record was included in the training set.
 
 Securing the model lifecycle requires shifting security directly into the **Mathematical Optimization Loop** using **DP-SGD** and **Adversarial Poisoning Gates**.
 
@@ -77,7 +77,7 @@ Securing the model lifecycle requires shifting security directly into the **Math
 *   API endpoints of checkpoint storage and registry systems.
 
 ### 5. Security Invariants
-*   **Invariant 1 (Mathematical Privacy Boundaries):** High-compliance models trained on customer data must integrate **DP-SGD** to guarantee mathematically bounded differential privacy ($\epsilon, \delta$), preventing membership inference.
+*   **Invariant 1 (Explicit Privacy Guarantees):** When a formal record-level differential-privacy guarantee is required, use a correctly implemented and accounted mechanism such as **DP-SGD**, with explicit adjacency, clipping, sampling, composition and ($\epsilon, \delta$) parameters. Differential privacy bounds membership-inference risk under stated assumptions; it does not categorically prevent inference.
 *   **Invariant 2 (Absolute Gradient Encapsulation):** Distributed training gradient broadcasts must be encrypted with TLS 1.3 and require mutual certificate (mTLS) authentication between GPU nodes.
 *   **Invariant 3 (Provenance Evidence):** If watermarking is used, its detection threshold, false-positive rate, robustness and removal assumptions must be documented. Ownership and release provenance should also rely on signed artifacts, registries and custody records.
 *   **Invariant 4 (Non-Bypassable Checkpoint Signing):** All exported weight files must be cryptographically signed by the training HSM enclave, blocking unapproved model deployments.
@@ -588,13 +588,13 @@ To resolve the bottleneck:
 This represents a tradeoff between **mathematical privacy strength** and **accuracy preservation**:
 
 1.  **DP-SGD (High Privacy, Lower Accuracy):**
-    *   *Pros:* Absolute mathematical privacy. By injecting noise directly into the gradient updates during optimization, we ensure that every weight update is differentially private. This protects the model against all downstream membership inference and gradient reconstruction attacks.
+    *   *Pros:* A formally bounded privacy loss when adjacency, clipping, sampling, noise, composition and the reported ($\epsilon, \delta$) budget are correctly specified and implemented. This reduces membership-inference and gradient-reconstruction risk under those assumptions.
     *   *Cons:* Accuracy degradation. Adding noise to gradients disrupts optimization, requiring longer training runs and reducing final classification accuracy.
 2.  **Output Perturbation (Low Privacy, High Accuracy):**
     *   *Pros:* Zero impact on training. The model trains normally, preserving maximum classification accuracy and fast convergence.
     *   *Cons (The Risk):* Vulnerable to advanced attacks. Output perturbation (adding noise strictly to the final output logprobs) is easily bypassed by multi-query regression algorithms or timing attacks, leaving the underlying weights vulnerable to exfiltration.
 
-In regulated clinical environments, **DP-SGD** is required to guarantee mathematical data privacy.
+In regulated clinical environments, use **DP-SGD** when the threat model and policy require a formal record-level differential-privacy guarantee; regulation alone does not make one specific training mechanism universally mandatory.
 
 #### Q8: What are the security tradeoffs of using PyTorch DDP collective communication backends (NCCL vs. Gloo) in distributed multi-node clusters?
 **Model Answer:**

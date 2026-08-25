@@ -13,7 +13,11 @@ SOC 2 (4.7%) and ISO 27001 (4.8%) remain a valid peer merge, while AI Governance
 
 ## Edition 4.2 Expansion: AI Governance as Executable Decision Rights
 
-AI Governance rose to 17.6% Core demand in securing-AI roles and 5.1% aggregate demand. It remains a first-class chapter module rather than a supporting mapping exercise.
+At the Edition 4.2 review, AI Governance reached 15.8% Core demand in securing-AI roles and was promoted from a supporting mapping exercise to a first-class chapter module.
+
+## Edition 4.3 Focus: Governance Evidence Packets
+
+AI Governance is now 17.6% in securing-AI roles and 5.1% aggregate demand. It remains a first-class chapter module.
 
 Edition 4.3 adds a governance evidence packet exercise: define the use-case owner, model and data provenance, risk tier, required evaluations, deployment boundary, approved tools, residual-risk approver, monitoring owner, exception expiry and retirement trigger. The packet must be generated from operational workflows where possible, not maintained as a disconnected questionnaire.
 
@@ -35,10 +39,10 @@ NIST AI RMF and assurance standards help organize these responsibilities, but th
 At the Staff or Principal level, you must be able to design, manage, and defend your organization's security compliance posture and risk governance framework. In regulatory examinations and SOC 2 audits, you must defend:
 
 1.  **SOC 2 and ISO 27001 Control Mapping:** How to map distributed machine learning infrastructure (e.g., container enclaves, model registries, and ETL data streams) onto standard SOC 2 Type II Trust Services Criteria (Security, Confidentiality) and ISO/IEC 27001/27002 control domains.
-2.  **NIST AI RMF Ingestion Gates:** How to implement the core pillars (Map, Measure, Manage, Govern) of the NIST AI Risk Management Framework directly into active CI/CD and deployment pipelines.
+2.  **NIST AI RMF Ingestion Gates:** How to implement the core functions (Govern, Map, Measure, Manage) of the NIST AI Risk Management Framework directly into active CI/CD and deployment pipelines.
 3.  **HSM-Signed Compliance Evidence:** How to design automated configuration scanners that run continuous checks over your codebases and cloud configurations, exporting cryptographically signed compliance reports to establish non-repudiation.
-4.  **Least-Privilege Serving Enclaves:** How to mathematically prove that model-serving hosts operate under strict least-privilege configurations, run strictly under non-root (non-UID 0) container UIDs, and utilize secure, read-only root filesystems.
-5.  **Audit-Ready Secrets Management:** How to defend your secrets management model, proving that zero plaintext keys, certificates, or database credentials exist inside source control or local container environments, with all accesses logged to write-once WORM storage.
+4.  **Least-Privilege Serving Enclaves:** How to demonstrate and continuously verify that model-serving hosts operate under strict least-privilege configurations, run strictly under non-root (non-UID 0) container UIDs, and utilize secure, read-only root filesystems.
+5.  **Audit-Ready Secrets Management:** How to defend your secrets management model, proving that no long-lived plaintext keys, certificates, or database credentials are embedded in source control, container images or persistent container storage, with all accesses logged to write-once WORM storage.
 
 ---
 
@@ -70,7 +74,7 @@ A Staff Security Engineer treats **Compliance as Code**. You design automated, n
 ### 2. Regulatory and Compliance Frameworks
 *   **SOC 2 Type II Trust Services Criteria (Security, Confidentiality):** Requires establishing strict access control, system monitoring, change management, and encryption boundaries.
 *   **ISO/IEC 27001:2022 ISMS Controls:** Mandates a structured risk management program, least-privilege resource allocation, secure software development lifecycles, and regular auditing.
-*   **NIST AI Risk Management Framework (AI RMF 1.0):** Focuses on managing socio-technical risks (such as model bias, hallucinations, and safety hazards) using structured Map, Measure, Manage, and Govern workflows.
+*   **NIST AI Risk Management Framework (AI RMF 1.0):** Focuses on managing socio-technical risks (such as model bias, hallucinations, and safety hazards) using structured Govern, Map, Measure, and Manage workflows.
 
 ### 3. Trust Boundaries
 *   **Boundary 1: Developer Git Commit to Build Runner.** The transition where code changes are analyzed prior to compilation.
@@ -573,7 +577,7 @@ The differences are focused on **socio-technical risk management** over **infras
 1.  **Traditional Cybersecurity Frameworks (e.g., NIST SP 800-53):**
     These frameworks are designed to secure host networks, physical servers, and operating systems. They focus on access control, logging, patching, and encryption to protect system confidentiality, integrity, and availability (CIA triad). They are blind to the unique risks of neural network behavior.
 2.  **NIST AI RMF:**
-    This framework is specifically designed to manage socio-technical risks unique to artificial intelligence workloads. It introduces structured workflows (Map, Measure, Manage, Govern) to identify and mitigate risks like model bias, hallucinations, training-data poisoning, adversarial prompts, and safety hazards, bridging the gap between raw cybersecurity and AI trust assurance.
+    This framework is specifically designed to manage socio-technical risks unique to artificial intelligence workloads. It introduces structured workflows (Govern, Map, Measure, Manage) to identify and mitigate risks like model bias, hallucinations, training-data poisoning, adversarial prompts, and safety hazards, bridging the gap between raw cybersecurity and AI trust assurance.
 
 ---
 

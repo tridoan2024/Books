@@ -3,17 +3,13 @@
 > **Part:** Part III — AI and LLM Security
 > **Market evidence:** Evals & benchmarking (7.2%), Safe rollout & canary (0.9%); target-role demand 17.6%, 3.1%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
-> **Why this chapter exists:** In standard software engineering, we verify security using static analysis (SAST), dynamic analysis (DAST), and unit-testing suites. In machine learning, these deterministic tools fail. Because model weights are probabilistic black boxes, verifying their safety and security requires running comprehensive **Security Evaluations and Benchmarks**. If an enterprise automates the fine-tuning of foundation models on custom datasets, it must deploy an automated **Security Release Gate** that evaluates and blocks unaligned or hijacked models before they reach production. This chapter provides the bridge, translating classic software-testing automation into the probabilistic domain of LLM security evaluations.
+> **Why this chapter exists:** In standard software engineering, we verify security using static analysis (SAST), dynamic analysis (DAST), and unit-testing suites. Model behavior must be evaluated across broad input distributions and may vary with decoding and runtime conditions. Exact-output unit tests remain necessary, but they are insufficient for behavioral coverage; model weights themselves are not probabilistic, and some inference configurations are repeatable. If an enterprise automates the fine-tuning of foundation models on custom datasets, it must deploy an automated **Security Release Gate** that evaluates and blocks unsafe or compromised models before they reach production. This chapter provides the bridge from classic software-testing automation to LLM security evaluations.
 
 ---
 
 ## Edition 4.1 Expansion: Evaluation Evidence Must Control Release
 
-## Edition 4.3 Focus: Evaluation Coverage as a Release Contract
-
-Evals increased to 17.6% target-role demand. Extend every release gate beyond aggregate pass rates: require scenario coverage, severity-weighted failures, subgroup and tenant slices, tool-action correctness, regression comparison, uncertainty bounds, named owners and an explicit rollback condition. The artifact to practise is a release decision packet that makes the evidence and residual risk reviewable without rerunning the entire experiment.
-
-Evals remain an 8.7% GAP and connect strongly to both agentic security and guardrails. The key distinction is between a benchmark that reports a score and a release gate that makes a defensible decision.
+Evals remain a GAP at 7.2% aggregate and 17.6% target-role demand and connect strongly to both agentic security and guardrails. The key distinction is between a benchmark that reports a score and a release gate that makes a defensible decision.
 
 Build the evaluation portfolio in layers:
 
@@ -26,6 +22,10 @@ Build the evaluation portfolio in layers:
 Every metric needs a decision rule, confidence treatment and owner. A single average can conceal a catastrophic subgroup failure. Report the worst relevant slice, uncertainty, sample provenance and changes from the current production baseline. Protect the evaluation set from contamination and control who may change tests, thresholds and judge prompts.
 
 Safe rollout applies the evidence under uncertainty. Promote by immutable artifact digest; begin with offline and shadow evaluation; use a constrained canary; define automatic rollback signals; and retain an independent kill path. A canary is not safe if the new model can corrupt durable state before the monitor detects harm. High-impact tool actions require simulation, approval or reversible staging until evidence supports expansion.
+
+## Edition 4.3 Focus: Evaluation Coverage as a Release Contract
+
+Evals increased to 17.6% target-role demand. Extend every release gate beyond aggregate pass rates: require scenario coverage, severity-weighted failures, subgroup and tenant slices, tool-action correctness, regression comparison, uncertainty bounds, named owners and an explicit rollback condition. The artifact to practise is a release decision packet that makes the evidence and residual risk reviewable without rerunning the entire experiment.
 
 ## What You Must Be Able to Defend
 
@@ -45,7 +45,7 @@ In classical application security, we write deterministic unit tests:
 `assert calculate_total(100, 0.08) == 108.0`
 The input is rigid, the processing logic is compiled code, and the output is binary (either pass or fail). 
 
-With generative AI, this testing model is completely inapplicable. A model does not output a deterministic variable; it generates a sequence of probabilistic tokens. If we prompt the model with an adversarial query (Jailbreak), the output can take infinite semantic variations:
+With generative AI, exact-output testing is insufficient on its own. Model behavior may vary with decoding and runtime conditions, and an adversarial query can produce many semantically equivalent forms:
 
 ```
 Deterministic Software Test (Binary):
@@ -955,7 +955,7 @@ This represents a severe **Ethical and Security Policy Breach** (Model Overfitti
 
 Verifying and enforcing the security of probabilistic machine learning models requires shifting from deterministic software-unit testing to automated, statistical security evaluations:
 
-1.  **The Probabilistic Testing Model:** Model weights are probabilistic black boxes that cannot be audited via SAST or standard binary unit tests. You must enforce runtime safety using out-of-band automated **Security Evaluations and Benchmarks** to compute a statistical Safety Compliance Rate.
+1.  **The Behavioral Testing Model:** Model behavior must be evaluated across broad input distributions and relevant decoding/runtime configurations. SAST and exact-output unit tests remain useful, but automated **Security Evaluations and Benchmarks** are required for behavioral coverage and release decisions.
 2.  **Non-Bypassable HSM Release Gates:** Never allow un-verified model weights to reach production registries. Enforce an attested boot sequence inside serving containers, verifying model hashes against detached signatures signed by the enterprise HSM only *after* successfully passing all automated gates.
 3.  **Sovereign Multi-Judge Consensus:** Automate output classification using a three-judge consensus engine running in an isolated namespace, leveraging fine-tuned safety classifiers (Llama-Guard) alongside high-reasoning models (GPT-4o Mini) to block Judge Hijacking attacks.
 4.  **Prevent Benchmark Contamination:** Protect the integrity of your test suite. Permanently ban developers from accessing the master security test database, and dynamically mutate evaluation prompts to ensure the model has achieved true generalized alignment, not overfitting.

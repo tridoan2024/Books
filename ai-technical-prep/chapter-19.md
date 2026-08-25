@@ -3,13 +3,15 @@
 > **Part:** Part IV — Cloud and AI Platform Security
 > **Market evidence:** Incident response (14.2%), AI incident response (editorial override); target-role incident response 16.0%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
-> **Why this chapter exists:** Operational incidents in large-scale AI platforms are highly volatile. Unlike classic web servers where an incident is resolved by restoring a database backup, AI platforms face complex, multi-dimensional exploits like data poisoning, dynamic model extraction, and indirect prompt-injection hijacking. Under these scenarios, traditional incident response (IR) playbooks fail. For a Ph.D.-level Staff Security Engineer, this chapter provides the operational blueprint, bridging safety-critical medical-device containment (FDA recall regulations, ISO 14971 hazards) with real-time, automated cloud-scale AI incident response.
+> **Why this chapter exists:** Operational incidents in large-scale AI platforms are highly volatile. Unlike classic web servers where an incident is resolved by restoring a database backup, AI platforms face complex, multi-dimensional exploits like data poisoning, dynamic model extraction, and indirect prompt-injection hijacking. Under these scenarios, traditional incident-response playbooks must be extended. For a Ph.D.-level Staff Security Engineer, this chapter provides the operational blueprint, bridging safety-critical medical-device containment (FDA recall regulations, ISO 14971 hazards) with real-time, automated cloud-scale AI incident response.
 
 ---
 
 ## Edition 4.1 Expansion: AI Incident Command and Containment Decisions
 
 Incident Response remains a major GAP at 14.2% aggregate and 16.0% target-role demand. The missing Staff-level capability is not familiarity with the incident lifecycle; it is choosing containment under uncertainty when model, data, identity and infrastructure state may all be suspect.
+
+## Edition 4.3 Focus: Independent Revocation Paths
 
 Edition 4.3 practice should include a decision table for revoking model versions, prompts, retrieval corpora, tool credentials and tenant access independently. For each action, record blast radius, evidence preserved, recovery dependency, customer impact and the condition for re-enablement.
 
@@ -31,7 +33,7 @@ Recovery requires more than redeployment. Prove that identity, artifacts, data a
 At the Staff or Principal level, you must be able to architect, lead, and defend automated Incident Response and containment pipelines for distributed AI systems. In high-pressure operational situations and executive post-mortems, you must defend:
 
 1.  **AI Threat Classification Thresholds:** How to mathematically and logically differentiate standard software application faults from high-severity AI exploits like data poisoning, model extraction, and excessive agency tool-escapes.
-2.  **Active Cloud Containment Orchestration:** How to configure and execute zero-delay containment routines—such as dynamic eBPF-driven network segregation, session-token revocation caches, and automated pod cordoning.
+2.  **Active Cloud Containment Orchestration:** How to configure and execute pre-authorized, low-latency containment routines—such as dynamic eBPF-driven network segregation, session-token revocation caches, and automated pod cordoning.
 3.  **Immutable Forensic Provenance Trails:** How to design and secure non-repudiable transaction logs (using S3 WORM, HSM signatures, and eBPF kernel event tracking) that preserve forensic evidence during system-wide compromise.
 4.  **Model and Dataset Eradication Procedures:** How to securely sanitize a poisoned training dataset or restore model weights from verified cryptographic snapshots after a supply-chain compromise.
 5.  **Multi-Tenant Disaster Recovery:** How to failover high-performance GPU serving clusters to clean standby pools without causing cross-tenant data corruption or violating clinical availability SLAs.

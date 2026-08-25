@@ -2,7 +2,7 @@
 
 > **Part:** Part III — AI and LLM Security
 > **Market evidence:** Agentic AI security (34.7%), Agent delegation & authorization (0.3%), Agent & tool sandboxing (editorial override); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
-> **Reader status:** HAVE
+> **Reader status:** HAVE / GAP
 > **Why this chapter exists:** Agentic security is the gravitational center of production LLM systems. While prompt injection and guardrails protect the LLM's direct input/output interfaces, autonomous agentic systems introduce delegation, tool execution, and dynamic execution environments. Securing these requires transitioning from traditional identity and access management (IAM) to multi-hop cryptographic delegation and strict container/sandbox isolation.
 
 ---
@@ -27,7 +27,7 @@ At the Staff or Principal level, you must be able to design, defend, and lead th
 
 In a classical three-tier web application, the application server acts as a deterministic gatekeeper. It processes rigid, structured inputs (JSON, SQL parameters) and enforces authorization policies before talking to databases or downstream microservices. 
 
-With agentic AI, this model breaks completely. The LLM is an *undetermined execution engine*. We give the LLM access to "tools"—which are essentially arbitrary APIs, shell environments, database connectors, and python runtimes—and let it decide dynamically which tool to call, with which arguments, and in what sequence. 
+With agentic AI, this model breaks completely. The LLM is a *nondeterministic execution engine*. We give the LLM access to "tools"—which are essentially arbitrary APIs, shell environments, database connectors, and Python runtimes—and let it decide dynamically which tool to call, with which arguments, and in what sequence. 
 
 ```
 [ User Input / Untrusted Data ]
@@ -39,7 +39,7 @@ With agentic AI, this model breaks completely. The LLM is an *undetermined execu
                └────── Data Query (e.g., "get_user_records") ─►  [ Database / Vault ]
 ```
 
-Because prompt injection (Chapter 9) can completely hijack the LLM's decision-making process, **any code execution or tool invocation initiated by the LLM must be treated as untrusted user input.** The LLM Orchestrator cannot be trusted to self-police. Security must be shifted to the infrastructure and cryptographic delegation layer. This chapter establishes the fundamental identity and containment boundaries that allow autonomous agents to operate safely in enterprise networks.
+Because prompt injection (Chapter 9) can completely hijack the LLM's decision-making process, **any code execution or tool invocation proposed by the LLM must be treated as an untrusted proposal requiring deterministic authorization and validation.** The LLM Orchestrator cannot be trusted to self-police. Security must be shifted to the infrastructure and cryptographic delegation layer. This chapter establishes the fundamental identity and containment boundaries that allow autonomous agents to operate safely in enterprise networks.
 
 ---
 

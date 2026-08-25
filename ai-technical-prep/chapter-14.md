@@ -11,8 +11,6 @@
 
 The larger market sample confirms that Kubernetes security is not merely container hygiene; it remains a major gap at 18.5% aggregate and 18.3% target-role demand. Treat the cluster as a security control plane with four independently enforced layers:
 
-Edition 4.3 adds a practice emphasis on proving that the controls survive operational exceptions: emergency deployments, GPU scheduling pressure, temporary debugging access, admission-controller outages and workloads that request broader network or filesystem access. Record who can authorize each exception, how it expires and which telemetry proves the boundary was restored.
-
 1. **Admission:** reject unsigned images, privileged workloads, unsafe host mounts, unrestricted capabilities and unapproved model artifacts before scheduling.
 2. **Identity:** bind each workload to a short-lived cloud and service identity; never inherit node identity or mount broad static credentials.
 3. **Runtime:** combine seccomp, AppArmor or SELinux, read-only filesystems, egress policy and an appropriate sandbox boundary. A namespace is an administrative boundary, not a hostile-code sandbox.
@@ -22,14 +20,18 @@ For AI platforms, policy must also understand the workload's semantic assets: mo
 
 The Staff-level design objective is therefore not “secure Kubernetes.” It is to create a paved path in which the safest execution profile is the easiest profile to deploy, exceptions are time-bounded and observable, and every admitted workload can be traced to source, builder, artifact and approving policy version.
 
+## Edition 4.3 Focus: Operational Exceptions
+
+Edition 4.3 adds a practice emphasis on proving that the controls survive operational exceptions: emergency deployments, GPU scheduling pressure, temporary debugging access, admission-controller outages and workloads that request broader network or filesystem access. Record who can authorize each exception, how it expires and which telemetry proves the boundary was restored.
+
 ## What You Must Be Able to Defend
 
 At the Staff or Principal level, you must be able to design, audit, and defend the security posture of multi-tenant Kubernetes clusters hosting high-performance AI inference and training workloads. In system design reviews and security clearances, you must defend:
 
 1.  **Isolation at the OS Kernel Layer:** How container isolation is achieved via Linux namespaces, control groups (cgroups), seccomp-bpf, and LSMs (AppArmor/SELinux), and how this compares directly to hardware-based memory segmentation and virtualization.
 2.  **Zero-Trust Control Plane RBAC:** How to design a non-permissive Kubernetes Role-Based Access Control (RBAC) model that isolates machine-learning engineers, CI/CD runners, and automated training pods.
-3.  **Admission Control as an Absolute Security Gate:** Why runtime security agents are insufficient, and how to implement validating and mutating admission webhooks to block non-conforming, insecure workloads before they are scheduled.
-4.  **Distributed ML Operator Exploitation Vectors:** How to secure custom controllers and operators (such as KubeFlow or Ray Cluster Operators) that expose unauthenticated cluster-wide APIs.
+3.  **Admission Control as a Preventive Security Gate:** Why runtime security agents are insufficient, and how to implement validating and mutating admission webhooks to block non-conforming, insecure workloads before they are scheduled.
+4.  **Distributed ML Operator Exploitation Vectors:** How to secure custom controllers and operators (such as Kubeflow or Ray Cluster Operators) that expose unauthenticated cluster-wide APIs.
 5.  **Accelerator (GPU) Multi-Tenancy and Isolation:** How to enforce hardware-level partitioning (such as NVIDIA Multi-Instance GPU - MIG) to prevent cross-tenant side-channel memory leaks and denial-of-service on shared physical GPUs.
 
 ---
@@ -1109,7 +1111,7 @@ Securing containerized AI environments in Kubernetes requires moving beyond simp
 
 1.  **Kernel-Level Substrate Controls:** Containers are host processes, not physical boxes. You must enforce Linux kernel namespace and cgroup boundaries using seccomp-bpf filters, dropped system capabilities (`ALL`), and restrictive Linux Security Modules (AppArmor or SELinux) to protect the host node against breakout vulnerabilities.
 2.  **Sovereign Admission Validation:** Do not trust application developers to manually harden workloads. Implement high-availability Validating Admission Webhooks that act as declarative security gates, permanently blocking non-conforming or privileged manifests before scheduling.
-3.  **Hardware Accelerator Partitioning:** In multi-tenant environments, enforce physical GPU boundaries using **NVIDIA Multi-Instance GPU (MIG)**. Hardware-level cache and memory partitioning prevent cross-tenant data harvesting and side-channel timing attacks on shared physical silicon.
+3.  **Hardware Accelerator Partitioning:** In multi-tenant environments, use **NVIDIA Multi-Instance GPU (MIG)** where supported to partition memory and compute resources. Treat it as one layer: shared drivers, buses, management components and observable timing behavior still require threat modelling and validation.
 4.  **Ephemeral Workload Identities:** Eliminate static cloud API credentials from cluster state. Force the use of Workload Identity (OIDC federation), binding Kubernetes ServiceAccounts to restricted, short-lived cloud roles that expire automatically when the workload terminates.
 5.  **MicroVM Code Sandboxing:** For workloads executing arbitrary, untrusted LLM-generated code, bypass standard runC engines and mandate hypervisor-level microVM runtimes (**AWS Firecracker** or **gVisor**) to guarantee true hardware-virtualized isolation.
 

@@ -3,13 +3,15 @@
 > **Part:** Part IV — Cloud and AI Platform Security
 > **Market evidence:** AWS (24.5%), GCP (17.0%), Azure (16.6%); 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP / GAP / HAVE
-> **Why this chapter exists:** Large Scale AI pipelines are inherently distributed and multi-cloud. It is common for an enterprise to store datasets in AWS S3, execute GPU training runs in GCP Vertex AI, and serve low-latency inference APIs via Azure OpenAI. Managing the security posture across these disparate platforms is the single most complex challenge in modern AI platforms. For a hardware-oriented Staff Security Engineer, this chapter maps physical host and network boundaries onto logical, software-defined cloud constructs (IAM, OIDC federation, VPC Peering, and KMS Key rings), establishing a unified framework for secure multi-cloud AI engineering.
+> **Why this chapter exists:** Large-scale AI pipelines are often distributed and may span multiple clouds. It is common for an enterprise to store datasets in AWS S3, execute GPU training runs in GCP Vertex AI, and serve low-latency inference APIs via Azure OpenAI. Managing the security posture across these disparate platforms is one of the most complex challenges in modern AI platforms. For a hardware-oriented Staff Security Engineer, this chapter maps physical host and network boundaries onto logical, software-defined cloud constructs (IAM, OIDC federation, VPC Peering, and KMS Key rings), establishing a unified framework for secure multi-cloud AI engineering.
 
 ---
 
 ## Edition 4.1 Expansion: Multi-Cloud Without Lowest-Common-Denominator Security
 
 AWS (24.5% aggregate; 26.0% target-role) and GCP (17.0% aggregate; 19.1% target-role) remain major measured gaps. The correct response is not to memorize two consoles. Define a provider-neutral security contract, then prove how each cloud satisfies it.
+
+## Edition 4.3 Focus: Provider-Control Evidence Matrix
 
 Edition 4.3 practice should produce one side-by-side implementation matrix for identity federation, organization policy, network isolation, key management, logging, workload identity and break-glass access across AWS, GCP and Azure. Each row must name the provider control, its failure mode and the evidence used to verify it continuously.
 
@@ -31,9 +33,9 @@ At the Staff or Principal level, you must be able to design, audit, and defend m
 
 1.  **Workload Identity Federation Over Static Keys:** How to establish cryptographic trust boundaries between AWS, GCP, and Azure using OpenID Connect (OIDC) federation, completely eliminating static cross-cloud IAM access keys.
 2.  **Model Weight Storage Integrity and Provenance:** How to configure secure cloud storage buckets (AWS S3, GCP GCS, Azure Blob) using Object Lock, strict Bucket Policies, and KMS Envelope Encryption.
-3.  **Managed AI Service Isolation:** How to deploy and isolate managed machine learning platforms (such as AWS SageMaker, GCP Vertex AI, or Azure OpenAI) inside private virtual networks, completely disabling public internet routing.
+3.  **Managed AI Service Isolation:** How to deploy and isolate managed machine learning platforms (such as AWS SageMaker, GCP Vertex AI, or Azure OpenAI) inside private virtual networks, restricting public access and using private connectivity where supported.
 4.  **Metadata SSRF Containment:** How to configure cloud Instance Metadata Services (such as AWS IMDSv2) to prevent compromised containers from harvesting host-level cloud administrative tokens.
-5.  **Secure Multi-Cloud Network Interconnects:** The design and encryption profiles of secure cross-cloud networks, comparing AWS Transit Gateway, GCP Shared VPC, and Azure ExpressRoute.
+5.  **Secure Multi-Cloud Network Interconnects:** The design and encryption profiles of secure cross-cloud networks, using AWS Direct Connect, Google Cloud Interconnect, Azure ExpressRoute, and encrypted cross-cloud links as appropriate.
 
 ---
 

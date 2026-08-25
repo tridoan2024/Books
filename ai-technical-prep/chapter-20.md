@@ -3,13 +3,15 @@
 > **Part:** Part V — Systems, Data and Model Engineering
 > **Market evidence:** Distributed systems (14.8%), Multi-tenant AI isolation (2.8%), Inference & model serving security (2.2%); target-role distributed systems 22.9%; 681-posting aggregate; 131 securing-AI roles, 2026-08-25
 > **Reader status:** GAP
-> **Why this chapter exists:** High-performance GPU serving clusters are extremely expensive resources that are naturally shared across multiple business units or external customers. This shared compute model introduces critical security risks: side-channel GPU memory timing leaks, cross-tenant data exfiltration, and resource-hogging Denial of Service (DoS) attacks. This chapter covers designing secure, multi-tenant model-serving architectures, detailing logical and physical GPU isolation utilizing Multi-Instance GPU (MIG) technology, network namespaces, and secure API proxy controls. For a Staff Security Engineer, this chapter provides the foundational blueprints for establishing absolute cryptographic and logical segregation across shared deep learning compute pools.
+> **Why this chapter exists:** High-performance GPU serving clusters are extremely expensive resources that are naturally shared across multiple business units or external customers. This shared compute model introduces critical security risks: side-channel GPU memory timing leaks, cross-tenant data exfiltration, and resource-hogging Denial of Service (DoS) attacks. This chapter covers designing secure, multi-tenant model-serving architectures, detailing logical and physical GPU isolation utilizing Multi-Instance GPU (MIG) technology, network namespaces, and secure API proxy controls. For a Staff Security Engineer, this chapter provides the foundational blueprints for establishing defensible logical and hardware-enforced isolation across shared deep learning compute pools.
 
 ---
 
 ## Edition 4.1 Expansion: Distributed Failure Is a Security Boundary
 
 Distributed Systems remains a major GAP at 14.8% aggregate and 22.9% target-role demand. Security designs fail when they assume one authoritative decision, one instantaneous revocation or one globally consistent policy state. In a real inference platform, retries, caches, queues, replicas and regional partitions can extend authority after the control plane believes it was removed.
+
+## Edition 4.3 Focus: Revocation Under Partial Failure
 
 Edition 4.3 adds an explicit failure-semantics exercise: trace one authorization revocation through caches, queues, replicas, retries and regional partitions; state the maximum stale-authority window; then design observability and compensating controls for messages or actions that escape during that window.
 
@@ -30,11 +32,11 @@ Multi-tenant inference isolation then becomes a consequence of ownership: every 
 
 At the Staff or Principal level, you must be able to architect, audit, and defend the multi-tenant isolation model of your organization's high-performance AI serving infrastructure. In design reviews and compliance audits, you must defend:
 
-1.  **Logical and Physical GPU Segregation:** How to logically isolate containerized inference workloads and physically partition GPU memory and compute cores utilizing NVIDIA Multi-Instance GPU (MIG) profiles, preventing cross-tenant kernel memory sniffing.
+1.  **Logical and Physical GPU Segregation:** How to logically isolate containerized inference workloads and partition GPU memory and compute resources using NVIDIA Multi-Instance GPU (MIG) profiles, while accounting for residual risk in shared drivers, buses, management components and observable timing behavior.
 2.  **Zero-Trust Servicing Proxies:** How to design a secure serving gateway that intercepts tenant requests, validates authentication tokens (JWT/OIDC), extracts metadata boundaries, and strips dangerous parameters (such as `logprobs` or extreme token limits) that facilitate timing exploits.
 3.  **Token-Bucket Resource Quotas:** How to enforce dynamic, multi-dimensional rate limiting (token consumption, request frequency, and memory footprint) per tenant to prevent a single compromised or abusive tenant from starving adjacent tenants of shared GPU compute resources.
 4.  **Network Namespace Sandboxing:** How to configure Kubernetes NetworkPolicies, service meshes (Istio/Linkerd), and private namespaces to completely block lateral network traffic between adjacent tenant inference containers.
-5.  **Multi-Tenant Model Registry Segregation:** How to secure the central model registry and storage backends (S3/GCS) utilizing role-based access control (RBAC) and attribute-based encryption, ensuring tenant-serving nodes can only load authorized model weight slices.
+5.  **Multi-Tenant Model Registry Segregation:** How to secure the central model registry and storage backends (S3/GCS) utilizing role-based access control (RBAC) and attribute-based access control (ABAC), ensuring tenant-serving nodes can only load authorized model weight slices.
 
 ---
 
@@ -42,7 +44,7 @@ At the Staff or Principal level, you must be able to architect, audit, and defen
 
 In standard enterprise microservices, multi-tenancy is achieved by logical segregation at the database layer (e.g., separating tables with a `tenant_id` foreign key) and hosting application containers inside isolated Kubernetes namespaces.
 
-In high-performance AI serving, this software-only isolation model collapses. Physical GPU chips (such as NVIDIA A100s or H100s) are massive parallel execution engines. By default, when multiple containers share a single GPU, they share a unified memory space and compute scheduler.
+In high-performance AI serving, this software-only isolation model can be insufficient. Physical GPU chips (such as NVIDIA A100s or H100s) are massive parallel execution engines. When multiple containers share a GPU, isolation depends on the driver, runtime, device plugin and partitioning mode; separate CUDA contexts do not by themselves establish a strong hostile-tenant boundary.
 
 ```
 [ Tenant Request ] ──► [ Secure Isolation Proxy ] ──► [ Token Bucket / Quota Gate ]
@@ -424,7 +426,7 @@ To integrate and execute `tenant_serving_isolator.py` within your serving gatewa
 ## Production Failure Modes
 
 ### 1. GPU VRAM Memory Leakage Across Resets
-While Multi-Instance GPU (MIG) technology enforces absolute memory isolation *during* process execution, it does not guarantee that physical VRAM segments are securely cleared upon container termination. If container runtime frameworks (e.g., Kubernetes `containerd` or the NVIDIA Container Toolkit) fail to trigger a CUDA context reset, the residual tensors of a deactivated container from Tenant A can remain inside the physical GPU HBM. When a container for Tenant B is subsequently scheduled on that same MIG partition, their initial CUDA malloc operations can expose the raw residual tensor arrays of Tenant A, resulting in cross-tenant data leakage.
+Multi-Instance GPU (MIG) provides documented hardware partitioning of memory and compute resources, but it does not eliminate every cross-tenant risk in shared drivers, buses, management components or observable timing behavior. Operators must also verify reset and reuse behavior across the driver, device plugin, runtime and scheduler instead of assuming that a partition alone proves secure deprovisioning.
 *   *Mitigation:* Configure the Kubernetes GPU device plugin with mandatory memory-scrubbing hooks: ensure that `nvidia-smi` or the local host daemon executes a hard physical memory reset (`nvidia-smi --gpu-reset`) between scheduling runs.
 
 ### 2. Side-Channel Power and Memory timing Harassment
@@ -668,7 +670,7 @@ Choosing namespace-level GKE isolation over application-level routing is a choic
     *   *Pros:* Simple to deploy. A single vLLM server processes all tenant queries, separating data strictly inside the Python application code.
     *   *Cons:* Single point of failure. If the vLLM server experiences an RCE vulnerability or a memory-injection bug, the attacker gains access to the entire process memory space, exposing all tenant prompts and models.
 2.  **Namespace GKE Isolation (Absolute Containment):**
-    *   *Pros:* Multi-layered security. Each tenant has their own dedicated container, running inside their own Kubernetes Namespace, bound to separate physical MIG instances. A compromise in Tenant A's container is completely contained within their specific namespace and partition, preventing lateral compromise.
+    *   *Pros:* Multi-layered security. Each tenant has a dedicated container in its own Kubernetes Namespace and is bound to a separate MIG instance, reducing cross-tenant exposure. Residual risks remain in shared host software, drivers, management paths, buses and observable timing behavior, so containment must be validated rather than assumed.
     *   *Cons:* Higher compute footprint and increased orchestration complexity.
 
 ---
