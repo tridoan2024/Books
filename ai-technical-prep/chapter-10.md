@@ -998,3 +998,66 @@ The following authoritative specifications, standard frameworks, and academic pa
     *   *Verification Status:* Verified (Available at github.com/NVIDIA/NeMo-Guardrails).
 5.  **IEC 62304: Medical Device Software — Software Life Cycle Processes:** Hard standards for secure software state-machine partition and failure containment.
     *   *Verification Status:* Verified (iec.ch).
+
+## Edition 4.6 Addendum: Engineering a Guardrail Control Plane
+
+A production guardrail is a distributed policy system, not a classifier placed in front of a model. The useful foundation is the same separation used by service meshes: a **control plane** decides which policy version should apply, while a **data plane** enforces that decision on every request, retrieval, tool call and output stream.
+
+The control plane owns policy authoring, review, signing, rollout, rollback and tenant assignment. The data plane owns bounded-latency enforcement. A request should carry an immutable decision context containing tenant, user, model, capability, data classification and policy-version identifiers. The enforcer must never ask the model which policy applies.
+
+```text
+policy repository -> review/sign -> bundle service -> staged distribution
+                                                |
+client -> gateway -> input gate -> model/tool -> output gate -> response
+                       |              |              |
+                       +------ decision telemetry ---+
+```
+
+### Policy distribution without silent drift
+
+Treat policy bundles like deployable artifacts: canonicalize and hash the bundle; sign the digest with a release identity; distribute a monotonically increasing version and activation time; require each enforcer to report its loaded version; and reduce sensitive capabilities when the maximum permitted policy age is exceeded.
+
+Do not make the policy service a synchronous dependency for every token. Enforcers should evaluate a locally cached, signed bundle and refresh it asynchronously. This removes a network hop from the hot path while preserving bounded staleness. A revoked emergency rule can use a short-lived deny overlay or gateway kill switch while the normal bundle rolls out.
+
+### A latency-budgeted enforcement cascade
+
+Allocate a budget before choosing detectors:
+
+- **Deterministic checks:** schema validation, capability allowlists, destination restrictions, size limits and exact secret patterns. These are the hard security boundary.
+- **Local statistical checks:** compact classifiers or embedding-based detectors used only when their measured latency and error profile fit the request path.
+- **Asynchronous analysis:** expensive judges, campaign correlation and forensic enrichment. These may revoke a session or stop later tool calls, but cannot protect content already released.
+
+Streaming changes the design. Buffer enough output to validate complete structured units, such as a JSON object or tool-call argument, rather than releasing irreversible actions token by token. For prose, use a rolling window and document what can escape before cancellation reaches the client.
+
+### Secure degradation is capability-specific
+
+| Capability | Guardrail unavailable | Safe degraded action |
+|---|---|---|
+| Public text drafting | Low impact | Continue with reduced limits and visible degraded-state telemetry |
+| Private RAG retrieval | Confidentiality impact | Disable retrieval or require fresh authorization and deterministic output checks |
+| Code execution or shell tools | Integrity impact | Deny execution; permit explanation-only mode |
+| Payments, clinical decisions or irreversible writes | Safety/material impact | Fail closed or route to approved human review |
+
+Circuit breakers must prevent retry amplification. Bound retries, add jitter, isolate tenant budgets and make the fallback response independent of attacker-controlled model text.
+
+### Artifact: a policy decision envelope
+
+```json
+{
+  "decision_id": "01J...",
+  "tenant_id": "t-42",
+  "policy_version": "guardrails-2026-09-04.3",
+  "capability": "tool.database.read",
+  "result": "deny",
+  "reason_codes": ["DATA_CLASS_NOT_ALLOWED"],
+  "bundle_sha256": "...",
+  "evaluated_at": "2026-09-04T19:14:00Z",
+  "degraded": false
+}
+```
+
+Log reason codes and artifact identities, not raw sensitive prompts by default. The envelope should join to the request trace and evaluation release record.
+
+### Staff/Principal interview drill
+
+**Design guardrails for 10,000 requests per second with less than 25 ms p99 added latency and an emergency policy rollout.** Classify capabilities and invariants first. Place deterministic enforcement beside the gateway and tool broker, use signed local bundles, measure every stage independently, and reserve expensive semantic review for risk-selected or asynchronous paths. Explain policy freshness, safe degradation, tenant isolation, rollout rings, rollback, telemetry health and what happens when cancellation arrives after partial streaming. State which controls are deterministic, which are probabilistic and which failure remains residual risk.

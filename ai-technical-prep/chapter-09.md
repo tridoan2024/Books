@@ -1012,3 +1012,46 @@ The following authoritative specifications, standard frameworks, and academic pa
     *   *Verification Status:* Verified (postgresql.org/docs).
 5.  **NIST SP 800-218: Secure Software Development Framework (SSDF):** Integrating prompt security boundaries into secure application life cycles.
     *   *Verification Status:* Verified (nist.gov).
+
+## Edition 4.6 Addendum: Authorization-Preserving RAG and Corpus Operations
+
+The central RAG security question is not “Is this document safe?” It is “May this principal retrieve this chunk, for this purpose, at this moment?” Prompt filtering cannot repair an authorization error made by retrieval.
+
+### Authorization before ranking
+
+There are three common retrieval patterns:
+
+1. **Physical partitioning:** separate indexes or collections per tenant or sensitivity zone. This gives a strong boundary but increases operational cost and complicates cross-zone search.
+2. **Filter push-down:** pass an authorization-derived predicate into the vector query so unauthorized candidates never enter the nearest-neighbor result set.
+3. **Post-filtering:** retrieve globally and discard unauthorized results afterward. This is the weakest default because unauthorized candidates consume `top_k`, reduce recall and may leak corpus membership through timing or result-count differences.
+
+Use post-filtering only as a second check, not the primary boundary. The query service should derive predicates from a trusted identity context; it must not accept tenant or ACL filters directly from user-controlled request fields.
+
+### Dynamic relationships without re-embedding
+
+Embedding content and encoding authorization are separate lifecycle problems. Store stable document and chunk identifiers in the vector index, while an authorization service evaluates current subject-resource relationships. A Zanzibar-style relationship graph, database row-level policy or equivalent service can answer whether the caller may use each resource.
+
+For large candidate sets, materialize bounded authorization attributes—tenant, project, classification and visibility—into indexed metadata, then validate dynamic relationships before context assembly. Access-change events invalidate result caches and authorization snapshots. High-impact retrieval should have a maximum authorization age and fail closed when it cannot obtain a sufficiently fresh decision.
+
+```text
+identity token -> trusted claims -> retrieval predicate -> vector candidates
+                                                      -> live relationship check
+                                                      -> context assembly
+                                                      -> citation re-check
+```
+
+### Secure corpus ingestion
+
+Documents are hostile files before they become hostile prompts. Isolate PDF, office-document, image and archive parsers with no ambient cloud credentials, a read-only base image, bounded CPU/memory/time, restricted egress and a fresh output directory. Reject recursive archives, unexpected active content and parser outputs that exceed expansion limits.
+
+Every chunk should retain source identity, source version, authorization reference, parser version, ingestion time and content digest. Semantic anomaly detection may help triage poisoning, but provenance and approval are stronger controls than a classifier claiming text is benign.
+
+### Deletion and revocation evidence
+
+A defensible deletion workflow maintains a reverse index from source object to chunks, embeddings, caches, evaluation sets and downstream datasets. Deletion creates a durable job record, tombstones online entries immediately, rebuilds or compacts indexes where required, invalidates caches and performs negative retrieval tests.
+
+Do not claim mathematical proof that information disappeared from an approximate-nearest-neighbor index or an already trained model. Report what stores were addressed, which versions were rebuilt, which tests passed, what backups remain under retention rules and what residual uncertainty exists.
+
+### Staff/Principal interview drill
+
+**How would you secure a 50-million-chunk enterprise corpus with inherited ACLs that change continuously?** Separate embeddings from relationship state. Push stable tenant and classification filters into retrieval; evaluate dynamic relationships against a bounded-latency authorization service; cache only short-lived signed decisions; invalidate on access events; re-check before context assembly; and measure authorization staleness, filtered recall and revocation completion. Explain the availability tradeoff when the relationship service is unavailable and why global retrieval followed by pruning is not a sufficient boundary.

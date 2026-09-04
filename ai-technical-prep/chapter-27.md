@@ -123,7 +123,7 @@ Example permissions:
 
 Short-lived workload credentials should be bound to the actual runtime identity. If a job is rescheduled or its role is revoked, new credentials must stop being issued quickly. Long queues and cached tokens need explicit revocation behavior.
 
-In Kubernetes, a projected service-account token is a short-lived, audience-bound JWT mounted for a specific pod. AWS IRSA or EKS Pod Identity, Google Workload Identity Federation for GKE, and Azure Workload Identity map a verified Kubernetes identity to a cloud role or service identity. The mapping must bind the expected cluster, namespace, service account and audience; otherwise a different workload may exchange its token for the same authority.
+In Kubernetes, a projected service-account token is a short-lived, audience-bound JWT mounted for a specific pod. AWS IRSA uses an EKS OIDC issuer and IAM trust conditions that should constrain `sub` and `aud`; EKS Pod Identity instead uses EKS-managed pod-identity associations and a node agent to obtain credentials. Google Workload Identity Federation for GKE and Azure Workload Identity likewise map Kubernetes workload identity to cloud authority. Whatever mechanism is selected, bind the expected cluster, namespace and service account, and prevent an ordinary workload from selecting a privileged identity.
 
 ## 7. Container, cluster and GPU security
 
@@ -133,7 +133,7 @@ Use minimal images, non-root users, read-only filesystems where compatible, drop
 
 Separate sensitive workloads with namespaces, node pools or dedicated clusters according to risk. Network policy should default deny and then permit required flows. Protect the Kubernetes API because it controls workload creation, secrets and scheduling.
 
-GPUs introduce scarce capacity and specialized isolation concerns. Enforce quotas and scheduling policy. NVIDIA Multi-Instance GPU (MIG) partitions supported hardware into isolated GPU instances with dedicated portions of memory and compute. Multi-Process Service (MPS) improves concurrent process utilization but is not equivalent to a hostile-tenant boundary. Time-slicing mainly shares scheduling time and likewise should not be described as hardware isolation. Highly sensitive or hostile workloads may require dedicated accelerators or nodes. For untrusted code, consider stronger runtime isolation such as gVisor or Kata Containers, while verifying accelerator compatibility and performance. Clear device state and temporary storage between jobs using supported procedures, and test isolation rather than relying on product names.
+GPUs introduce scarce capacity and specialized isolation concerns. Enforce quotas and scheduling policy. NVIDIA Multi-Instance GPU (MIG) partitions supported hardware into isolated GPU instances with dedicated portions of memory and compute, but it is not physical air-gapping: host software, PCIe paths, memory-bandwidth pressure and surrounding node resources remain part of the threat and availability model. Multi-Process Service (MPS) improves concurrent process utilization but is not equivalent to a hostile-tenant boundary. Time-slicing mainly shares scheduling time and likewise should not be described as hardware isolation. Highly sensitive or hostile workloads may require dedicated accelerators or nodes. For untrusted code, consider stronger runtime isolation such as gVisor or Kata Containers, while verifying accelerator compatibility and performance. Clear device state and temporary storage between jobs using supported procedures, and test isolation rather than relying on product names.
 
 ## 8. Software and model supply chain
 
@@ -155,7 +155,7 @@ A signature proves that a key approved bytes; it does not prove the bytes are sa
 
 ## 9. Model artifact safety
 
-Python `pickle` can execute attacker-controlled code during deserialization, and legacy PyTorch `.pt` or `.bin` checkpoints may contain pickle object graphs. Treat downloaded models as untrusted software. Prefer tensor-only formats such as Safetensors when the ecosystem supports them. When a legacy PyTorch checkpoint is unavoidable, use a current supported PyTorch version and `torch.load(..., weights_only=True)` where compatible, but do not treat that option as a complete sandbox. Verify expected hashes and sizes, inspect metadata, and perform pre-admission loading in an isolated environment with no secrets, minimal filesystem access and restricted networking.
+Python `pickle` can execute attacker-controlled code during deserialization, and legacy PyTorch `.pt` or `.bin` checkpoints may contain pickle object graphs. Treat downloaded models as untrusted software. Prefer tensor-only formats such as Safetensors when the ecosystem supports them. When a legacy PyTorch checkpoint is unavoidable, use a current supported PyTorch version and `torch.load(..., weights_only=True)` where compatible. That option restricts which objects may be reconstructed but is not a process sandbox and does not eliminate parser, native-library or resource-exhaustion risk. Verify expected hashes and sizes, inspect metadata, and perform pre-admission loading or conversion in an isolated environment with no secrets, minimal filesystem access and restricted networking.
 
 Maintain an allowlist of models and licenses. Record source location, commit or version, digest, owner, intended use, training data summary, evaluations and known limitations. Mirror important external artifacts into controlled storage so future deployments do not depend on a mutable public reference.
 
@@ -178,7 +178,7 @@ A multi-tenant service handles data and workloads for multiple customers on shar
 - isolated temporary files and batch jobs;
 - logs that support investigation without exposing payloads.
 
-LLM serving engines may reuse key-value attention caches or prefix caches to improve performance. A cache match, cache handle or scheduler bug must not allow one tenant to reuse or infer another tenant's prompt state. Include tenant and policy context in cache partitioning, avoid cross-tenant reuse for sensitive workloads, clear state on lifecycle transitions and test the serving engine's isolation behavior. Where adequate isolation cannot be demonstrated, disable shared prefix caching or use separate serving pools.
+LLM serving engines may reuse key-value attention caches or prefix caches to improve performance. A cache match, cache handle or scheduler bug must not allow one tenant to reuse or infer another tenant's prompt state. Even without returning cached content, time-to-first-token differences may reveal whether a victim’s prefix or document was previously cached. Namespace cache state by tenant and security domain, avoid cross-tenant reuse for sensitive workloads, clear state on lifecycle transitions and test both content leakage and timing distinguishability. Where adequate isolation cannot be demonstrated, disable shared prefix caching or use separate serving pools.
 
 Never rely on a request field alone to establish tenant identity. Never share retrieval caches or conversation memory unless the key and access policy include the tenant. Test negative cases continuously: tenant A must not read, influence or exhaust tenant B.
 
@@ -197,7 +197,7 @@ A model release contains more than weights. It should bind:
 - immutable model digest;
 - serving image digest;
 - tokenizer and adapter versions;
-- prompt or policy configuration;
+- prompt, chat-template, generation and policy configuration;
 - evaluation results and approval;
 - expected resource limits;
 - rollback target;
@@ -238,9 +238,310 @@ A practical first baseline is:
 
 This baseline is a starting point, not a certification. Each system’s data sensitivity, tenant hostility, availability needs and regulatory obligations determine stronger controls.
 
+## 16. Sr. Staff playbook for reviewing an AI infrastructure design
+
+At Staff level, do not review an AI platform as a list of products. Review the lifecycle, authority and evidence connecting them. “We use Kubernetes, a private network and a model registry” is not a security argument. The design must show which identity performs each transition, what it can access, how artifacts are bound together and what happens during compromise or partial failure.
+
+### 16.1 Start with six inventories
+
+Build these inventories before evaluating controls:
+
+1. **AI assets:** datasets, features, embeddings, base models, adapters, prompts, tools, evaluation sets and release manifests.
+2. **Compute:** notebooks, build workers, training clusters, GPU node pools, model servers, batch workers and agent sandboxes.
+3. **Identities:** humans, CI jobs, Kubernetes service accounts, cloud roles, managed identities, model-serving identities and emergency administrators.
+4. **Data flows:** ingestion, transformations, training reads, checkpoint writes, registry promotion, deployment pulls, inference inputs, tool calls and telemetry.
+5. **External dependencies:** public model hubs, package registries, SaaS model APIs, vector databases, data vendors and plugins.
+6. **Evidence systems:** audit logs, lineage stores, bills of materials, attestations, evaluation results, approvals, runtime inventory and incident records.
+
+An inventory entry should answer owner, environment, sensitivity, tenant, immutable identifier, source, consumers, retention and deletion method. If the platform cannot locate every deployment of a model digest, it cannot respond reliably to a compromised artifact.
+
+### 16.2 Draw trust boundaries and privilege transitions
+
+Mark boundaries where any of these change:
+
+- human to workload identity;
+- one cloud account, project or subscription to another;
+- public or partner data to curated internal data;
+- development to production;
+- untrusted artifact to approved registry artifact;
+- tenant A to shared infrastructure to tenant B;
+- control plane to data plane;
+- model output to tool execution;
+- temporary elevated access back to ordinary operation.
+
+For every crossing, ask:
+
+```text
+Who initiates it?
+What proves identity?
+What exact authority is granted?
+What data or artifact crosses?
+What validates integrity and policy?
+What evidence is retained?
+How is access revoked?
+What happens if the next component is unavailable?
+```
+
+### 16.3 Review the lifecycle as state transitions
+
+Treat each asset as moving through controlled states:
+
+```text
+external -> quarantined -> validated -> curated -> approved for training
+candidate model -> evaluated -> approved -> deployed -> monitored -> retired
+```
+
+Transitions need explicit predicates. For example, a candidate model may become approved only when its digest is immutable, required evaluations pass, provenance exists, the license is accepted and an authorized reviewer records approval. A deployment controller should consume the approved release manifest rather than independently reconstructing which model and image seem current.
+
+### 16.4 Separate preventive, detective and recovery evidence
+
+For each security invariant, require all three kinds of control where risk warrants it:
+
+| Invariant | Preventive control | Detective evidence | Recovery proof |
+|---|---|---|---|
+| Only approved models deploy | admission policy verifies release manifest and digest | alert on unapproved digest or mutable tag | tested rollback to known-good bundle |
+| Training cannot exfiltrate data | restricted egress and narrow workload identity | DNS/proxy/object-access telemetry | revoke identity, isolate job and reconstruct accessed data |
+| Tenants remain isolated | scoped auth, cache partitioning and workload isolation | synthetic cross-tenant tests and access-denial logs | flush affected state and move tenant to isolated pool |
+| Security evidence survives compromise | write-only export to separate security boundary | missing-log and configuration-change alerts | restore trustworthy logging and preserve incident timeline |
+
+Designs often present preventive controls only. A Staff review should ask how the team will detect control failure and recover under pressure.
+
+## 17. Publicly documented risk frameworks and how to use them
+
+Frameworks help organize questions; they do not replace a system-specific threat model.
+
+### NIST AI RMF and Generative AI Profile
+
+The NIST AI Risk Management Framework organizes work into **Govern, Map, Measure and Manage**. The Generative AI Profile, NIST AI 600-1, adds risks such as confabulation, data privacy, information integrity, harmful bias, human-AI configuration and value-chain/component integration.
+
+For infrastructure review:
+
+- **Govern:** define owners, acceptable use, release authority, incident roles and third-party requirements.
+- **Map:** identify users, affected parties, data sources, deployment context and credible misuse.
+- **Measure:** run security, privacy, safety, quality and operational evaluations with documented limitations.
+- **Manage:** decide whether to mitigate, transfer, avoid or accept risk; monitor production and revisit decisions.
+
+Do not turn the framework into a checkbox. Link each risk decision to an enforceable control, measurable signal and accountable owner.
+
+### MITRE ATLAS
+
+MITRE ATLAS describes adversary tactics and techniques against AI-enabled systems, including reconnaissance, resource development, initial access, model access, data poisoning, evasion, exfiltration and impact. Use it to check whether a threat model covers realistic attacker sequences.
+
+For example:
+
+```text
+compromised dependency
+  -> execution in training job
+  -> workload credential theft
+  -> dataset discovery
+  -> model/checkpoint exfiltration
+  -> persistence through modified artifact
+```
+
+The value is the chain. A control that scans the final model does not address stolen workload credentials or tampered training code earlier in the sequence.
+
+### Kubernetes security guidance
+
+Kubernetes guidance emphasizes API-server protection, least-privilege RBAC, pod security, network isolation, secrets protection, image provenance, audit logs and safe node configuration. For AI platforms, add accelerator scheduling, operator/controller privileges, notebook risk and artifact loading.
+
+### SLSA and Sigstore
+
+SLSA provides a model for build provenance and increasing resistance to tampering. Sigstore tooling can sign artifacts and record signing events. Use them to answer how an artifact was built and approved. They do not prove the source, training data or model behavior is safe. Policy must connect provenance with vulnerability, license, evaluation and risk decisions.
+
+## 18. Real-world AI infrastructure failure patterns
+
+The following reconstructed cases combine publicly documented attack techniques and common production architectures. They are engineering exercises, not claims about a specific unnamed company.
+
+### Case 1: Malicious model checkpoint executes code
+
+**Scenario:** A data scientist downloads a community `.pt` checkpoint. A training notebook calls a legacy deserializer. The file contains a malicious pickle reducer that executes code, reads the notebook’s cloud credentials and uploads accessible data.
+
+**Why ordinary controls fail:** The file passed antivirus scanning, the bucket was encrypted and the notebook user was authenticated. None of those controls made deserialization safe or restricted the job’s data and network authority.
+
+**Review findings:**
+
+- untrusted artifact entered a privileged training environment;
+- unsafe format was not blocked before loading;
+- the job had broad dataset access;
+- outbound traffic was unrestricted;
+- no alert joined model-load activity with credential and network use.
+
+**Required controls:** tensor-only formats where possible, digest allowlists, isolated pre-admission inspection, current framework safety options, narrow per-job identity, restricted egress, immutable provenance and detection for unusual object reads or outbound destinations.
+
+**Acceptance test:** a known malicious fixture cannot execute, cannot reach credentials or the network, and produces a blocked-admission event tied to the artifact digest.
+
+### Case 2: Signed container loads an unsigned mutable model
+
+**Scenario:** Kubernetes admission verifies the serving container’s Cosign signature. At startup, the container downloads `models/customer-risk:latest` from object storage. An authorized but compromised registry account replaces that mutable object after evaluation.
+
+**Failure:** container provenance is intact, but the deployed model is not bound to the evaluated digest. “Signed image” was incorrectly treated as “signed release.”
+
+**Required design:** a release manifest binds container digest, model digest, tokenizer, adapter, policy configuration and evaluation result. Admission verifies the manifest, and runtime download accepts only the bound digest. Mutable names may aid discovery but never establish deployment identity.
+
+### Case 3: Training job steals cloud authority
+
+**Scenario:** A notebook or dependency is compromised. The pod can reach a metadata endpoint or uses an overbroad service account. The attacker obtains temporary credentials, enumerates object storage and downloads unrelated training data and model weights.
+
+**Review questions:**
+
+- Does every notebook share one service account?
+- Is the token audience limited and short lived?
+- Can the pod query instance metadata?
+- Which storage paths and KMS keys are authorized?
+- Is arbitrary internet egress allowed?
+- Can an ordinary user create a pod with a more privileged service account?
+
+**Required controls:** per-workload identity, least-privilege storage/key policy, admission restrictions on service-account selection, private endpoints, egress allowlists and credential-use detection. On AWS nodes, require IMDSv2, disable IMDSv1 and select/test a response hop limit appropriate to the actual pod networking model; on other platforms use their metadata concealment or firewall controls. Treat these as defense-in-depth because host-network workloads, node agents and platform networking can change the boundary.
+
+### Case 4: Cross-tenant prefix-cache exposure
+
+**Scenario:** An inference platform enables automatic prefix caching across requests to improve throughput. Cache identity is based on prompt tokens but omits tenant and policy context. A second tenant receives reused state or can infer another tenant’s prompt prefix through behavior or timing.
+
+**Review finding:** the performance cache became a cross-tenant data plane without an explicit isolation contract.
+
+**Required controls:** partition cache-tree nodes and keys by tenant and security-domain context, avoid shared caching for sensitive workloads, clear state on model or policy transitions, review serving-engine guarantees and run controlled tenant A/B content and time-to-first-token tests. Use separate serving pools when the technology cannot provide sufficient assurance.
+
+### Case 5: GPU denial of wallet and noisy neighbor
+
+**Scenario:** A tenant submits many maximum-context streaming requests. HTTP request limits are satisfied, but every request occupies GPU memory and generation slots for a long time. Other tenants experience timeouts and cost increases.
+
+**Required controls:** tokens-per-minute, active-sequence and GPU-time budgets; maximum context and output size; per-tenant queues; fair scheduling; cancellation propagation; global overload shedding; and budgets tied to business priority. Measure resource use after tokenization and during generation, not only at the gateway.
+
+### Case 6: Revoked user authority survives in queues
+
+**Scenario:** A user submits an agent or training job while authorized. Their access is revoked, but the queued job begins ten minutes later using a powerful worker identity and stale embedded tenant context.
+
+**Design question:** Is authorization checked only at submission, or again before every delayed sensitive action?
+
+**Required controls:** record actor, tenant, approved action and policy version; re-evaluate current authorization at execution for high-risk operations; use bounded delegation tokens; support queue cancellation; and define maximum revocation propagation time. Durable workload identity should authenticate the worker, while delegated authority constrains what it may do for the user.
+
+### Case 7: Poisoned retrieval corpus changes agent behavior
+
+**Scenario:** A document from an external source enters a RAG corpus. It contains hidden instructions directing the model to reveal secrets or call a tool. The ingestion pipeline validates file type but not source authority, ownership or downstream behavioral risk.
+
+**Required controls:** source authentication, quarantine, tenant ownership, malware/parser safety, provenance, content-risk processing, retrieval authorization and deterministic tool authorization. Do not attempt to “sanitize away” every instruction; retrieved content remains untrusted at inference time.
+
+### Case 8: Debug observability becomes a data breach
+
+**Scenario:** To troubleshoot quality, engineers enable full prompt and response logging. Logs include health information, credentials pasted by users, retrieved documents and hidden system instructions. A broad analytics role and long retention turn the observability platform into a sensitive shadow database.
+
+**Required controls:** data classification before logging, default metadata-only telemetry, redaction, short retention, restricted payload sampling, explicit debugging approval, separate access roles and auditing of log queries and exports.
+
+### Case 9: Rollback restores incompatible components
+
+**Scenario:** A new model behaves badly. Operations rolls back the weight file but leaves the new tokenizer, adapter and prompt policy. Error rates continue because the release was not treated as one compatible bundle.
+
+**Required controls:** immutable release manifests binding weights, image, tokenizer, adapters, chat template, generation configuration and policy; compatibility validation; atomic or ordered rollout; canary stop criteria; and rehearsed bundle rollback. Measure rollback time as an operational security objective.
+
+## 19. Evidence expected in an AI platform design review
+
+A high-quality review packet contains more than architecture slides:
+
+| Area | Minimum evidence |
+|---|---|
+| Asset inventory | model/data IDs, owners, sensitivity, environments and active deployments |
+| Identity | human and workload role matrix, token flows, trust policies and break-glass process |
+| Network | ingress/egress diagram, private endpoints, gateway/origin restrictions and DNS ownership |
+| Data | source approvals, lineage, retention, deletion, tenant boundaries and backup handling |
+| Supply chain | pinned dependencies, SBOM, build provenance, signatures and admission policy tests |
+| Model release | immutable manifest, evaluations, approval, canary and rollback target |
+| Runtime | pod/container policy, GPU isolation, quotas, secrets and cache isolation |
+| Monitoring | audit schema, redaction, detections, SLOs and evidence retention |
+| Incident response | containment commands, artifact inventory query, evidence preservation and recovery exercise |
+
+Ask for machine-verifiable evidence when possible: policy tests, admission denials, cloud inventory queries, signed manifests, negative tenant-isolation tests and recovery records. Screenshots can support a review but are weak as the only evidence because they are point-in-time and difficult to reproduce.
+
+## 20. Risk prioritization for AI infrastructure
+
+Prioritize using business impact and credible attack paths, not novelty.
+
+**Critical or urgent examples:**
+
+- unauthenticated public model or data administration;
+- cross-tenant prompt, data or model leakage;
+- arbitrary code execution when loading externally sourced artifacts in privileged jobs;
+- production signing or deployment authority exposed to ordinary workloads;
+- destructive control-plane access without recoverable backups;
+- secrets or regulated data routinely stored in broadly accessible logs.
+
+**High examples:**
+
+- training workloads with broad data access and unrestricted egress;
+- unsigned or mutable production release artifacts;
+- production notebooks with shared privileged identity;
+- inability to identify deployments affected by a compromised model or dependency;
+- authorization revocation that does not reach queued agents or jobs within the required time.
+
+**Medium or lower examples depend on context:**
+
+- missing defense-in-depth headers on non-browser JSON endpoints;
+- absent optional provenance fields when deployment is still bound to reviewed immutable digests;
+- shared GPU scheduling where tenants are equally trusted and data is nonsensitive;
+- operational hardening gaps without a credible path to sensitive assets.
+
+Document confidence separately. A severe scenario with missing evidence is an urgent validation task, not automatically a confirmed critical vulnerability.
+
+## 21. Giving actionable feedback to platform and ML teams
+
+Use this structure:
+
+```text
+Invariant:
+Only evaluated release bundles may run in production.
+
+Observed design/evidence:
+Admission verifies the container signature, but the container downloads a model
+through a mutable alias. No control binds the evaluated model digest to runtime.
+
+Attack path:
+Registry credential compromise or authorized post-evaluation replacement causes
+production to load unreviewed weights while the signed container remains valid.
+
+Business impact:
+Unreviewed behavior, code-execution risk for unsafe formats, integrity loss and
+inability to prove which model served regulated decisions.
+
+Requested change:
+Create an immutable release manifest binding all component digests and require
+deployment plus runtime loaders to verify it.
+
+Acceptance evidence:
+An attempted mutable or mismatched model is rejected; the running deployment
+reports the approved digest; rollback restores the complete prior bundle.
+
+Owner and deadline:
+Model platform owns registry/loader policy; application owner validates behavior;
+security validates the negative test and evidence pipeline.
+```
+
+Avoid feedback such as “use zero trust,” “add monitoring,” or “secure Kubernetes.” State the invariant, attack path, control owner, expected evidence and tradeoff. When the evidence is incomplete, request the smallest experiment that resolves uncertainty.
+
+## 22. AI infrastructure review checklist
+
+Before approving a design, verify:
+
+1. Every sensitive dataset, model and deployment has an owner and immutable identifier.
+2. Human and workload identities are distinct, short lived and least privileged.
+3. Training, evaluation, deployment and inference use separate authority.
+4. Untrusted code, data and models enter quarantine before privileged processing.
+5. Production releases bind model, image, tokenizer, adapter, policy and evaluation evidence.
+6. Registry and deployment policy reject unapproved or mutable artifacts.
+7. Tenant identity is enforced in data queries, caches, queues and serving state.
+8. GPU and downstream capacity have per-tenant and global protection.
+9. Outbound connectivity is restricted according to workload purpose.
+10. Prompts, responses and training data are not copied indiscriminately into logs.
+11. Revocation reaches running and queued work within a defined objective.
+12. Security evidence is exported outside the production blast radius.
+13. Incidents can identify affected artifacts, tenants and deployments quickly.
+14. Rollback restores a complete compatible release bundle.
+15. Retirement removes endpoints, credentials, replicas and retained data according to policy.
+
 ## Practical exercise
 
-Choose a simple RAG application. Draw its path from document upload through chunking, embedding, vector storage, retrieval, prompt construction and inference. For every component, record its identity, data access, network access, artifact version, log fields and failure containment. Then trace three attacks: a poisoned document, a stolen training identity and a cross-tenant cache key. State which control prevents, detects and recovers from each one.
+Complete both exercises:
+
+1. Choose a simple RAG application. Draw its path from document upload through chunking, embedding, vector storage, retrieval, prompt construction and inference. For every component, record its identity, data access, network access, artifact version, log fields and failure containment. Trace a poisoned document, stolen training identity and cross-tenant cache key. State which control prevents, detects and recovers from each one.
+2. Conduct a design review using the evidence table in Section 19. Select one lifecycle invariant and write a full finding using the Section 21 template. Then create a negative acceptance test and a rollback or containment exercise that would prove the remediation works.
 
 ## Interview preparation
 
@@ -260,6 +561,22 @@ Choose a simple RAG application. Draw its path from document upload through chun
 
 **Model answer:** I stop promotion and loading, identify every copy and deployment by digest, isolate affected workloads, preserve the artifact and logs, revoke any exposed credentials, rebuild from a trusted data-only format or source, and add format allowlisting and isolated pre-admission validation. I also inspect whether the loader executed code and whether persistence or exfiltration occurred.
 
+### Q5: A container image is signed. Does that prove the deployed AI service is trustworthy?
+
+**Model answer:** No. The signature identifies approved image bytes, but the runtime may load a mutable model, adapter, tokenizer or policy configuration afterward. I require an immutable release manifest binding every behavior-affecting component and its evaluation evidence, then verify that admission and runtime loading use those exact digests.
+
+### Q6: How do you review a training job that needs broad data access?
+
+**Model answer:** I challenge whether broad access is actually necessary, separate datasets by purpose, use a unique short-lived workload identity, scope storage and KMS permissions, restrict egress, use an approved immutable image, isolate temporary storage and record lineage. I also require detection for unusual data reads and a response procedure that can determine what the job accessed.
+
+### Q7: What is the difference between workload authentication and delegated user authority?
+
+**Model answer:** Workload authentication proves which service or job is running. Delegated authority constrains what that workload may do for a specific user or tenant. A queued worker may have a valid machine identity but still need to revalidate whether the user’s requested action remains authorized when execution begins.
+
+### Q8: How do you prioritize AI infrastructure findings?
+
+**Model answer:** I prioritize credible attack paths to sensitive data, cross-tenant impact, production control, artifact integrity and recovery failure. I separate severity from confidence, avoid inflating novel but weakly evidenced issues, and define a verification test. Cross-tenant leakage or untrusted-code execution in a privileged training job outranks a generic hardening gap without a path to protected assets.
+
 ## Chapter summary
 
 AI infrastructure security is lifecycle security. Protect the identities, data, code, models, clusters and evidence that connect ingestion to inference. Separate duties, bind releases to immutable artifacts, isolate tenants and expensive resources, limit credentials and egress, observe meaningful decisions and practice containment and recovery. The specialized chapters in this book provide the deeper implementation detail for each part of this map.
@@ -272,3 +589,8 @@ AI infrastructure security is lifecycle security. Protect the identities, data, 
 - Chapter 19 for incident response.
 - Chapter 21 for secure data pipelines.
 - Chapters 8 through 13 for agent, RAG, guardrail, evaluation and model-layer threats.
+- NIST AI 600-1, Generative Artificial Intelligence Profile: `https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf`.
+- MITRE ATLAS: `https://atlas.mitre.org/`.
+- Kubernetes security concepts: `https://kubernetes.io/docs/concepts/security/`.
+- SLSA specification: `https://slsa.dev/spec/v1.0/`.
+- Sigstore documentation: `https://docs.sigstore.dev/`.

@@ -743,3 +743,38 @@ The following technical guides, database specs, and privacy frameworks provide t
     *   *Verification Status:* Verified (gdpr-info.eu).
 5.  **Apache Spark Security and Encryption Specifications:** Upstream manuals on securing distributed memory pools, network CNI paths, and metadata.
     *   *Verification Status:* Verified (spark.apache.org).
+
+## Edition 4.6 Addendum: Data Contracts, Lineage and Verifiable Erasure Workflows
+
+Secure pipelines need two related but distinct records: a **data contract** defines what may flow, while **lineage** records what actually flowed. A schema registry alone provides neither purpose limitation nor complete provenance.
+
+### A security-aware data contract
+
+For each field, record type and nullability, semantic meaning, sensitivity, tenant ownership, permitted purposes, retention class, allowed consumers, quality bounds and transformation rules. Contract changes require impact analysis even when technically backward compatible: adding an optional location field can create a new privacy purpose and a new attack surface.
+
+Enforce contracts at ingress and at trust-boundary crossings. Invalid data should enter a tenant-scoped quarantine with bounded retention, not a shared “bad records” bucket that becomes a sensitive-data lake.
+
+### Lineage as a graph of immutable versions
+
+Represent datasets, transformations, code revisions, jobs and models as versioned nodes connected by typed edges. Content digests detect accidental or malicious substitution, while signatures bind manifests to an accountable workload identity. A digest is not proof that the data was lawful or accurate; approvals and source records carry those claims.
+
+The useful query is operational: “Which production models, vector indexes, features, caches and evaluation sets depend on source object X or pipeline version Y?” If the lineage store cannot answer that query quickly, incident containment and deletion will become manual archaeology.
+
+### Deletion propagation
+
+Use a durable workflow with explicit states:
+
+```text
+REQUESTED -> SCOPED -> TOMBSTONED -> DERIVATIVES_PROCESSED
+          -> VALIDATED -> CLOSED_WITH_RESIDUALS
+```
+
+The scope step resolves legal and retention exceptions. Tombstoning stops new use. Derivative processors delete, rebuild or restrict affected tables, features, vector chunks and caches. Validation performs negative queries and checks that old snapshots cannot silently repopulate deleted data. Closure records backups, trained artifacts and other residuals that cannot be truthfully described as erased.
+
+### Preventing training/serving skew
+
+Package validated transformations as versioned artifacts used by both training and serving where practical. Record schema and feature versions in the model manifest. Promotion tests should replay representative production records through both paths and compare types, missing-value handling, normalization and categorical mappings. Runtime monitoring should detect contract violations and distribution changes without exporting unnecessary raw data.
+
+### Staff/Principal interview drill
+
+**A privacy request covers data already used in a fine-tuned model. What do you promise?** Promise only actions supported by lineage: stop future use, remove reachable source and derivatives, invalidate indexes and caches, and identify every model or adapter trained from the affected version. Explain that source deletion does not prove removal of influence from existing weights. Choose retraining, adapter replacement, validated unlearning or compensating controls based on sensitivity and obligation, then produce a closure record listing completed actions, exceptions and residual uncertainty.

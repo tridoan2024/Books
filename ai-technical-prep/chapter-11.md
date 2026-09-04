@@ -977,3 +977,54 @@ The following authoritative specifications, standard frameworks, and academic pa
     *   *Verification Status:* Verified (Available at github.com/Trusted-AI/adversarial-robustness-toolbox).
 5.  **ISO/IEC 42001: Information Technology — Artificial Intelligence — Management System:** Hard standards on establishing model lineage, provenance ledgers, and governance release gates.
     *   *Verification Status:* Verified (iso.org).
+
+## Edition 4.6 Addendum: Statistical Release Decisions for Non-Deterministic Systems
+
+A safety score is not a release decision. Staff-level evaluation connects a claim, a sampled population, an uncertainty bound and an operational action. Before running a benchmark, write the decision contract:
+
+```yaml
+claim: "The candidate does not materially increase successful secret disclosure"
+population: "English coding-agent sessions using private repositories"
+comparison: "candidate_42 versus production_41"
+primary_metric: "successful disclosures / attempted attacks"
+alpha: 0.01
+minimum_effect_of_interest: 0.005
+segments: [tenant_tier, tool_enabled, repository_language]
+decision: "block promotion when the upper risk bound exceeds the budget"
+```
+
+### Confidence bounds, not point estimates
+
+If an evaluation observes zero failures, the true failure probability is not zero. The approximate 95% upper bound is `3/n`, so zero failures in 100 trials supports only an upper bound near 3%. Demonstrating a rate below 1% requires roughly 300 independent, representative trials with zero failures. Templated variants of one prompt do not create independent scenarios.
+
+For nonzero counts, report a binomial interval such as Wilson or an exact interval rather than `failures / n` alone. Preserve the numerator, denominator, sampling method and excluded runs so reviewers can reproduce the claim.
+
+### Paired comparisons and regression gates
+
+Run the candidate and baseline on the same randomized cases when possible. Paired evaluation reduces variance caused by scenario difficulty. Define three outcomes before seeing results:
+
+- **Promote:** the candidate meets the absolute risk budget and is not materially worse than baseline.
+- **Reject:** the candidate exceeds the budget or a catastrophic invariant fails once.
+- **Inconclusive:** the interval crosses the decision boundary; gather more representative evidence.
+
+Never convert “inconclusive” into “pass” because a launch date is near.
+
+### Sequential canary evaluation
+
+A canary is a continuing experiment, not merely a smaller deployment. Sequential methods such as Wald's sequential probability ratio test can stop early for a clear regression, but hypotheses and error budgets must be fixed in advance. Repeatedly checking an ordinary p-value and stopping when it looks favorable inflates false-positive risk.
+
+Operational gates should combine security outcome bounds, latency and availability budgets, segment-level regressions, telemetry completeness, policy-version consistency and an independent rollback signal that does not depend on the candidate model.
+
+### Calibrating LLM judges
+
+An LLM judge is a measurement instrument with its own attack surface. Maintain a blinded human-labelled calibration set and measure agreement by class, not only overall accuracy. Cohen's kappa fits two raters; Fleiss' kappa generalizes to multiple fixed-category raters; Krippendorff's alpha supports missing observations and different measurement scales.
+
+Test position swapping, verbosity changes, paraphrases and adversarial text that tells the judge how to score. Do not let untrusted candidate output become higher-priority judge instructions. Use structured delimiters, minimal judge authority and deterministic parsing, then route disagreement and high-impact decisions to human review.
+
+### Contamination-resistant evaluation operations
+
+Version private holdouts separately from public benchmarks. Restrict access, record every exposure, rotate compromised cases and generate parameterized variants from threat models rather than superficial paraphrases. Canary strings can reveal direct dataset leakage, but their absence does not prove the benchmark was unseen.
+
+### Staff/Principal interview drill
+
+**A team reports 99% safety on 100 prompts. Do you approve release?** No decision is possible from that headline. Ask for the failure count, interval, sampling frame, threat coverage, baseline comparison, judge calibration and segment results. One failure in 100 may be unacceptable for a catastrophic action; zero failures still leaves a wide upper bound. Define the risk budget, run paired representative tests, treat invariant violations separately from average quality, and use a staged canary with predetermined stop and rollback rules.

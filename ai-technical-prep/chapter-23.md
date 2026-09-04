@@ -755,3 +755,51 @@ The following technical guides, database specs, and privacy frameworks provide t
     *   *Verification Status:* Verified (aicpa.org).
 5.  **Kubernetes Pod Security Standards (PSS) Manuals:** Specifications on configuring secure Pod Security Contexts and non-root enclaves.
     *   *Verification Status:* Verified (kubernetes.io).
+
+## Edition 4.6 Addendum: Executable Governance and Evidence-Bound Exceptions
+
+Governance becomes engineering when a decision changes what can be built, promoted or executed. The architecture has four layers: a system inventory, machine-readable evidence, policy evaluation and accountable exception handling.
+
+### Convert obligations into testable claims
+
+Framework mappings are navigation aids, not controls. Begin with a concrete claim such as “high-impact models cannot reach production without an approved evaluation bound and named owner.” Identify the enforcement point, evidence source, failure behavior and control owner. Then map that implementation to NIST AI RMF, ISO/IEC 42001, ISO 27001, SOC 2 or applicable regulation.
+
+Avoid claiming that one technical check “complies with” an entire framework or law. Many obligations require organizational process, legal interpretation, human oversight and operating evidence over time.
+
+### Policy as code
+
+Use policy engines at the boundary where facts are available: CI for source and manifests, registry promotion for artifacts, admission control for workloads and runtime authorization for tools. A simplified decision input might contain:
+
+```json
+{
+  "system_id": "claims-assistant",
+  "risk_tier": "high",
+  "model_digest": "sha256:...",
+  "evaluation_id": "eval-8842",
+  "owner": "team-ai-platform",
+  "exception": null,
+  "target": "production"
+}
+```
+
+The policy result should include stable reason codes and required evidence, not only `allow: false`. Version policy and input schemas together, test policies with positive and negative fixtures, and prevent a deployment path that bypasses the evaluator.
+
+### Evidence packages and system cards
+
+A machine-readable evidence package should bind system purpose, owner, risk tier, model and dataset references, intended and prohibited uses, evaluation results, known limitations, control versions, approvals and deployment targets. CycloneDX can represent machine-learning components and dependencies; in-toto/SLSA-style attestations can bind build provenance. Neither format replaces the human-facing explanation of residual risk.
+
+Sign the package or its canonical digest with a workload identity and retain it immutably according to policy. Verification must check signer identity, artifact digests and schema—not simply signature validity.
+
+### Expiring exceptions
+
+Risk acceptance is a temporary, scoped capability. An exception record needs owner, approver, exact policy violations, affected tenants or environments, compensating controls, monitoring, expiry and revocation triggers. The deployment gate validates the exception's signature and scope on every promotion. Expiration should automatically block the next deployment and, for intolerable risks, trigger runtime restriction through a separately reviewed process.
+
+Do not encode a broad permanent bypass such as `security_exception=true`. Exceptions must not be transferable between artifacts or environments.
+
+### Continuous control evidence
+
+Monitor evidence collectors themselves. Record expected sources, freshness budgets, last successful collection and gaps. A green dashboard built from stale or incomplete collectors is false assurance. Sample underlying systems periodically and reconcile inventory against cloud accounts, clusters, registries and model endpoints.
+
+### Staff/Principal interview drill
+
+**How do you support frequent model releases while satisfying multiple governance regimes?** Build one evidence-producing engineering workflow, then map its claims to frameworks. Inventory every deployable system, bind evaluation and provenance to immutable digests, enforce risk-tier policy at promotion and admission, and use signed expiring exceptions. Keep human review for ambiguous impact and residual-risk decisions. Measure evidence freshness, bypass paths, exception age and time to remediate—not the number of forms completed.

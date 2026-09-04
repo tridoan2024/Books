@@ -747,3 +747,43 @@ The following authoritative guides, API standards, and telemetry specifications 
     *   *Verification Status:* Verified (redis.io).
 5.  **MITRE ATLAS Matrix for AI Abuse Patterns:** Framework mapping documented adversary tactics, techniques, and procedures against generative AI platforms.
     *   *Verification Status:* Verified (atlas.mitre.org).
+
+## Edition 4.6 Addendum: Traceable AI Telemetry and Closed-Loop Abuse Response
+
+AI observability must reconstruct a decision without turning the telemetry system into a second copy of every customer's secrets. Begin with a trace graph, not a log statement:
+
+```text
+request -> identity -> policy decision -> retrieval -> model generation
+        -> tool authorization -> tool execution -> output decision -> response
+```
+
+Each node needs a stable identifier, start/end time, tenant boundary, artifact version and outcome. OpenTelemetry's generative-AI semantic conventions are useful, but implementations must pin the convention version because parts of the GenAI schema may evolve. Prefer standard fields when available and place product-specific attributes under a controlled namespace.
+
+### A minimum useful event model
+
+Capture trace and request IDs; tenant and workload identity; model and prompt-template versions; policy bundle and decision IDs; retrieval corpus version and document identifiers; tool name, authorization result and side-effect class; token counts, latency and termination reason; and error category. Avoid raw prompts, retrieved passages and tool outputs on the normal path.
+
+Bound label cardinality. User text, URLs, document IDs and exception messages do not belong in metric labels. Attackers can otherwise create unbounded series and exhaust the monitoring backend.
+
+### Split operational and forensic data paths
+
+- **Operational path:** derived features, counters, reason codes and identifiers needed for dashboards, alerting and rapid containment. Retention is short and access broad enough for on-call response.
+- **Forensic path:** selectively captured sensitive payloads, envelope-encrypted with per-case data keys, strict purpose-based access, approval, audit and deletion schedules.
+
+The forensic path should be off by default or triggered by an explicit policy. Dual control may be appropriate for highly sensitive content, but it does not replace legal purpose, minimization or retention limits.
+
+### Detect campaigns, not magic thresholds
+
+A cosine-similarity threshold is not a model-extraction detector. Build features across time and identities: coverage of the input space, repeated boundary probing, unusually systematic sampling parameters, response-volume economics, account creation patterns and correlation across device, payment and network signals. Establish per-product and per-tenant baselines, then validate detectors with replay and controlled attack campaigns.
+
+Measure precision, recall, time to detection, containment success and customer impact. Also monitor telemetry completeness: a detector cannot distinguish normal behavior from an instrumentation outage unless missing spans and delayed partitions are first-class health signals.
+
+### Closed-loop containment
+
+Automated actions should be reversible and scoped: reduce token or concurrency budgets, disable a risky tool, require stronger verification, revoke one session or route traffic to a safer model. Broad tenant suspension or destructive action requires corroboration and incident ownership.
+
+Every response event should record the evidence window, rule/model versions, action, expiry and rollback owner. Design idempotent enforcement and TTLs so a failed recovery process does not create permanent accidental denial.
+
+### Staff/Principal interview drill
+
+**Design telemetry for an autonomous coding agent without centralizing source code.** Emit structured spans for identity, policy, repository reference, retrieval, tool calls and outcomes; keep content out of the operational stream; use local feature extraction and selective encrypted forensic capture; propagate trace context across queues and sandboxes; and prove telemetry health with expected-span and ingestion-lag checks. Explain cardinality defense, tenant access controls, incident-time evidence access and how containment reaches an already running tool session.
