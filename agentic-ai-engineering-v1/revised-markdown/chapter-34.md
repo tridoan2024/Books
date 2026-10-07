@@ -1,0 +1,341 @@
+# Chapter 34: Case Study — The Coding Loop
+
+> **Reading note:** Named scenarios and numerical examples in this chapter are illustrative, not documented incidents or measured benchmarks. Code is a design sketch, not a tested implementation; `LoopKit` names describe the book’s illustrative API, not an established SDK. Provider behavior and prices require version-specific confirmation.
+
+> "The model is a commodity; the harness is the product."
+
+## The PR That Burned Twelve Hours
+
+Priya leads platform engineering at a mid-size logistics company with forty backend services written in Python and TypeScript. On a Tuesday morning, Dependabot opens a pull request upgrading their shared authentication library from version 2.3 to 3.0. The migration guide lists four specific breaking changes: a renamed module, a changed function signature, a removed convenience method, and a new required parameter on the token-validation call. Priya estimates roughly an hour of work — update call sites across three services, fix type signatures, run the test suite, merge.
+
+She assigns it to their coding agent, a loop built around a frontier model with access to file-read, file-edit, and shell-execution tools. The agent reads the migration guide, identifies the affected files across all three services, and begins making changes. Within ten minutes it has updated the renamed imports and fixed two of the four call sites. Then it runs the test suite. Fourteen tests fail. The agent reads the error messages, identifies that the new required parameter is missing from its edits, and fixes three of the four remaining call sites. Tests again: three still fail, all in the integration test module.
+
+Here is where the loop enters its death spiral. The integration tests hit a shared staging database, and the agent's fix for the token-validation call introduced a connection pool leak. The new library version requires explicit connection lifecycle management that the old version handled internally. Each test run opens connections that never close. By the fifth test run, the pool is exhausted and tests timeout. The agent sees timeout errors and interprets them as slow tests. It adds timeout extensions. Tests still fail. It refactors the test setup to use fresh connections — but the leak is in the application code, not the test code. It adjusts the application code, introducing a different leak variant. Three hours and forty-seven iterations later, the run hits its budget ceiling. Fourteen dollars spent. Zero value delivered.
+
+Priya kills the run and spends ninety minutes finishing manually. That evening she adds one line to the oracle: an assertion that checks the connection pool count before and after each integration test. The count must not increase. The next Dependabot upgrade completes in four iterations, eight minutes, and thirty-eight cents. The difference was not the model — the model was identical. The difference was the oracle. The oracle lacked a discriminating check for the specific failure class, so the loop could not diagnose its own defect.
+
+This chapter tears down the coding loop to show where harness design creates or destroys value. The model matters far less than practitioners expect. The oracle, the context curation, the tool affordances, the retry strategy, and the state management together determine whether the loop converges on correct code or spirals into expensive failure.
+
+## The Loop Contract for a Coding Agent
+
+Every coding loop instantiates the five-field Loop Contract defined in Chapter 3 (*Anatomy of a Loop*). For a production coding agent handling PR-sized tasks, the contract looks like this:
+
+```python
+
+from loopkit.contract import LoopContract, Goal, Budget, StopCondition, EscalationPolicy
+from loopkit.oracles import DeterministicOracle
+
+coding_contract = LoopContract(
+    goal=Goal(
+        statement="Apply the auth library 3.0 migration: update all call sites, "
+                  "fix type signatures, ensure all tests pass.",
+        acceptance=(
+            "Zero type errors from pyright",
+            "All existing tests pass with no regressions",
+            "No new lint warnings from ruff",
+            "Connection pool count stable across integration tests",
+        ),
+    ),
+    oracle=DeterministicOracle(checks=[
+        ("syntax", "python -m py_compile {file}"),
+        ("lint", "ruff check {file}"),
+        ("types", "pyright {file}"),
+        ("unit", "pytest tests/unit/ -x --tb=short"),
+        ("integration", "pytest tests/integration/ -x --tb=short"),
+        ("resource", "assert_connection_count_stable"),
+    ]),
+    budget=Budget(
+        max_iterations=15,
+        max_tokens=800_000,
+        max_usd=2.00,
+        max_wall_clock_s=600,
+    ),
+    stop=StopCondition(
+        success="All acceptance criteria pass on full test suite",
+        exhaustion="Commit partial progress to branch, open draft PR with notes",
+        stuck="Same error class three consecutive iterations",
+    ),
+    escalation=EscalationPolicy(
+        on_stuck="Surface error context to engineer with diff of last three attempts",
+        on_budget="Commit partial progress, open draft PR, assign to human",
+        on_ambiguity="Ask engineer before proceeding with destructive changes",
+    ),
+)
+```
+
+Every field is independently testable. You can verify the oracle catches real bugs by feeding it known-defective code. You can verify the budget by running on historical PRs and checking whether costs land within bounds. You can verify escalation by simulating a stuck state and confirming the right human gets paged. This testability is what separates a production loop from a demo that works on the happy path. A contract that cannot be tested is a contract that will fail silently in production.
+
+The contract's most underrated field is the stop condition. Without stuck detection — recognising that the same error class has appeared three times in a row — the loop will iterate until budget exhaustion on problems it cannot solve. Priya's original loop had no stuck detection. It interpreted each new variant of the timeout error as a novel problem requiring a novel fix. Stuck detection would have halted at iteration nine and escalated, saving thirty-eight iterations of wasted compute and fourteen dollars of API spend.
+
+## The Oracle Hierarchy Applied to Code
+
+Code is the ideal domain for the oracle hierarchy from Chapter 20 (*The Hierarchy of Oracles*) because software already provides machine-checkable quality signals at every level. No other creative domain offers this density of verifiable checkpoints. A prose loop has no equivalent of a type checker; a design loop has no equivalent of a test suite. Code does, and that density of feedback is why coding loops are the most mature agentic pattern in production.
+
+```mermaid
+
+flowchart TD
+    E[Edit Complete] --> L1[Level 1: Syntax + Lint — 10ms, $0]
+    L1 -->|fail| FIX1[Fix and retry]
+    L1 -->|pass| L1B[Level 1: Type Check — 200ms, $0]
+    L1B -->|fail| FIX1B[Fix and retry]
+    L1B -->|pass| L2[Level 2: Unit Tests — 1-5s, $0]
+    L2 -->|fail| FIX2[Fix and retry]
+    L2 -->|pass| L2B[Level 2: Integration Tests — 5-30s, $0]
+    L2B -->|fail| FIX2B[Fix and retry]
+    L2B -->|pass| L4{Subjective criteria?}
+    L4 -->|no| SHIP[Ship]
+    L4 -->|yes| MJ[Level 4: Model Judge — 2-5s, ~$0.02]
+    MJ -->|pass| SHIP
+    MJ -->|fail| FIX4[Fix and retry]
+    FIX1 --> E
+    FIX1B --> E
+    FIX2 --> E
+    FIX2B --> E
+    FIX4 --> E
+```
+
+The governing rule — use the cheapest oracle that still discriminates — means most coding loops never invoke Level 4 or Level 5 oracles for correctness verification. Tests, types, and linters handle correctness. Model judges add value only for subjective dimensions: "Is this approach idiomatic?" "Does this abstraction make the code more maintainable?" "Is this variable name clear?" These are real quality dimensions, but they belong behind the deterministic wall. Running a model judge on code that fails to compile wastes the judge's tokens on an artifact that a free, instant check would have rejected.
+
+The percentage of failures caught by each oracle depends on the codebase and task mix. Measure that distribution rather than assuming most logical errors also trigger lint or type checks. Early deterministic checks can avoid wasted test execution, but logical, performance, and security defects may pass all static analysis.
+
+Code offers unusually useful deterministic feedback, but no tool proves complete correctness. Tests cover specified cases; types rule out classes of errors under their type system; lint checks conventions and selected defects. Each consumes compute, setup, and maintenance even when it costs no model tokens. Use these signals aggressively, then report their coverage and gaps rather than calling the oracle free or infallible.
+
+## Three Harness Strategies
+
+Coding assistants vary by product version, configuration, operating environment, and permissions. A terminal interface is not proof of unrestricted shell access; an IDE is not a security boundary; a remote environment is not proof that production credentials are absent. Rather than making unverified product-specific claims, compare three architectural strategies and test the configuration you will actually deploy.
+
+### Explicit, On-Demand Context
+
+A terminal-oriented harness can begin with approved project instructions and retrieve files as needed. This keeps initial context small and lets the agent justify each additional read. The cost is discovery latency: finding a caller, reading a module, and locating a fixture can take several tool round trips. The design works best when search and symbol tools return bounded, source-linked results and when the harness preserves the accepted task across compaction.
+
+The failure mode is not merely missing a file. The model may find a similarly named test stub and mistake it for the production implementation. Require it to trace the real caller or entry point before editing. For Priya's migration, the relevant evidence includes the library's lifecycle contract, the application wrapper, the connection fixture, and the callers—not just the line that throws a timeout.
+
+### IDE-Assisted Context and Feedback
+
+An IDE-integrated harness can use active buffers, diagnostics, symbol references, and recent edits. These signals reduce some discovery work, but they should not silently define the entire task scope. An unsaved buffer can differ from the file tested on disk; a language server can be stale or configured for a different interpreter. Record which revision and environment produced each diagnostic.
+
+Undo history is useful for local edits, not a universal rollback mechanism. A terminal command can send a network request, mutate a database, or trigger CI outside the editor's undo stack. Separate local editing capability from external publication authority. Verify that accepted artifacts correspond to the tested working-tree state, not an earlier buffer snapshot.
+
+### Persistent Remote Environments
+
+A remote worker can retain dependencies, indexes, build caches, and intermediate state across long tasks. That can reduce setup cost, but creates freshness and isolation obligations. A stale index may miss new code. A retained workspace may contain credentials or files from another task. A cached test result may describe a different dependency lockfile or toolchain. Tag caches with relevant revisions and isolate tenants and task authority.
+
+A remote sandbox still needs a defined egress policy, credential boundary, filesystem scope, and lifecycle. Installing packages executes supply-chain code; running tests executes repository code. The worker should not inherit production secrets merely because it lives away from the developer's laptop. Use disposable, controlled test resources rather than a shared staging database for routine agent iteration.
+
+### Verification Policy Is Independent of Interface
+
+All three strategies can enforce verification outside the model's discretion. Static diagnostics are useful but do not replace runtime tests. A test command returning zero is evidence only if it actually discovered and executed the required tests. Record command, environment, exit status, test counts, skipped tests, and artifact revision. An empty suite or an unavailable integration service is not a pass.
+
+For frontend work, combine deterministic DOM assertions with a real rendered check when visual behavior is part of acceptance. A screenshot alone may miss interaction and accessibility failures; a DOM assertion alone may miss clipping or overlap. The right evidence follows the user's criterion rather than a fixed hierarchy of fashionable tools.
+
+### The Harness Layer Thesis, Bounded
+
+The same model can produce different outcomes under different context, tool, and verification policies. That makes harness design a controllable source of improvement. It does not establish that models are interchangeable or that a new oracle check always beats a model upgrade. Evaluate both on the actual task mix. The most useful comparison measures accepted changes, missed defects, human review effort, latency, and all-in cost—not a demo's apparent autonomy.
+
+For Priya, the next experiment changes one thing: add an isolated connection-lifecycle check while retaining the same model and migration task fixtures. If the repair succeeds, she has evidence for that intervention. It does not prove that every migration is safe or that the agent can invent complete tests from an incomplete specification. Preserve the distinction between a successful case and a general reliability claim.
+
+### Retry and Failure Handling
+
+When verification fails, the loop must decide what to do. The quality of this decision determines whether the loop converges or spirals.
+
+The reliable pattern is: read the error message in full, diagnose the root cause from the error's specifics (file, line, error type, expected versus actual), hypothesize a fix that addresses the root cause (not the symptom), apply the fix, and re-verify. This read-diagnose-fix-verify cycle is the core of every successful coding loop.
+
+The failure pattern is: see that verification failed, make a change that addresses the surface symptom without diagnosing the root cause, and hope the change fixes it. This produces the spiral Priya observed — each iteration addresses a symptom of the previous iteration's fix rather than addressing the underlying problem.
+
+The read-reason-edit loop also depends on current evidence and a bounded retry policy. A repeated error signature is a useful trigger to reassess, not proof that another attempt can never work. Continue only when the next action can change the evidence, prerequisite, or strategy; otherwise preserve the patch and escalate.
+
+```python
+
+from loopkit.runner import Loop, LoopResult
+
+class StuckDetector:
+    """Detect when the loop is oscillating rather than converging."""
+
+    def __init__(self, window: int = 3):
+        self.window = window
+        self.error_signatures: list[str] = []
+
+    def record(self, error_output: str) -> bool:
+        """Record an error and return True if stuck."""
+        signature = self._extract_signature(error_output)
+        self.error_signatures.append(signature)
+        if len(self.error_signatures) >= self.window:
+            recent = self.error_signatures[-self.window:]
+            if len(set(recent)) == 1:
+                return True  # Same signature N times in a row
+        return False
+
+    def _extract_signature(self, error: str) -> str:
+        """Reduce error to its class (file + error type, ignoring line numbers)."""
+        import re
+        # Strip line numbers and variable-specific details
+        normalised = re.sub(r"line \d+", "line N", error)
+        normalised = re.sub(r"'[^']*'", "'X'", normalised)
+        return normalised[:200]
+```
+
+## A Complete Bug-Fix Trace
+
+The following trace annotates a production bug-fix loop end to end. Scenario: CI reports that `search_documents("nonexistent")` returns `None` instead of an empty list.
+
+```mermaid
+
+sequenceDiagram
+    participant T as Trigger
+    participant D as Discover
+    participant P as Plan
+    participant E as Execute
+    participant V as Verify
+    participant S as Ship
+
+    T->>D: CI failure: assert None == []
+    D->>D: Read test file → understand expectation
+    D->>D: Read source → find search_documents()
+    D->>P: Root cause: missing return [] on empty path
+    P->>E: Edit: add return []
+    E->>V: pytest test_search_no_results
+    V->>V: PASS (targeted test)
+    V->>V: pytest tests/test_search.py (module)
+    V->>V: PASS (12 tests, no regression)
+    V->>V: Inspect public API annotation against requirement
+    V-->>P: REVIEW: return annotation still permits None
+    P->>E: Edit: narrow annotation where contract requires it
+    E->>V: pyright src/search.py → PASS
+    V->>V: pytest tests/ (full suite) → 147 PASS
+    V->>S: All oracles pass. Ship.
+```
+
+The stale return annotation is a contract-review finding, not necessarily a type-checker error: declaring `list | None` while returning only a list is generally permitted. A stricter API requirement or dedicated check is needed to require narrowing. This illustrates why an execution trace must not invent a diagnostic simply to make the oracle story cleaner.
+
+Second, the loop expands verification scope progressively. It starts with the single failing test (cheap, fast, diagnostic). Then the full module (confirm no regressions). Then the type checker (confirm static properties). Then the full suite (confirm global consistency). This graduated approach means early failures cost almost nothing to diagnose — one test, one file. Final verification is comprehensive — the full suite — but it only runs on code that already passes every cheaper check. The cost of running the full suite only lands on code that has already demonstrated it is likely correct.
+
+Total cost for this trace: ten iterations of tool calls, roughly 15,000 tokens total, and under sixty seconds of wall-clock time. At Sonnet-class pricing this is approximately \$0.03–0.06. A human developer would spend five to ten minutes — at \$75/hour fully loaded, that is \$6–12 of human time replaced by six cents of compute.
+
+## Principles That Make Coding Loops Reliable
+
+After examining three harness architectures and tracing a complete execution, common principles emerge. These hold regardless of which model or which harness you use. They are the engineering constraints that separate loops that converge from loops that spiral.
+
+### Always Read Before Editing
+
+Every reliable coding loop reads the current file state before modifying it. Editing from the model's memory of what a file contains — rather than from an explicit, current read — fails frequently for four reasons. The file may have changed due to a previous edit in the same session. The model's training data may contain an outdated version of the file from when the training corpus was collected. Another process (or another agent in a fleet, per Chapter 24) may have modified the file concurrently. The model may confuse two similarly-named files in the same project, generating an edit targeting the wrong content.
+
+The cost of always reading before editing is one additional tool call per edit — a few hundred tokens of input. The cost of editing blind is 2–5 failed iterations when the edit targets content that does not exist, producing a "string not found" error that the model must diagnose, re-read the file to understand the actual state, and then generate a corrected edit. The economics strongly favour reading first: one cheap read prevents multiple expensive recovery iterations.
+
+### Small Verifiable Edits Over Large Rewrites
+
+The most reliable coding loops make the smallest edit that can be independently verified. A narrower diff reduces the investigation space, but a failed test can also expose a pre-existing or environmental problem. Compare against the baseline before assigning causation. A two-hundred-line module rewrite followed by a full test run is opaque: if tests fail, the root cause could be anywhere in the two hundred lines.
+
+Small edits also produce better diffs for human review. A string-match edit shows exactly what changed and nothing else. A full file regeneration produces a massive diff where whitespace changes, import reordering, and comment reformatting obscure the actual semantic change. When a human reviewer looks at the agent's PR, they should be able to identify the meaningful changes instantly.
+
+The economic consequence is equally clear. When a small edit fails verification, you discard and retry three lines of work. When a large rewrite fails verification, you discard and retry two hundred lines — or more likely, you must decompose the rewrite into smaller pieces and verify each one individually, which is what you should have done in the first place.
+
+### Context Window Management for Long Sessions
+
+A coding session that spans many files and many iterations accumulates context: file reads, edit results, error traces, test output, plan updates. Without active management, the context window fills and the model loses access to early information — including the original task description and the accepted plan. When this happens, the loop loses coherence: it forgets what it already tried, repeats failed approaches, or drifts from the original goal.
+
+Three strategies address context growth. First, summarise completed work: after a sub-task finishes, replace the full trace of edits and verifications with a one-line summary ("Sub-task 1 complete: added pyjwt dependency to requirements.txt and regenerated lock file"). Second, hierarchical detail: full detail for the current sub-task, summaries for completed sub-tasks, one-line status for sub-tasks completed more than five iterations ago. Third, context editing: automatically clear stale tool results that have been superseded by more recent reads of the same file.
+
+The implementation challenge is choosing what evidence remains necessary. A newer read does not make every historical detail useless: the earlier version may explain a regression or a concurrent edit. Replace bulky context with source/version pointers and short summaries while retaining durable evidence outside the prompt. Keep acceptance criteria and unresolved failures available through compaction.
+
+## Economics of the Coding Loop
+
+The coding loop has the most favourable economics of any agentic domain because its oracles are almost entirely deterministic. You never pay for a model judge to verify that tests pass. The cost per verified outcome depends on two variables: the attempts-to-pass rate (how many iterations before the oracle approves) and the token cost per attempt (how much context the model reads and generates per iteration).
+
+For a well-configured loop handling bug fixes and feature additions in a codebase with good test coverage:
+
+Attempts-to-pass for simple bug fixes: 1.3–2.0. Most fixes pass on the first or second iteration. The oracle catch-and-fix cycle adds one extra iteration roughly one time in three.
+
+Attempts-to-pass for multi-file feature additions: 3–6. More files mean more potential for cross-file inconsistencies that the type checker or integration tests catch. Each catch adds an iteration.
+
+Token cost per iteration: \$0.02–0.08. This varies with the size of files read, the length of error messages, and the verbosity of the model's generated code.
+
+Cost per accepted bug fix in this illustrative model: $0.03–0.15 of inference. Do not infer that every commit is worth processing; cadence, failed runs, review time, and tool compute can dominate the budget.
+
+Cost per verified feature (PR-sized, 3–8 files changed): \$0.10–0.50. Still vastly cheaper than human engineering time for the equivalent work.
+
+At an illustrative $5–25/day of model spend and $75/hour of labor, model-only break-even is roughly four to twenty minutes saved per day, not two hours. Add review, tooling, compute, and maintenance before claiming net savings. Fifty tasks per day also require workload-specific acceptance and failure costs; no first-week return is guaranteed.
+
+The economic failure mode is not the cost of success. It is the cost of failure. Priya's forty-seven-iteration spiral consumed \$14 for zero value. The fix was not a cheaper model or a lower iteration cap. The fix was a better oracle that rejected bad work early — before the loop wasted tokens iterating on a fundamentally flawed approach. This is the insight from Chapter 27 (*Token Economics of Loops*) applied: reducing attempts-to-pass by improving the oracle delivers higher ROI than reducing cost-per-attempt by switching to a cheaper model.
+
+The token economics also explain why the oracle cascade runs cheapest checks first. A syntax error caught in ten milliseconds prevents the model from running a thirty-second test suite on code that cannot even parse. A type error caught in 200 milliseconds prevents a five-minute integration test run on code with incompatible types. Each cheap check that catches an error saves the cost of every more-expensive check that would have failed on the same defect. The cascade is not just about correctness — it is about economic efficiency.
+
+### When the Coding Loop Does Not Pay
+
+Not every coding task belongs in an automated loop. The economics invert for three categories of work. First, exploratory prototyping — where the developer does not yet know what "correct" means, cannot write tests upfront, and needs to iterate on the design itself. The loop needs an oracle; prototyping has none. Running the loop on a vaguely-specified exploration produces token waste without convergence.
+
+Second, tasks requiring cross-system coordination — changing an API contract that affects four services owned by four teams. The loop can modify one service's code and verify it against that service's tests. It cannot verify that the four services remain compatible, because compatibility testing requires running all four services simultaneously, and the change requires agreement across team boundaries. The loop can produce the PR; the coordination remains human work.
+
+Third, tasks where the primary value is understanding — a new team member working through a codebase to build mental models. Running the loop to "fix the bug" denies that team member the learning that comes from diagnosing the bug themselves. The correct use of the loop for learning is not "fix it for me" but "explain the bug, suggest the fix, let me write it, then verify my fix."
+
+Understanding these boundaries prevents the characteristic failure of over-automation: treating the loop as a general-purpose replacement for engineering rather than as a specific tool for verified code changes within well-specified boundaries.
+
+## What Breaks
+
+The coding loop's strength — deterministic oracles — is also the boundary of its reliability. Three failure modes persist even in well-designed systems, and practitioners should expect to encounter all three.
+
+First, the test suite has gaps. The loop verifies against tests that exist, not against the full specification of correct behaviour. If no test covers a code path, the loop can introduce bugs on that path and the oracle will report a pass. Priya's connection pool leak was invisible precisely because no test asserted connection lifecycle behaviour. The loop is only as thorough as the tests it runs against. This means that investing in test coverage has a double return: it improves human confidence in the code *and* it improves the loop's ability to verify its own work. Line coverage of 40% does not mean 40% of behavior is verified: covered lines may lack meaningful assertions, and one invariant can constrain many paths. Review assertion quality, boundaries, and known defect classes alongside coverage.
+
+Second, emergent properties escape functional tests. Concurrency bugs, performance regressions, memory leaks, and resource exhaustion are not caught by functional correctness tests. A function that returns the correct value but holds a database lock for twice as long will pass all existing tests while degrading production latency under load. Catching these requires property-based tests (Level 2 oracles that verify invariants across random inputs), performance benchmarks with regression thresholds, or production-grade observability that the loop can query. All of these require human investment to build — the loop cannot create oracles for properties that nobody has defined.
+
+Third, specification ambiguity causes oscillation. When the goal is vague ("make this code cleaner" or "improve the architecture"), the loop may oscillate between two valid interpretations: refactoring toward style A in one iteration, deciding style B is better in the next, then reverting toward A. Each iteration passes the oracle (the code is valid after each change), but the work produced is incoherent and the budget is consumed without convergence. The fix is precise goal specification — Chapter 15 (*Goal Specification*) — expressed in terms the oracle can check. Not "make it cleaner" but "extract the validation logic into a `validate_order` function, add type annotations to all public methods in this module, and ensure the function has fewer than twenty lines."
+
+Fourth, environment-dependent failures create non-reproducible test results. A test that depends on network connectivity, current time, filesystem permissions, or the presence of external services may pass in one iteration and fail in the next despite identical code. The loop interprets the new failure as caused by its most recent edit, even though an environmental change may be responsible, and attempts to “fix” code that was already correct. The edit then causes the test to fail for a real reason, and the loop has lost its footing: it is now debugging a problem introduced by a wrong diagnosis. The mitigation is test isolation — mocking external dependencies, pinning time, using containers with consistent permissions — but this requires human investment in test infrastructure that the loop itself cannot provide.
+
+Understanding these boundaries prevents the characteristic failure of over-automation: treating the loop as a general-purpose replacement for engineering rather than as a specific tool for verified code changes within well-specified boundaries.
+
+## Implementation Guidance: Preserve the Evidence Boundary
+
+Before editing, identify the failing workflow and record a baseline. If the test already fails without the candidate change, label it as a baseline failure rather than blaming the latest edit. For Priya's connection leak, run the failing integration test in an isolated database fixture, record pool usage before and after, and distinguish an application leak from a test-environment outage. Extending a timeout without evidence changes the symptom and can conceal the defect.
+
+Protect evaluation from accidental weakening. The agent may legitimately add or repair tests, but it should not remove a failing assertion, skip a suite, or change the fixture's expected behavior merely to achieve green output. Record test changes separately from product changes and explain how they preserve the requirement. Run the original regression reproducer against the final implementation, then relevant neighboring tests. Broader suites are justified by concrete change risk, not by habit alone.
+
+An evidence packet can remain compact: task criterion, changed files, source revision, command, environment, exit status, test count, and unresolved gaps. If an integration test could not run because credentials or a service were unavailable, retain the passing unit tests and say exactly what remains unverified. Do not replace the authentication error with a generic “workflow incomplete” message, and do not describe the whole repair as failed when useful work is complete.
+
+Publication is a separate side effect. Passing tests does not authorize merge or deployment. A local patch may be the requested deliverable; opening a PR may require a separately allowed action. If PR creation times out, reconcile by operation identity or the repository's actual state before trying again. Chapter 39 addresses this uncertainty; the coding loop's contract must already distinguish a tested patch from a published artifact.
+
+For a focused acceptance exercise, inject three failures: a pre-existing broken test, an empty test selection, and a network timeout after mocked PR creation. The correct report preserves the patch and actual checks, rejects the empty suite as evidence, distinguishes baseline failure from regression, and leaves publication unknown until reconciled. That is a more meaningful definition of reliability than a transcript ending with “all done.”
+
+## Key Takeaways
+
+- Code is the canonical agentic domain because it provides machine-checkable oracles at every level of the hierarchy: syntax, types, lint, unit tests, integration tests, and optionally model judge.
+- Harness strategies differ in context and feedback, but interface labels do not establish permissions, verification, or isolation.
+- The oracle cascade runs cheapest checks first: a ten-millisecond syntax check prevents a thirty-second test run on unparseable code.
+- Attempts-to-pass is the headline health metric; improving the oracle to reduce it delivers higher ROI than switching to a cheaper model.
+- Small, verifiable edits outperform large rewrites because each failure is cheap to diagnose and discard.
+- Stuck detection (same error class N times in a row) prevents spiralling; escalation delivers context to a human who can diagnose what the model cannot.
+- The Loop Contract must express every acceptance criterion in machine-checkable terms; vague goals cause oscillation.
+- Break-even depends on all-in costs, accepted task quality, and measured human effort—not a universal daily-hours threshold.
+
+## The Loop Contract for This Chapter
+
+This chapter wrote out the **complete Loop Contract** for a coding agent — all five fields instantiated:
+
+- **Goal:** Concrete acceptance criteria expressed as deterministic checks
+- **Oracle:** A cascade from Level 1 (syntax, lint, types) through Level 2 (tests) to Level 4 (model judge) only when subjective criteria exist
+- **Budget:** Token, dollar, iteration, and wall-clock bounds — each independently enforceable
+- **Stop condition:** All checks pass, OR budget exhausted, OR stuck detection fires
+- **Escalation path:** Surface context to engineer with diff of attempts, or commit partial progress to draft PR
+
+## Exercises
+
+1. **Build a minimal oracle cascade.** For a Python project with pytest and pyright configured, write a `verify()` function that runs syntax check, lint, type check, and tests in sequence, stopping at the first failure and returning the failure category and message. Measure wall-clock time savings versus running all checks unconditionally regardless of earlier failures.
+
+2. **Measure attempts-to-pass.** Select ten recent bug-fix PRs from your codebase. For each, estimate how many loop iterations a coding agent would need by counting the distinct verification failures visible in CI history (type errors, test failures, lint warnings). Compute mean and median. What does this tell you about your oracle's feedback quality?
+
+3. **Design the stuck detector.** Implement the `StuckDetector` class for your team's common error formats. Normalise errors to remove line numbers and variable names, keeping only the error class. Feed it a sequence of real CI failures from a difficult PR. Does it correctly identify the point where a human would have changed approach?
+
+4. **Compare harness strategies.** For three tasks (a bug fix, a refactoring, and a new feature), estimate which harness strategy (skill-file-based explicit reads, IDE-integrated passive feedback, persistent-environment indexed access) would produce the lowest cost per verified outcome. Show token estimates for context loading, tool calls, and verification in each case.
+
+5. **Oracle-gap audit.** Collect reviewer corrections and post-merge defects for fifty illustrative or authorized historical PRs. Adjudicate which are genuine defects versus preferences, and compare with an independently labeled defect set. Acceptance: report observed missed defects separately from a false-negative rate; reviewer changes alone do not reveal all defects or provide its denominator.
+
+## Sources
+
+- Anthropic, "Introducing advanced tool use on the Claude Developer Platform" — Tool Search, Programmatic Tool Calling, Tool Use Examples.
+- [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) — outcome-focused evaluation, grader calibration, and transcript inspection.
+- Chapter 3, *Anatomy of a Loop* — the five stages and Loop Contract formalism.
+- Chapter 20, *The Hierarchy of Oracles* — oracle levels and the governing rule.
+- Chapter 27, *Token Economics of Loops* — cost-per-verified-outcome as headline metric.
+
+------------------------------------------------------------------------
+
+*Next: Chapter 35 applies the same teardown to a research loop, where no test suite exists and verification means grounding every claim against a cited source.*
