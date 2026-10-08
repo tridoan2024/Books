@@ -326,6 +326,7 @@
       if (button) button.focus();
     });
     var bf = $('#btn-focus');   if (bf) bf.addEventListener('click', toggleFocus);
+    initTeacherWidth();
 
     /* ---- scroll: progress, position save, chrome auto-hide, scrollspy ---- */
     var lastY = window.scrollY, saveTimer = null, ticking = false;
@@ -481,6 +482,108 @@
 
     var tt = $('#to-top');
     if (tt) tt.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  }
+
+  /* ---- adjustable Teacher / reader divider ---- */
+  function initTeacherWidth() {
+    if (!$('#btn-teacher') || new URLSearchParams(location.search).get('teacherDetached') === '1') return;
+    var body = document.body, panel = null, divider = null, frame = 0;
+    var minimum = 360, maximum = minimum, preferred = null, pointer = null;
+    var storageKey = 'dbooks:teacher-panel-width';
+    try {
+      var saved = Number(localStorage.getItem(storageKey));
+      if (Number.isFinite(saved) && saved >= minimum) preferred = saved;
+    } catch (_) {}
+
+    function schedule() {
+      if (!frame) frame = requestAnimationFrame(function () { frame = 0; update(); });
+    }
+    function save() {
+      try {
+        if (preferred === null) localStorage.removeItem(storageKey);
+        else localStorage.setItem(storageKey, String(preferred));
+      } catch (_) {}
+    }
+    function setWidth(width) {
+      preferred = Math.round(Math.max(minimum, Math.min(maximum, width)));
+      update();
+    }
+    function finish(event) {
+      if (pointer === null || (event && event.pointerId !== pointer)) return;
+      var id = pointer; pointer = null;
+      if (divider.hasPointerCapture(id)) divider.releasePointerCapture(id);
+      body.classList.remove('teacher-resizing');
+      save();
+    }
+    function install() {
+      panel = $('#teacher-panel');
+      if (!panel) return;
+      divider = document.createElement('div');
+      divider.className = 'teacher-width-divider';
+      divider.hidden = true;
+      divider.tabIndex = 0;
+      divider.setAttribute('role', 'separator');
+      divider.setAttribute('aria-label', 'Resize Teacher Mode width');
+      divider.setAttribute('aria-orientation', 'vertical');
+      divider.setAttribute('aria-controls', 'teacher-panel');
+      divider.title = 'Drag to resize Teacher Mode. Left/Right arrows adjust; double-click resets.';
+      body.appendChild(divider);
+      new MutationObserver(schedule).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+      divider.addEventListener('pointerdown', function (event) {
+        if (event.button !== 0 || event.isPrimary === false || pointer !== null || divider.hidden) return;
+        event.preventDefault();
+        divider.focus({ preventScroll: true });
+        pointer = event.pointerId;
+        divider.setPointerCapture(pointer);
+        body.classList.add('teacher-resizing');
+      });
+      divider.addEventListener('pointermove', function (event) {
+        if (event.pointerId !== pointer) return;
+        setWidth(panel.getBoundingClientRect().right - event.clientX);
+      });
+      divider.addEventListener('pointerup', finish);
+      divider.addEventListener('pointercancel', finish);
+      divider.addEventListener('lostpointercapture', finish);
+      divider.addEventListener('keydown', function (event) {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        var width = panel.getBoundingClientRect().width;
+        setWidth(event.key === 'Home' ? minimum : event.key === 'End' ? maximum : width + (event.key === 'ArrowLeft' ? 24 : -24));
+        save();
+      });
+      divider.addEventListener('dblclick', function () { preferred = null; save(); update(); });
+    }
+    function update() {
+      if (!panel) install();
+      if (!panel) return;
+      var available = !panel.hidden && window.innerWidth > 1000 &&
+        !body.classList.contains('teacher-detached-window') &&
+        !body.classList.contains('teacher-expanded-mode') && !body.classList.contains('codex-terminal-open');
+      if (available) {
+        var style = getComputedStyle(body), reader = getComputedStyle($('.reader-main'));
+        var navigation = (parseFloat(style.getPropertyValue('--teacher-chapters-width')) || 0) +
+          (parseFloat(style.getPropertyValue('--teacher-outline-width')) || 0);
+        maximum = Math.floor(Math.min(980, document.documentElement.clientWidth - navigation - 400 - parseFloat(reader.paddingLeft) - parseFloat(reader.paddingRight)));
+        available = maximum >= minimum;
+      }
+      body.classList.toggle('teacher-width-split', available);
+      divider.hidden = !available;
+      if (!available) { finish(); return; }
+      var width = Math.round(Math.max(minimum, Math.min(maximum, preferred === null ? Math.min(640, window.innerWidth * 0.4) : preferred)));
+      body.style.setProperty('--teacher-panel-width', width + 'px');
+      var box = panel.getBoundingClientRect();
+      divider.style.left = (box.left - 6) + 'px';
+      divider.style.top = Math.max(0, box.top) + 'px';
+      divider.style.height = Math.max(0, Math.min(window.innerHeight, box.bottom) - Math.max(0, box.top)) + 'px';
+      divider.setAttribute('aria-valuemin', String(minimum));
+      divider.setAttribute('aria-valuemax', String(maximum));
+      divider.setAttribute('aria-valuenow', String(width));
+      divider.setAttribute('aria-valuetext', width + ' pixels');
+    }
+    new MutationObserver(schedule).observe(body, { childList: true, attributes: true, attributeFilter: ['class'] });
+    window.addEventListener('resize', schedule);
+    window.addEventListener('scroll', schedule, { passive: true });
+    update();
   }
 
   /* ---- mini-TOC ---- */
