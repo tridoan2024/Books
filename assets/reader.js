@@ -274,18 +274,29 @@
     /* ---- sidebar state ---- */
     var narrow = window.matchMedia('(max-width: 1000px)').matches;
     if (get('sidebar', true) === false || narrow) body.classList.add('sidebar-collapsed');
-    if (get('toc', true) === false) body.classList.add('toc-hidden');
+    if (get('toc', true) === false || narrow) body.classList.add('toc-hidden');
     if (get('focus', false)) body.classList.add('focus-mode');
 
+    function syncNavigationButtons() {
+      [['#btn-sidebar', 'sidebar-collapsed'], ['#btn-toc', 'toc-hidden']].forEach(function (item) {
+        var button = $(item[0]);
+        if (!button) return;
+        var visible = !body.classList.contains(item[1]);
+        button.setAttribute('aria-pressed', String(visible));
+        button.setAttribute('aria-expanded', String(visible));
+      });
+    }
     function toggleSidebar() {
       var on = body.classList.toggle('sidebar-collapsed');
       set('sidebar', !on);
-      var b = $('#btn-sidebar');
-      if (b) b.setAttribute('aria-pressed', String(!on));
+      if (!on && window.innerWidth <= 1000) body.classList.add('toc-hidden');
+      syncNavigationButtons();
     }
     function toggleToc() {
       var on = body.classList.toggle('toc-hidden');
       set('toc', !on);
+      if (!on && window.innerWidth <= 1000) body.classList.add('sidebar-collapsed');
+      syncNavigationButtons();
     }
     function toggleFocus() {
       var on = body.classList.toggle('focus-mode');
@@ -297,6 +308,23 @@
     }
     var bs = $('#btn-sidebar'); if (bs) bs.addEventListener('click', toggleSidebar);
     var bt = $('#btn-toc');     if (bt) bt.addEventListener('click', toggleToc);
+    syncNavigationButtons();
+    var outline = $('.toc');
+    if (outline) outline.addEventListener('click', function (event) {
+      if (window.innerWidth <= 1000 && event.target.closest('a')) {
+        body.classList.add('toc-hidden');
+        syncNavigationButtons();
+      }
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape' || window.innerWidth > 1000) return;
+      var teacher = document.querySelector('.teacher-panel:not([hidden])');
+      if (!teacher) return;
+      var button = !body.classList.contains('sidebar-collapsed') ? bs : !body.classList.contains('toc-hidden') ? bt : null;
+      body.classList.add('sidebar-collapsed', 'toc-hidden');
+      syncNavigationButtons();
+      if (button) button.focus();
+    });
     var bf = $('#btn-focus');   if (bf) bf.addEventListener('click', toggleFocus);
 
     /* ---- scroll: progress, position save, chrome auto-hide, scrollspy ---- */
