@@ -288,13 +288,13 @@
     }
     function toggleSidebar() {
       var on = body.classList.toggle('sidebar-collapsed');
-      set('sidebar', !on);
+      if (!body.classList.contains('reading-fullscreen')) set('sidebar', !on);
       if (!on && window.innerWidth <= 1000) body.classList.add('toc-hidden');
       syncNavigationButtons();
     }
     function toggleToc() {
       var on = body.classList.toggle('toc-hidden');
-      set('toc', !on);
+      if (!body.classList.contains('reading-fullscreen')) set('toc', !on);
       if (!on && window.innerWidth <= 1000) body.classList.add('sidebar-collapsed');
       syncNavigationButtons();
     }
@@ -327,6 +327,7 @@
     });
     var bf = $('#btn-focus');   if (bf) bf.addEventListener('click', toggleFocus);
     initTeacherWidth();
+    initReaderFullscreen(syncNavigationButtons);
 
     /* ---- scroll: progress, position save, chrome auto-hide, scrollspy ---- */
     var lastY = window.scrollY, saveTimer = null, ticking = false;
@@ -483,6 +484,81 @@
     var tt = $('#to-top');
     if (tt) tt.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
   }
+
+  /* ---- full-screen reading, with reversible navigation state ---- */
+  function initReaderFullscreen(syncNavigation) {
+    var toolbar = $('.header-left'), content = $('.chapter-content');
+    if (!toolbar || !content || new URLSearchParams(location.search).get('teacherDetached') === '1') return;
+    var body = document.body, active = false, previous = null, ownsFullscreen = false;
+    var button = document.createElement('button');
+    button.id = 'btn-reader-fullscreen';
+    button.type = 'button';
+    button.className = 'icon-btn';
+    button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/></svg>';
+    toolbar.appendChild(button);
+    function sync() {
+      button.title = active ? 'Exit full-screen reading (Esc)' : 'Full-screen reading';
+      button.setAttribute('aria-label', button.title);
+      button.setAttribute('aria-pressed', String(active));
+      syncNavigation();
+    }
+    function readingPosition() {
+      var elements = $$('h1, h2, h3, p, li, pre, table', content);
+      var element = elements.find(function (node) { return node.getBoundingClientRect().bottom > 60; }) || content;
+      return { element: element, top: element.getBoundingClientRect().top };
+    }
+    function restorePosition(position) {
+      requestAnimationFrame(function () {
+        if (document.contains(position.element)) window.scrollBy({ top: position.element.getBoundingClientRect().top - position.top, behavior: 'instant' });
+      });
+    }
+    async function leave(browserExited) {
+      if (!active) return;
+      var position = readingPosition();
+      active = false;
+      body.classList.remove('reading-fullscreen', 'chrome-hidden');
+      body.classList.toggle('sidebar-collapsed', previous.sidebar);
+      body.classList.toggle('toc-hidden', previous.toc);
+      sync();
+      var exitBrowser = !browserExited && ownsFullscreen && document.fullscreenElement === document.documentElement;
+      ownsFullscreen = false;
+      if (exitBrowser) {
+        try { await document.exitFullscreen(); } catch (_) {}
+      }
+      restorePosition(position);
+      button.focus({ preventScroll: true });
+    }
+    button.addEventListener('click', async function () {
+      if (active) { leave(false); return; }
+      var position = readingPosition();
+      previous = { sidebar: body.classList.contains('sidebar-collapsed'), toc: body.classList.contains('toc-hidden') };
+      active = true;
+      body.classList.add('reading-fullscreen', 'sidebar-collapsed', 'toc-hidden');
+      body.classList.remove('chrome-hidden');
+      sync();
+      if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+        try {
+          await document.documentElement.requestFullscreen();
+          ownsFullscreen = true;
+          if (!active) { ownsFullscreen = false; await document.exitFullscreen(); }
+        }
+        catch (_) { if (active) toast('Reading expanded in this window.'); }
+      }
+      if (active) restorePosition(position);
+    });
+    document.addEventListener('fullscreenchange', function () {
+      if (active && !document.fullscreenElement) leave(true);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (active && event.key === 'Escape') { event.preventDefault(); leave(false); }
+    });
+    ['#btn-teacher', '#btn-codex'].forEach(function (selector) {
+      var control = $(selector);
+      if (control) control.addEventListener('click', function () { if (active) leave(false); }, true);
+    });
+    sync();
+  }
+
 
   /* ---- adjustable Teacher / reader divider ---- */
   function initTeacherWidth() {
