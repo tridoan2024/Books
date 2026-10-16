@@ -428,7 +428,10 @@ def test_max_steps_exceeded_enforcement():
     def meandering_model(prompt: str) -> str:
         nonlocal step_counter
         step_counter += 1
-        return f'{{"thought": "Step {step_counter}", "action": {{"tool_name": "step_tool", "arguments": {{"val": {step_counter}}}}}}}'
+        return json.dumps({
+            "thought": f"Step {step_counter}",
+            "action": {"tool_name": "step_tool", "arguments": {"val": step_counter}},
+        })
 
     tools = {"step_tool": lambda args: {"ack": True}}
     runtime = BoundedAgentRuntime(meandering_model, tools)
