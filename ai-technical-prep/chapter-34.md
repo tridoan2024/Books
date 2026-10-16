@@ -1,5 +1,7 @@
 # Chapter 34: Context engineering, retrieval and memory systems
 
+> **Reading note — additive technical review (October 16, 2026):** Start with [Technical Foundations and Clarifications](#technical-foundations-and-clarifications) for retrieval, vector and budget fundamentals. The preserved code is a teaching sketch: its “dense” index uses character-trigram overlap, not embeddings or cosine similarity; repeated BM25 indexing corrupts document-frequency accounting; the assembler limits only evidence, not the whole context window, and lacks a module-level dataclass import. Hybrid retrieval and reranking are options to evaluate, not mandatory or guaranteed superior choices. The original precision, latency, savings and cache-hit figures are unmeasured examples, not achieved benchmarks. RRF has parameters and does not guarantee exact-match priority. Evidence tags and valid citations alone do not establish isolation or claim support.
+
 > **Part:** Part IX — Principal Engineering for Enterprise Agentic AI Platforms  
 > **Market evidence:** Target-role review (Abbott Principal AI/Agentic Engineer `AG`, Principal AI Platform Engineer `PL`, and AI/ML Engineer `ML`, Oct 2026). Required and core duties: context pipeline architecture, chunking/indexing strategies, vector/hybrid search, memory hierarchies (working vs. durable), token budget allocation, prompt caching, and grounded structured generation. Builds on Chapters 9, 21, 28, 29, and 30.  
 > **Reader status:** Principal / Staff+ engineers, data/search architects, and agent platform engineers. Assumes search algorithms (BM25, dense embeddings, HNSW), relational modeling, and LLM attention mechanism prerequisites.  
@@ -479,3 +481,118 @@ By keeping the first 3,000–5,000 tokens identical across thousands of requests
 - **Cormack, Clarke & Büttcher (SIGIR):** Reciprocal Rank Fusion outperforms Condorcet and individual algorithms for Information Retrieval.
 - **Liu et al. (Stanford):** Lost in the Middle: How Language Models Use Long Contexts (Transactions of the ACL).
 - **Anthropic Prompt Caching Documentation:** Architecture, Minimum Token Thresholds, and Breakpoint Management.
+
+
+---
+
+## Technical Foundations and Clarifications
+
+### Context is the information available for this decision
+
+A model answering a maintenance question needs the correct manual paragraph, not every paragraph the company owns. **Context engineering** selects, arranges and accounts for information available to a particular inference. It includes instructions, the user question, permitted tools, task state, retrieved evidence and an output allowance. A large context window can be useful, but is not proof that the model will use every passage correctly. The original long-context latency and accuracy claims depend on model, placement, caching and task; they were not measured in this book.
+
+A **tokenizer** converts text into model vocabulary IDs. Tokens differ from words and characters, especially for code, identifiers and multilingual text. A model's input limit and output ceiling may share a total window or have separate constraints. Budget with the provider's actual accounting contract and include tool schemas and message framing. A character-divided-by-four estimate can help rough planning but cannot enforce a hard token limit.
+
+For a hypothetical 8,192-token shared window, reserve 1,024 output tokens and 256 for framing/headroom. That leaves 6,912 input tokens. System instructions costing 800, tools 600, query 200 and working state 800 leave 4,512 for evidence. If evidence exceeds that, choose smaller complete passages, defer a source read or report omitted material. Do not trim away a restriction or qualification just to fit. Record the selected and omitted evidence IDs so a reviewer understands the answer's actual coverage.
+
+### Retrieval starts with source structure and authorization
+
+**Ingestion** converts source documents into searchable units. **Chunking** chooses the units; **indexing** constructs structures used to find them. A chunk should retain document identity, source revision/hash, heading or page locator, tenant/access policy and observation/effective dates where relevant. The hash identifies content, not author truth or approval. A parser that loses table headings can change meaning even when the resulting text has a valid hash.
+
+For a manual, keep a procedure's prerequisite, warning and step together or provide a reliable parent lookup. For code, use symbols and function boundaries where practical. Overlap can preserve continuity but also duplicates content and inflates apparent corroboration. Fixed-length, structure-aware and semantic chunking have different costs and failure modes; select using representative questions. There is no universally correct 20% overlap.
+
+Apply authorization before unauthorized content reaches rerankers, model context, caches or logs. Derive tenant and resource access from verified identity, not an extracted query entity. Engines differ in filtered approximate-search implementation: “prefilter” is not a magic universal algorithm. The essential invariant is that inadmissible content never escapes the permitted retrieval boundary. Test cross-tenant queries, permission revocation and restrictive filters against actual engine behavior; Chapter 9 owns the security details.
+
+### Sparse and dense search: understand the mathematics
+
+**Sparse search** represents selected terms with weights, often in an inverted index mapping terms to documents. **BM25**, Best Matching 25, scores term occurrence while controlling repeated-term saturation and document length. Rare terms receive more weight through inverse document frequency. Its `k1` parameter controls frequency saturation and `b` controls length normalization. An exact equipment code can be valuable, but tokenization may split it; test the analyzer instead of assuming lexical search preserves every identifier. [F34-1]
+
+**Dense search** uses learned vectors with nonzero values across many dimensions. Cosine similarity is the dot product divided by both vector magnitudes. Vectors `(1,0)` and `(0,1)` have similarity zero; `(1,0)` and `(2,0)` have similarity one. These arithmetic relationships do not mean that real documents are semantically equivalent. Use a matched embedding model/version for queries and indexed documents, and account for units, languages and domain drift.
+
+**HNSW**, Hierarchical Navigable Small World, builds a graph for approximate nearest-neighbor search. Approximation exchanges some retrieval completeness for efficiency; graph size and search effort affect memory, latency and recall. A **cross-encoder** reranker evaluates query and passage jointly, often improving fine-grained ordering at additional compute cost. Neither a high similarity score nor a reranker score is an independently calibrated probability that a claim is true.
+
+**Reciprocal rank fusion (RRF)** combines rank positions rather than incomparable score scales. For document `d`, sum `1/(k + rank(d))` over lists that contain it, using ranks starting at one. With `k=60`, document A at ranks one and ten scores approximately 0.03068, while B at ranks two and two scores 0.03226: B wins despite A being first in one list. The constant, list depths and optional weights are parameters. Exact matches need an explicit exact-match rule if product requirements demand it; RRF alone supplies none. Duplicate source representations must not count as independent retrieval systems or evidence.
+
+### Memory, caches and source lifecycle
+
+**Working memory** contains information needed for the active task. **Session memory** supports conversation continuity. **Durable knowledge** retains source-grounded information across tasks. These are logical scopes, not mandatory storage products. Operational checkpoints can be durable while their scratchpad content remains unverified. A summarizing model may omit an exception; preserve source IDs and unresolved uncertainty rather than promoting its summary to an authoritative fact.
+
+Updates require invalidating or reindexing the prior revision, not simply appending a new chunk with the same identifier. A deletion workflow must account for documents, vectors, cached retrievals/answers, replicas and backups under its retention policy. A **tombstone** records that content is withdrawn so older replicas cannot revive it. Retaining audit metadata may be appropriate without retaining user-visible deleted content. Removing a vector is not proof of removing an influence from already-trained model weights.
+
+A **retrieval cache** stores search results; an **answer cache** stores generated answers; a **prefix/KV cache** reuses model computation for matching input prefixes. Keys need query/request shape, tenant, authority/policy revision, source/index revision, model and relevant freshness constraints. Prefix reuse can preserve an unchanged beginning even when the tail differs, subject to provider block sizes, thresholds and lifetime. The original claim that any tail change invalidates the entire preceding cache is too broad. A static policy can change or be revoked; static means stable over a defined interval, not immutable forever. Measure cache hits and stale-answer failures rather than promising 80% improvement.
+
+### Grounding and retrieval quality need independent evidence
+
+A citation ID can exist while supporting a different assertion. Separate ID/locator validation from semantic entailment. “The manual mentions overheating” does not support “this part must be replaced immediately.” Source scope, qualifications and effective date matter. Delimiters structure evidence but cannot guarantee immunity to prompt injection. Keep model-controlled decisions inside runtime permissions and verify high-impact outputs separately.
+
+**Precision at K** is relevant returned items divided by K; **recall at K** is relevant returned items divided by all relevant items in the reviewed corpus for that question. With five relevant passages and three returned, two relevant, precision is 2/3 and recall is 2/5. Relevance labels require reviewed evidence, not the retrieval engine's own score. Include missing-answer, adversarial, exact-code and multi-document questions. Evaluate retrieval separately from generation: a model may recover a fact despite poor retrieval or hallucinate despite excellent retrieval.
+
+A useful **ablation** changes one component at a time: lexical baseline, dense baseline, fusion, fusion plus reranking, smaller context and caching. Freeze questions, sources, permissions and model versions. Compare answer correctness, support, omissions, p95 latency and total cost. Long context may win on some tasks; a compact lexical pipeline may be sufficient for others. The purpose is evidence-guided design, not declaring hybrid retrieval mandatory.
+
+### Offline Foundation Example
+
+```python
+# Restricted arithmetic and synthetic ranks; not an embedding or tokenizer.
+from math import isclose
+
+def rrf(lists, k=60):
+    if type(k) is not int or k < 1:
+        raise ValueError("positive rank constant required")
+    scores = {}
+    for ranked in lists:
+        if len(set(ranked)) != len(ranked):
+            raise ValueError("duplicate document in one ranking")
+        for rank, doc in enumerate(ranked, 1):
+            scores[doc] = scores.get(doc, 0) + 1 / (k + rank)
+    return sorted(scores, key=lambda d: (-scores[d], d))
+
+assert rrf([["A", "B"], ["B", "C"]])[0] == "B"
+window = 8192
+output_allowance, overhead = 1024, 256
+fixed_sections = {"system": 800, "tools": 600, "query": 200, "state": 800}
+evidence_allowance = window - output_allowance - overhead - sum(fixed_sections.values())
+assert evidence_allowance == 4512
+selected, used = [], 0
+for evidence_id, cost in [("small-a", 1200), ("oversized", 5000), ("small-b", 1300)]:
+    if used + cost <= evidence_allowance:
+        selected.append(evidence_id)
+        used += cost
+assert selected == ["small-a", "small-b"]
+assert used + sum(fixed_sections.values()) + overhead + output_allowance <= window
+
+def cache_key(query, tenant, authority_revision, source_revision):
+    return (query, tenant, authority_revision, source_revision)
+assert cache_key("P-17", "a", 7, 2) != cache_key("P-17", "a", 8, 2)
+assert cache_key("P-17", "a", 7, 2) != cache_key("P-17", "b", 7, 2)
+assert isclose(2 / 3, 0.6666666666666666)
+assert isclose(2 / 5, 0.4)
+```
+
+The token costs above are given fixture inputs, not measured tokenizer output. The selector skips an oversized item and still considers smaller later items; real selection additionally preserves semantic completeness. It does not implement source ingestion, embeddings, ACLs or claim verification. The preserved BM25 example increments document frequency again on repeated indexing; a production index must replace/rebuild counters correctly. Its dense mock is trigram Jaccard, and its budget object contains unused limits. These limitations remain visible rather than being silently rewritten.
+
+### Local exercise and design decisions
+
+Run the new example, increase the reserved output, and calculate which evidence still fits. Introduce two representations of one document and reject duplicate contribution within a ranking. Change the authority revision and explain why an old cached answer becomes ineligible. Then prepare ten manual questions with human-reviewed relevant passages: four exact codes, three paraphrases, two needing multiple sections and one unanswerable query. Measure baseline retrieval recall before adding a reranker. Keep model generation offline or mocked until source-selection quality is understood; no real clinical responses or credentials are needed.
+
+### Foundation self-checks
+
+**Q1: Is the highest vector score the best-supported answer?** No. Similarity selects candidates; support requires the source actually entail the claim under the question's context, scope and current revision.
+
+**Q2: Why reserve output tokens before evidence packing?** Input that fills a shared window can leave no room for a complete answer. Account for instructions, tools, framing and output together, then disclose omissions rather than silently truncating critical qualifications.
+
+**Q3: Does deleting a chunk clear every old answer?** No. Replicas, retrieval and answer caches, summaries and backups need their own lifecycle rules. Test withdrawal propagation and prevent old revisions becoming visible again.
+
+### Foundation Key Takeaways
+
+- Context budgets include every section and provider framing, not only retrieved text.
+- Chunk boundaries and versioned locators determine whether facts retain their meaning.
+- BM25, embeddings, HNSW and rerankers solve different retrieval problems.
+- RRF is rank fusion with tunable parameters, not guaranteed exact-match priority.
+- Scope memory and caches by authority, source revision and freshness; validate claim support separately.
+
+### Foundation Sources and Boundaries
+
+- **F34-1:** Manning, Raghavan and Schütze, [Introduction to Information Retrieval: Okapi BM25](https://nlp.stanford.edu/IR-book/html/htmledition/okapi-bm25-a-non-binary-model-1.html), inspected October 16, 2026, term frequency, document length and parameter discussion.
+- **F34-2:** Cormack, Clarke and Büttcher, RRF, SIGIR 2009, retained historical reference for the rank-based formula; no new comparative retrieval benchmark was performed here.
+- **F34-3:** Liu et al., [Lost in the Middle](https://arxiv.org/abs/2307.03172), historical study of particular models/tasks, not a universal present-day context-size performance guarantee.
+- Chapter 9 owns retrieval authorization and Chapter 21 owns data lifecycle. The new assertions verify arithmetic/rank/cache identity only; legacy performance and production labels are not certified by them.

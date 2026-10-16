@@ -1,5 +1,7 @@
 # Chapter 31: Enterprise AI control plane and multi-provider model gateways
 
+> **Reading note — additive technical review:** The original text below is retained unchanged. Its implementations and exercises are conceptual mocks, not production-grade deployments; original source-review labels, vendor dates, prices and model lists are not verified deployment or benchmark claims. Authentication does not grant tenant authorization, and local policy decisions need versioned control-plane replicas. The original modules omit `TenantContext`/`time` imports, use character-based token estimates, leave in-memory reservations unreconciled, and apply catch-all failover without a shared request deadline or per-attempt ledger. An approved, budgeted fallback after a provider 429 can be valid; timeout/5xx do not automatically make replay safe. Cancellation and an idempotency cache cannot guarantee remote cessation or prevent all duplicate billing; streamed local counts are not exact charges. See [Technical Foundations and Clarifications](#technical-foundations-and-clarifications).
+
 > **Part:** Part IX — Principal Engineering for Enterprise Agentic AI Platforms  
 > **Market evidence:** Target-role review (Abbott Principal AI Platform Engineer `PL` and AI/ML Engineer `ML`, Oct 2026). Required and core duties: gateway architecture, routing and failover, quota admission, per-tenant rate limits, credential brokering, token accounting, and cost allocation. Builds on Chapters 6, 15, 20, and 27.  
 > **Reader status:** Principal / Staff+ platform and systems architects designing enterprise multi-model ingress. Assumes distributed systems, IAM, and cloud networking prerequisites.  
@@ -565,3 +567,157 @@ The optimal architectural path is often a hybrid: leverage proven open-source sc
 - **NIST AI RMF 1.0:** Artificial Intelligence Risk Management Framework — Governance and Trustworthy Characteristics.
 - **Envoy Gateway AI Extension:** Cloud-native model routing, rate limiting, and token management specifications.
 - **OpenTelemetry Semantic Conventions for Generative AI Systems (v1.28+):** Standardized GenAI tracing and metric schemas.
+
+
+## Technical Foundations and Clarifications
+
+### From one question to several accountable operations
+
+A model gateway is a controlled entrance to model services. Suppose a help-desk application asks, “Summarize this incident.” The gateway determines who may submit that data, which deployments may receive it, how much capacity to reserve, and what happened to each attempt. Its job is not to make different models identical. It makes differences explicit enough for applications to handle them safely.
+
+Start with three units. A **request** is the application's logical task. A **step** is one action inside an agent workflow, such as retrieving an incident or generating its summary. A **token** is a model-specific unit of encoded input or output, not necessarily a word. One request can contain several model steps; one step can have several provider attempts. A request ID therefore cannot replace step and attempt IDs. Chapter 30 establishes the enclosing loop budget; this chapter accounts for the gateway portion.
+
+**HTTP** means Hypertext Transfer Protocol: methods, headers, bodies and response status describe an exchange. **TLS**, Transport Layer Security, protects a connection and authenticates its peer; **HTTPS** is HTTP over TLS. **mTLS** adds client-certificate authentication. **JWT**, JSON Web Token, carries claims; decoding its base64 text is not signature verification. **IAM** is identity and access management, and **IdP** is identity provider. **RPM** and **TPM** mean requests and tokens per minute. These are different limits from a model's maximum context length.
+
+### Identity first, permission second
+
+Authentication answers “which principal presented valid credentials?” Authorization answers “may this principal use this model, tenant and data category now?” A correctly signed token can still name an audience other than this gateway or carry insufficient privileges. Validate trusted issuer, allowed signature algorithm and key, audience, expiry and relevant token type before mapping claims to tenant context. RFC 8725 describes these validation boundaries. Never derive billing ownership solely from an application-supplied tenant header. [F31-1]
+
+A concrete lifecycle starts with HTTPS ingress, body-size and schema checks, then identity validation. The gateway binds the verified principal to an authorized tenant and cost center. It classifies the data, resolves an approved model capability, reserves capacity, obtains downstream credentials, sends one identified attempt, streams or returns the result, and reconciles usage. Each rejection should identify its own boundary without exposing credentials or sensitive prompts.
+
+Credential brokering is another authorization decision, not a copy operation. The gateway's service identity obtains narrowly scoped downstream credentials; it does not forward all the caller's privileges. **STS**, Security Token Service, issues temporary credentials, while AWS **SigV4**, Signature Version 4, signs requests using an AWS credential contract. Credential refresh needs bounded retries, expiry handling and redacted errors. “Kept in memory” does not prevent exposure through debug dumps or an overly privileged process.
+
+### Control-plane policy, data-plane decisions
+
+The **control plane** manages approved deployments, routing rules, keys, budgets and policy revisions. The **data plane** processes individual requests. Separating them does not mean removing authorization from the request path. Instead, publish validated, versioned policy snapshots to gateway replicas. Each replica checks its local decision cache and records the policy revision used, avoiding a remote administrative database lookup for every streamed chunk.
+
+Cache identity must include tenant, principal or relevant entitlement, operation, model capability and policy revision. A cached allow for one tenant must never authorize another. Define maximum staleness, revocation propagation and outage behavior. A low-risk read might continue under a recent signed snapshot; a sensitive operation might deny when freshness cannot be established. This is a risk-specific availability choice, not a universal instruction to fail open.
+
+A local cache cannot independently allocate the entire shared provider quota to every replica. Either coordinate shared admissions or distribute bounded capacity leases whose total is conservative. Administrative policy replication and request-capacity accounting are different problems. Keeping both explicit prevents a fast cache from becoming an oversubscription mechanism.
+
+### Reservation is an atomic promise, not an estimate log
+
+Tenant limits protect fairness; provider/deployment limits protect shared upstream capacity. Admission must check both and reserve before dispatch. Two workers that separately read “800 tokens remain” can each admit a 600-token call. An atomic check-and-reserve accepts at most one. Use a transaction, a correctly designed Redis operation, or another serialization mechanism covering the relevant counters. A Python dictionary shared by neither workers nor replicas does not establish this property.
+
+For an illustrative budget, a prompt estimate of 300 tokens plus an output ceiling of 200 gives a 500-token reservation. With 900 tokens available, one reservation leaves 400 and a second is refused. If the first receipt reports 300 input and 80 output tokens, local spend accounting can settle at 380 and release 120. Preserve request-count consumption for a submitted attempt. Unknown usage remains reserved or conservatively accounted for until a defined reconciliation policy resolves it.
+
+Keep financial reservations separate from the provider's own rate window. Azure's quota guidance explicitly distinguishes its maximum-processed-token admission estimate from post-processing billing counts; RPM may also be enforced over smaller windows. Releasing a local financial hold does not restore Azure's rate-limit capacity. **PTU**, Provisioned Throughput Unit, describes provisioned capacity, not a general synonym for TPM. Verify the deployment's actual quota contract. [F31-2]
+
+An append-only attempt ledger links tenant, request, step, attempt, deployment, policy revision, estimate, reservation, dispatch state, response identity and usage provenance. Settlement should be idempotent: processing the same receipt twice must not credit tokens twice. Retain rejected and failed attempts rather than recording only the successful fallback. Missing usage is unknown, not zero.
+
+### Failover and cancellation under one deadline
+
+A fallback must satisfy residency, privacy, capability, output-contract and budget requirements before it is a candidate. Bedrock's Converse API provides a common interface for models supporting messages, with model-specific parameters still possible; this does not establish universal equivalence with another provider's tool, image or reasoning behavior. Verify adapter mappings and permitted deployments rather than relying on a familiar model-family name. [F31-3]
+
+Classify failures using origin and execution evidence. A tenant-generated 429 must not escape that tenant's allocation through another provider. A documented upstream capacity rejection may permit carefully budgeted, approved fallback when the operation was not accepted and the secondary pool has capacity. Conversely, a timeout or 5xx may arrive after execution began. Such failures are not automatically safe to retry. RFC 9110 distinguishes idempotent semantics from merely repeating an HTTP request. [F31-4]
+
+A gateway idempotency cache can coalesce concurrent logical requests if key, tenant, payload digest, lifetime and in-progress behavior are specified. It cannot universally deduplicate executions already sent to different providers. Define whether deliberate duplicate inference is permitted, how its cost is bounded, and whether any returned tool proposal could cause an external effect. Never replay a business mutation just to recover a missing model response.
+
+Use one monotonic deadline across queueing, credential acquisition, attempts and cleanup. In a hypothetical 12-second budget, two seconds of admission and queueing plus five seconds of first-attempt work leave five seconds, not a fresh 12. Backoff, secondary execution and response delivery must fit that remainder. Connect, read and overall timeouts solve different problems.
+
+Cancellation closes local work and prevents new attempts, but a disconnected transport does not prove remote generation stopped. Record cancellation requested, cancellation acknowledged if available, and unresolved remote usage separately. A local tokenizer counts visible text, potentially missing hidden reasoning, cached-input categories, tool payloads and provider-specific billable units. Streaming chunks are not necessarily token boundaries. Prefer provider usage receipts for accounting, retaining estimates when the final usage event is absent.
+
+### Offline Foundation Example
+```python
+from dataclasses import dataclass, replace
+from threading import Lock
+
+@dataclass(frozen=True)
+class Attempt:
+    tenant: str
+    provider: str
+    reserved: int
+    state: str = "reserved"
+
+class Budget:
+    def __init__(self):
+        self.left = {"tenant:A": 900, "provider:P": 900}
+        self.attempts = {}
+        self.lock = Lock()
+
+    def reserve(self, op, tenant, provider, tokens):
+        if type(tokens) is not int or tokens <= 0:
+            raise ValueError("positive integer required")
+        keys = ("tenant:" + tenant, "provider:" + provider)
+        with self.lock:
+            if op in self.attempts:
+                raise ValueError("duplicate attempt")
+            if any(self.left.get(k, 0) < tokens for k in keys):
+                return False
+            for k in keys:
+                self.left[k] -= tokens
+            self.attempts[op] = Attempt(tenant, provider, tokens)
+            return True
+
+    def settle(self, op, actual):
+        with self.lock:
+            a = self.attempts[op]
+            if a.state != "reserved":
+                raise ValueError("already settled")
+            if type(actual) is not int or not 0 <= actual <= a.reserved:
+                raise ValueError("invalid demonstration receipt")
+            for k in ("tenant:" + a.tenant, "provider:" + a.provider):
+                self.left[k] += a.reserved - actual
+            self.attempts[op] = replace(a, state="settled")
+
+def may_fallback(status, not_accepted, approved, remaining):
+    return status == 429 and not_accepted and approved and remaining > 0
+
+b = Budget()
+assert b.reserve("req1/step1/attempt1", "A", "P", 500)
+assert not b.reserve("req2/step1/attempt1", "A", "P", 500)
+b.settle("req1/step1/attempt1", 380)
+assert b.left == {"tenant:A": 520, "provider:P": 520}
+try:
+    b.settle("req1/step1/attempt1", 380)
+except ValueError:
+    pass
+else:
+    raise AssertionError("receipt applied twice")
+assert may_fallback(429, True, True, 5)
+assert not may_fallback(503, False, True, 5)
+assert not may_fallback(429, True, False, 5)
+assert not may_fallback(429, True, True, 0)
+```
+
+This fixture changes only local memory; it performs no network calls or external mutations. Its lock covers two local counters, not distributed replicas. It has no RPM windows, persistence, real tokenizer, provider billing or remote cancellation. The simplified fallback predicate exercises one permitted category, not a complete error classifier. The receipt ceiling is a fixture restriction; a real overrun requires an explicit debt/accounting policy, never silently clamping usage.
+
+### Local exercise: inspect before extending
+
+1. Copy only the preceding Python block into a local file and run `python3 filename.py`. A successful run is silent; an assertion failure raises an exception.
+2. Trace the first reservation: both counters become 400. Confirm that the rejected second reservation creates no ledger entry. Trace settlement to 520.
+3. Withhold settlement to represent missing usage. Confirm that capacity remains held. Sketch separate terminal-rejected, confirmed-completed and unknown states before adding release logic.
+4. On paper, add an attempt on another provider. Explain why it still spends the same tenant's budget and needs a distinct attempt record. Do not call a live provider for this exercise.
+
+For hypothetical prices of $2 per million input tokens and $8 per million output tokens, 300 input plus 80 output costs `(300 × 2 + 80 × 8) / 1,000,000 = $0.00124`. Those are exercise rates, not a vendor quotation. Separate cached or reasoning charges according to the actual pricing contract. The key trade-off is conservative reservation versus utilization: larger output ceilings reduce overrun risk but admit fewer simultaneous calls.
+
+### Foundation self-checks
+
+**Q1: A valid JWT says tenant A, but a header says tenant B. Which owns the charge?**
+
+**Answer:** Derive ownership from verified identity and current authorization policy. Ignore or reject the contradictory header; do not transfer charges to B. Signature validation, audience checks and tenant membership are separate requirements. Record the policy revision without logging the bearer token.
+
+**Q2: The first model attempt times out. Why not immediately use another provider?**
+
+**Answer:** The first may still be executing and billable. Inspect dispatch and provider semantics, preserve unknown usage, and allow another attempt only under an explicit duplicate-risk policy with approved capacity and remaining deadline. If tool effects are involved, reconcile those effects independently. A timeout is missing evidence, not proof of rejection.
+
+**Q3: Does the fixture's release of 120 tokens mean the provider accepts 120 more immediately?**
+
+**Answer:** No. It updates local reservation accounting only. Provider rate limits can use different estimation and time-window rules; billing can use other usage categories. Maintain separate local spend, local rate-admission and upstream quota evidence rather than treating them as one counter.
+
+### Foundation Key Takeaways
+
+- Bind identity, tenant permission and accounting ownership before dispatch.
+- Replicate versioned policy; coordinate scarce shared capacity separately.
+- Reserve atomically and settle each attempt once with explicit usage provenance.
+- Budget fallback and cancellation globally; preserve remote uncertainty.
+- Local tests validate local invariants, not provider billing or production reliability.
+
+### Foundation Sources and Boundaries
+
+- **F31-1:** [RFC 8725, JWT Best Current Practices](https://www.rfc-editor.org/rfc/rfc8725), February 2020, especially sections 3.1 and 3.8–3.12.
+- **F31-2:** [Microsoft Azure OpenAI quota guidance](https://learn.microsoft.com/en-us/azure/foundry-classic/openai/how-to/quota), fetched for this review; deployment-specific limits remain changeable.
+- **F31-3:** [Amazon Bedrock Converse API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html), fetched for this review; adapter compatibility still requires testing.
+- **F31-4:** [RFC 9110, HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110), June 2022, section 9.2.2.
+
+These sources support mechanisms, not the original mock prices, delays, model availability or production-grade label. The foundation example tests local arithmetic and decisions only. The original missing imports, character estimates, unreconciled reservations and blanket exception failover remain intentionally unmodified.

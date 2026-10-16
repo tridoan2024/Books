@@ -1,5 +1,7 @@
 # Chapter 40: Deployment at scale: distributed agent fleets and cloud AI platforms
 
+> **Reading note — additive technical review (October 16, 2026):** This chapter concerns multi-tenant cloud/data-center fleets, not desktop hosting. Start with [Technical Foundations and Clarifications](#technical-foundations-and-clarifications) for definitions and a worked deployment model. The preserved 100-tenant/10,000-session workload, percentages, timings and RTO targets are hypothetical inputs, not measured scale. Asynchronous replication cannot guarantee zero RPO; table partitioning is not automatic sharding or fencing; a numeric fencing column alone rejects no stale writer. The original in-memory scheduler is ordinary tenant round-robin with local lane ordering, not distributed DWRR, global priority reservation or crash-safe slot accounting. Its tests do not establish fleet capacity, zone recovery or safety. The appendix explains the missing contracts and a measured load/failure-test plan; none of those cloud drills has been run for this book.
+
 > **Part:** Part X — Agentic-System Fundamentals and Deployment at Scale  
 > **Market evidence:** Explicit owner request and target-role review (Abbott Principal AI Platform Engineer `PL`, Principal AI/Agentic Engineer `AG`, and AI/ML Engineer `ML`, Oct 2026). Required and core duties: distributed cloud systems, multi-tenant scheduling, queue backpressure, worker and GPU accelerator autoscaling, durable shared state, multi-zone High Availability (HA), multi-region Disaster Recovery (DR), fleet-wide GitOps rollouts, and measured failure/load testing. Complements Chapters 14, 15, 20, 31, 32, 33, and 36.  
 > **Reader status:** Principal / Staff+ distributed systems engineers, cloud platform architects, and infrastructure leads deploying enterprise agent fleets. Assumes Kubernetes cluster administration, cloud networking, distributed databases, and high-concurrency event streaming prerequisites.  
@@ -472,3 +474,160 @@ def test_per_tenant_concurrency_capping():
 - **Ghodsi et al. (UC Berkeley):** Dominant Resource Fairness (DRF): Fair Allocation of Multiple Resource Types (NSDI).
 - **Amazon Web Services Architecture Center:** Disaster Recovery (DR) Architecture on AWS: Multi-Region Active/Standby Patterns.
 - **KEDA (Kubernetes Event-driven Autoscaling):** Production Scaling Specifications for Enterprise Queues and Distributed Streams.
+
+
+---
+
+## Technical Foundations and Clarifications
+
+### From one process to a fleet: vocabulary and topology
+
+A **process** executes software with its own memory. A **container** packages that software and dependencies under operating-system isolation. A Kubernetes **Pod** groups containers that share network and lifecycle context; a **node** provides compute on which Pods run. A **Deployment** maintains desired Pod replicas and replaces versions gradually. These components provide placement and lifecycle management, not proof that an agent safely completed a task. A **fleet** is the collection of workers and supporting services operating under shared scheduling, identity and release contracts.
+
+An **availability zone** is a provider-defined failure domain within a region. A **region** is a geographic deployment area with its own service availability, capacity and data-residency implications. Three replicas on the same node are not three-zone availability. A load balancer distributes requests among healthy targets, whereas a scheduler places tasks on eligible workers. An **orchestrator** tracks task transitions; a **message broker** persists or transports work messages. They solve different problems even if one product combines them.
+
+A modest multi-zone reference topology separates ingress/API and model-gateway replicas, orchestration services, task queues, CPU worker pools, sandboxed tool services, retrieval/index services, a durable workflow/receipt database, an immutable artifact registry and telemetry collection. Identify which state survives worker loss and which dependencies are shared across zones. The gateway can serve requests using previously approved local policy while a registry is temporarily unavailable, but must not promote a new release or resurrect revoked permissions. Fleet control-plane failure and task data-path failure need separate operating rules. [F40-1, F40-2]
+
+### Derive capacity from work, not from an impressive session count
+
+Ten thousand logged-in sessions are not ten thousand continuously executing agents. Distinguish open sessions, admitted tasks, model calls, tool calls and simultaneous streams. The original arithmetic is conditional: **if** ten thousand tasks are executing with a mean residence time of sixty seconds, Little's Law gives roughly 166.7 task completions per second in steady state. At six model calls and four tool calls per task, that implies about 1,000 model calls and 666.7 tool calls per second. With 2,500 input and 350 output tokens per model call, demand is 2.5 million input and 350,000 output tokens per second, or 150 million and 21 million respectively per minute. It does not prove that any provider offers this quota.
+
+Now use an approachable hypothetical workload: twenty arriving tasks per second, four model calls and two retrieval queries per task, twelve seconds mean task residence time, and 0.4 seconds mean retrieval service time. Average concurrent tasks are 240; model-call demand is eighty per second; retrieval demand is forty queries per second, corresponding to sixteen concurrent retrieval operations. If each worker can safely maintain twenty-five concurrent tasks, the idealized lower bound is ten workers. With a 70% planned utilization target it becomes fourteen workers. For three evenly balanced zones to sustain that target after losing one zone, plan twenty-one workers in total, leaving fourteen. These are worksheet outputs; measure per-worker limits and skew before choosing actual deployment sizes.
+
+Queue wait is part of end-to-end latency. Stable-average formulas do not predict p95/p99 tails, burst behavior or memory exhaustion. Separate prefill input demand from decode output demand for self-hosted models; both depend on sequence length and model/hardware configuration. For hosted models, request/token quotas, region approvals and provider queueing can remain the limiting factors even after the worker fleet scales.
+
+### Admission, fairness and leases across many workers
+
+**Backpressure** stops or slows producers when downstream work cannot keep up. A bounded queue absorbs a limited burst; it does not create infinite capacity. At eighty model calls per second of demand and sixty of service capacity, queue growth is twenty calls per second. A 1,000-call buffer fills in approximately fifty seconds if those rates persist. Return explicit overload/deadline responses or defer eligible batch work rather than accumulating unbounded memory.
+
+Tenant fairness must account for different costs. Ordinary round-robin chooses one task per tenant; a task costing one hundred times more tokens can still monopolize capacity. **Deficit round-robin (DRR)** credits each tenant with a quantum and subtracts an estimated work cost as tasks are dispatched. Weighted quanta represent agreed shares. **Dominant resource fairness (DRF)** instead compares each tenant's largest fraction of shared resource capacity, such as CPU and GPU memory. It is a multi-resource allocation method, not another name for a round-robin queue. Both need resource estimates and policy choices; neither alone guarantees a latency SLO. [F40-4]
+
+Priority lanes protect interactive work only when scheduling and admission reserve capacity or bound batch occupancy. Unlimited strict priority can starve batch work; work-conserving borrowing can improve utilization if reclamation is safe. Do not abruptly preempt an external tool effect simply because a high-priority task arrives. Include aging, tenant caps, maximum queue wait, provider-aware reservations and safe checkpoint boundaries.
+
+A broker's **visibility timeout** or a worker **lease** determines when abandoned work can be reassigned. A heartbeat is evidence of recent communication, not proof an old worker has stopped. A **fencing epoch** is an increasing ownership generation issued through a consistent authority. The state store or downstream effect receiver must reject stale epochs. Without enforcement at the resource boundary, a lease is only a scheduling convention. Use stable task/operation IDs, acknowledge messages only after required durable state is committed, and reconcile reservations after worker crashes. Redelivery must not mint a new external mutation identity.
+
+The original scheduler maintains counters in one process. It permits release without matching a claimed task and does not have distributed ownership, provider reservations or durable acknowledgement. Its queue threshold uses `> 5000`, allowing one extra enqueue; expired-head handling can bypass remaining same-lane tasks in one scan. Preserve it as a local mechanics sketch, not the advertised DWRR implementation.
+
+### Scale different layers independently
+
+HTTP ingress scales with connections and parsing work. Agent workers scale with ready queue age, active work, memory and socket limits. Retrieval scales with query throughput, index size and storage/cache behavior. Model serving scales with hardware throughput and accelerator memory. Increasing one layer can merely overload the next. **Horizontal scaling** adds replicas; **vertical scaling** enlarges a replica. Kubernetes autoscaling changes desired replicas, while a node autoscaler provisions the machines needed to schedule them. Neither makes a GPU or provider allocation appear instantly.
+
+A **graphics processing unit (GPU)** accelerates matrix operations. Model weights consume memory even when no task is running. The **key/value (KV) cache** stores attention intermediates for active sequences; it grows with sequence length, architecture and concurrency. A simplified unshared estimate is `2 × layers × KV-heads × head-dimension × bytes-per-value × total resident tokens`. Grouped-query attention, quantization, paging, sharing and allocator overhead change the actual footprint. Prefill processes prompt tokens; decode generates successive output tokens. Continuous batching admits and retires sequences between decoding iterations, whereas request-level dynamic batching and specialized kernels may still be appropriate for other workloads. Triton and vLLM are not interchangeable guarantees.
+
+Scale accelerator pools using a combination of queue delay, input/output token throughput, memory pressure, latency and measured utilization. There is no universal 85% KV threshold. Keep warm replicas where cold-start/loading time exceeds the interactive queue budget; cap context length and batch size to prevent out-of-memory failures. Verify model/device compatibility, tensor-parallel placement, tenant isolation and failure behavior before claiming a new pool is ready.
+
+### Durable data, zone loss and regional recovery
+
+**Replication** copies data to another instance; **partitioning** splits data among subsets; **sharding** places subsets across independently managed servers. A PostgreSQL partitioned table can remain on one server and disk. Hashing only by tenant keeps one hot tenant on one partition and does not spread that tenant's writes. Consider a composite tenant/workflow partition strategy, bounded connection pools and per-tenant admission, retaining authorization on every query. Create child partitions and enforce transaction/CAS rules: the earlier SQL declaration does neither by itself.
+
+**Write-ahead logging (WAL)** records changes for durable recovery. A replica may lag behind the primary. **Recovery point objective (RPO)** specifies tolerable loss of acknowledged data; **recovery time objective (RTO)** specifies tolerable restoration time. Asynchronous replication acknowledges before a remote replica durably confirms the change, so regional failure may lose recent acknowledgements. PostgreSQL's documentation explicitly ties that loss to replication delay. Synchronous acknowledgement to suitable remote durable storage can protect the agreed failure model but adds latency and may reduce write availability during partitions. Backups remain necessary for corruption or accidental deletion. [F40-3]
+
+Failover must first establish a single writable authority or safely fence the old primary. Move ingress, promote eligible state, restore worker capacity and reconcile unknown effects before resuming mutations. DNS caches and long-lived connections make “all traffic shifts in fifteen seconds” an unmeasured assumption. Track workflow state, broker offsets, source indexes and effect receipts separately; they may have different RPOs. A receipt missing after failover is not evidence that a destination action never happened. Query the downstream system by stable operation ID rather than blindly replaying or compensating an unknown action. Residency approvals may prohibit sending data to an otherwise healthy region. [F40-5]
+
+### Fleet rollout and rollback are state migrations
+
+Bind image, workflow, prompt, model deployment, tool schema, retrieval revision and policy versions in a release bundle. **Infrastructure as code (IaC)** defines desired infrastructure; **GitOps** reconciles approved repository state into a deployment. Neither grants authority to ship a release. Pin in-flight workflows to compatible code, canary by tenant/workload cohort, and gate promotion on task quality, safety and operational evidence.
+
+Kubernetes `maxSurge` and `maxUnavailable` control replica replacement; readiness decides whether a Pod accepts work. A progress deadline reports stalled deployment; an external controller or operator still owns the release decision. Stop dequeuing before draining, persist safe state, then shut down within a measured grace window. Ninety seconds is not universally sufficient. Schema migrations should expand compatibility before old fields/readers are removed. Rollback cannot undo a database migration or external mutation by restoring yesterday's image, and it must never re-enable revoked authority. [F40-1]
+
+### Offline Foundation Example
+
+```python
+# Python 3.10+; hypothetical arithmetic only, not a fleet benchmark.
+from math import ceil
+
+arrival_per_s = 20
+model_calls_per_task = 4
+retrievals_per_task = 2
+mean_task_s = 12
+safe_slots_per_worker = 25
+planned_utilization = 0.70
+zones = 3
+
+concurrent_tasks = arrival_per_s * mean_task_s
+surviving_workers = ceil(concurrent_tasks /
+                         (safe_slots_per_worker * planned_utilization))
+workers_per_zone = ceil(surviving_workers / (zones - 1))
+assert concurrent_tasks == 240
+assert surviving_workers == 14
+assert workers_per_zone * zones == 21
+assert (zones - 1) * workers_per_zone >= surviving_workers
+assert arrival_per_s * model_calls_per_task == 80
+assert arrival_per_s * retrievals_per_task * 0.4 == 16
+
+def queue_growth(arrivals, capacity, seconds):
+    if min(arrivals, capacity, seconds) < 0:
+        raise ValueError("nonnegative quantities required")
+    return max(0, arrivals - capacity) * seconds
+
+assert queue_growth(80, 60, 50) == 1000
+assert queue_growth(60, 80, 50) == 0
+
+# A hypothetical receiver enforcing ownership epochs and operation identity.
+# This dictionary model is NOT durable, transactional or distributed storage.
+class Receiver:
+    def __init__(self):
+        self.epoch = 1
+        self.receipts = {}
+    def apply(self, epoch, operation_id, payload):
+        if epoch != self.epoch:
+            raise PermissionError("stale or unissued ownership epoch")
+        if operation_id in self.receipts:
+            old_payload = self.receipts[operation_id]
+            if old_payload != payload:
+                raise ValueError("operation identity reused for different payload")
+            return "replayed"
+        self.receipts[operation_id] = payload
+        return "applied"
+
+r = Receiver()
+assert r.apply(1, "task-17:step-2", "reserve-fixture") == "applied"
+r.epoch = 2  # Simulated authoritative reassignment, not an election algorithm.
+try:
+    r.apply(1, "task-17:step-3", "other-fixture")
+except PermissionError:
+    pass
+else:
+    raise AssertionError("stale owner was accepted")
+assert r.apply(2, "task-17:step-2", "reserve-fixture") == "replayed"
+assert len(r.receipts) == 1
+```
+
+### A measured load and failure exercise, not desktop hosting
+
+Use an authorized lab cluster with multiple workers and stateful dependencies; keep external effects behind safe mocks. Freeze arrival distributions, interactive/batch mix, step fan-out, input/output sizes, burst duration, tenant skew, provider quotas and release versions. Use an **open-loop** generator that attempts the stated arrival rate: a closed-loop client that waits for each response can hide saturation by slowing its own traffic. Record generator capacity and missed schedules to avoid reporting only surviving requests.
+
+| Drill | Required observation | What a local smoke test cannot establish |
+|---|---|---|
+| Mixed interactive/batch load | admitted/rejected/completed rate, queue wait, p95/p99 full-task latency, task success and cost | sustained fleet capacity |
+| Hot tenant and queue saturation | bounded memory/depth, fair shares, other-tenant SLOs, rejection semantics | distributed quota correctness |
+| Worker/zone loss | claim transfer, durable checkpoints, fenced old owners, recovery latency | multi-zone availability |
+| Provider throttle/outage | capped attempts, cancellation state, reservations and spend reconciliation | remote provider cancellation guarantee |
+| State-store failover/region loss | acknowledged-data loss, RTO/RPO by store, external receipts reconciled | zero regional data loss |
+| Live-version migration/rollback | old/new workflow compatibility, no duplicate effects or revoked-authority revival | safe fleet-wide rollback |
+
+Compute success/safety denominators including failed, rejected and inconclusive work according to the predeclared contract. Link task traces to exact versions and observed outcomes; report resource utilization and total cost per successful task, not only best-case token rates. Mark every unrun drill `not run`, every worksheet `theoretical` and every measured receipt with its actual conditions. None of these distributed drills was executed for this chapter revision.
+
+### Foundation self-checks
+
+**Q1: Does twenty-one workers prove capacity for 240 tasks?** No. That result assumes twenty-five safe slots per worker, 70% utilization, balanced zones and stable means. Load and zone-loss tests must validate service times, memory, provider capacity and tails.
+
+**Q2: Can asynchronous replication meet zero RPO?** Not as an unconditional guarantee for acknowledged writes. Protection depends on durable acknowledgement and the failure model. Measure lag and specify where data may be lost; the original “approximately zero” statement is not an accepted DR receipt.
+
+**Q3: Why does a fencing token not solve every duplicate effect?** It rejects stale owners only where enforced. The current owner can still resend an uncertain action. Stable operation identity, downstream transactional deduplication or authoritative reconciliation provides the separate effect guarantee.
+
+### Foundation Key Takeaways
+
+- Scale a topology of distinct services and durable dependencies, not a single desktop application.
+- Derive session, task, call, token, queue and accelerator demand separately; label assumptions.
+- Enforce tenant/provider admission, fair shares, durable claims and fenced ownership at resource boundaries.
+- Separate replicas, partitions, shards, backups and synchronous/asynchronous durability guarantees.
+- Treat load, failure, regional recovery and rollout receipts as separate acceptance evidence.
+
+### Foundation Sources and Boundaries
+
+- **F40-1:** Kubernetes, [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/), source text inspected October 16, 2026, “Updating a Deployment,” “Deployment status,” and “Canary deployments.” Deployment health is not application-level agent acceptance.
+- **F40-2:** Kubernetes, [Pod Topology Spread Constraints](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/), inspected October 16, 2026, “Motivation” and `topologySpreadConstraints`. Placement rules still depend on available eligible nodes and configured constraints.
+- **F40-3:** PostgreSQL 18, [Log-Shipping Standby Servers](https://www.postgresql.org/docs/18/warm-standby.html#SYNCHRONOUS-REPLICATION), section 26.2.8 inspected October 16, 2026: async loss proportional to replication delay; synchronous confirmation and its latency trade-off.
+- **F40-4:** Ghodsi et al., [Dominant Resource Fairness](https://www.usenix.org/conference/nsdi11/dominant-resource-fairness-fair-allocation-multiple-resource-types), NSDI 2011, conference abstract inspected October 16, 2026. The paper is a foundational reference, not evidence that the preserved scheduler implements DRF.
+- **F40-5:** AWS, [Disaster recovery options in the cloud](https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html), inspected October 16, 2026, strategy comparison and requirement to assess/test recovery. Provider examples are not prescribed vendor choices or achieved RTOs.

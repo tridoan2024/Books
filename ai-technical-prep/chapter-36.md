@@ -1,5 +1,7 @@
 # Chapter 36: AI reliability engineering, capacity and FinOps
 
+> **Reading note — additive technical review (October 16, 2026):** Read [Technical Foundations and Clarifications](#technical-foundations-and-clarifications) for SLI/SLO, queueing, cancellation and spend fundamentals. The original delays, dollar figures, fallback quality and fixed iteration limits are hypothetical, not benchmarks or universal safe settings. A policy-correct refusal can be a successful outcome. Missing observations are not 100% health. The original generator checks disconnects only after receiving a chunk and does not close the upstream resource; the budget helper checks already-recorded spend, not atomic reservations or its unused task ceiling. Transport cancellation cannot prove remote inference/billing stopped. The original “production-grade” label is therefore qualified as a local teaching sketch, not a verified SRE system.
+
 > **Part:** Part IX — Principal Engineering for Enterprise Agentic AI Platforms  
 > **Market evidence:** Target-role review (Abbott Principal AI Platform Engineer `PL`, Principal AI/Agentic Engineer `AG`, and AI/ML Engineer `ML`, Oct 2026). Required and core duties: Service Level Objectives (SLOs), error budgets, streaming cancellation, backpressure, capacity planning, Kubernetes sizing, incident response runbooks, FinOps token accounting, and build-vs-buy vendor economics. Builds on Chapters 14, 15, 16, 18, 19, 20, and 27.  
 > **Reader status:** Principal / Staff+ platform architects, SRE leads, and engineering directors accountable for the 99.9% uptime, scalability, and cloud economics of enterprise AI systems. Assumes Kubernetes, Terraform/IaC, and Site Reliability Engineering prerequisites.  
@@ -450,3 +452,123 @@ Therefore, AI SRE establishes **Composite SLIs** that combine HTTP status, TTFT,
 - **Google SRE Book (Beyer et al.):** Service Level Objectives, Error Budgets, and Managing Critical State.
 - **FinOps Foundation:** FinOps Open Cost Management Standards for Generative AI.
 - **KEDA Documentation:** Kubernetes Event-driven Autoscaling via Custom Telemetry and Queue Lag.
+
+
+---
+
+## Technical Foundations and Clarifications
+
+### Reliability starts with the user-visible contract
+
+**Site reliability engineering (SRE)** applies software engineering to service operation. A **service-level indicator (SLI)** measures a defined property; a **service-level objective (SLO)** sets its target over a stated window; a **service-level agreement (SLA)** adds an external commitment and usually consequences. They are not synonyms. A request that returns HTTP 200 can still be unusable, but an appropriate policy refusal need not be a failure. Choose indicators according to what the product promises, not a universal rule that every answer must satisfy the same threshold. [F36-1]
+
+For a maintenance assistant, useful indicators include proportion of valid admitted tasks completed, time until useful output, full-task latency, supported-answer quality and unauthorized-action rate. **Time to first token (TTFT)** measures responsiveness; it can look good while a stream later stalls. **Tokens per second (TPS)** measures generation rate but is not business throughput. Separate transport/service availability from task quality and safety so an incident can be diagnosed rather than buried in one opaque score.
+
+Define the denominator in advance. Record malformed input, deliberate policy refusal, caller cancellation, overload rejection, internal failure and provider failure separately. Some may be excluded from an availability indicator under the agreed contract, but still report their counts and user impact. If a quality evaluator is delayed or missing, label quality unknown. The original helper's zero-observation return of 1.0 is a programming convention, not evidence that a service was healthy.
+
+### Error budgets and latency distributions
+
+An **error budget** is the tolerated fraction of bad service implied by the SLO. For a request-based target of 99.9% over one million eligible requests, the allowed count is 1,000. Observing 400 bad requests consumes 40% of that count; observing 1,200 exceeds it. For a time-based 30-day objective, 0.1% corresponds to 43.2 minutes, but do not substitute that downtime interpretation for a request-based SLI without justification.
+
+A **burn rate** compares observed bad fraction with the permitted fraction. At a 99.9% SLO, a 1% error rate burns the budget at ten times the steady allowed rate. Use short and long windows to detect severe incidents while avoiding pages for tiny fluctuations. Error budgets guide reliability work, rollout pauses and risk discussion; they are not permission to tolerate critical safety violations.
+
+**p95 latency** means 95% of observations are at or below that value; p99 describes a rarer tail. Averages can hide a small group of users receiving unusably slow service. Measure the entire task, including ingress, queue wait, retrieval, model calls, tools and verification. Keep distribution boundaries and sample counts. An artificially capped client or load generator can hide failures by slowing its own request rate; report attempted as well as completed throughput.
+
+### Capacity is a chain of bottlenecks
+
+Little's Law relates average in-flight work `L`, arrival rate `lambda` and residence time `W` in a stable system: `L=lambda×W`. At fifty tasks per second and six seconds mean residence, average concurrency is 300. If thirty concurrent tasks per worker is an experimentally safe limit, ten workers is an idealized capacity floor, not an SLO-safe production recommendation. Applying headroom and failure reserve increases that number. Burstiness, heavy-tailed service times, provider throttling and uneven tenants need load testing; Little's Law alone supplies no p99 prediction.
+
+A **queue** buffers tasks; **backpressure** limits new work when the next stage cannot keep up. When demand persistently exceeds service rate, a larger queue delays failure but does not solve it. With arrival 120 tasks/s and capacity 100, backlog grows twenty per second. A 600-task queue fills in thirty seconds if those rates persist. Bound depth, age and memory, reject or defer under the contract, and keep interactive/batch lanes from starving each other.
+
+Async I/O permits many waiting tasks without one thread per connection. It does not eliminate socket, memory or downstream quota limits. CPU remains relevant for parsing, tokenization, retrieval and self-hosted inference; it is simply not a sufficient scaling signal for all I/O-heavy workers. Scale using queue age, active tasks, resource usage and SLO pressure. **KEDA** is Kubernetes Event-driven Autoscaling; **HPA** is Horizontal Pod Autoscaler. They change replica count but cannot remove a provider token quota or instantly load model weights onto scarce GPUs. Chapter 40 owns fleet placement and zone-loss capacity.
+
+### Streaming, cancellation and safe degradation
+
+A streamed result sends chunks before the full response exists. A chunk is not necessarily one token. The client may close while the worker is waiting for the next chunk. Checking connection state only after that chunk arrives misses a hung upstream wait. Use request lifecycle cancellation with bounded read/overall deadlines, and close async generators or HTTP response resources in `finally`. Distinguish user cancellation from provider failure so cancellation does not trigger automatic fallback.
+
+**Cancellation requested**, local cleanup complete and remote cancellation acknowledged are separate observations. Dropping a socket can prevent local accumulation but does not prove a remote provider stopped generating or billing. Retain uncertain usage for later settlement. A mock asserting two delivered chunks validates local behavior only; it cannot establish provider spend or ongoing external effects.
+
+**Graceful degradation** restricts capabilities under constrained conditions. A smaller model might serve a low-risk summary well but fail a complex tool-selection or clinical task. A cached answer must remain authorized and fresh. A deterministic fallback can be reliably wrong if its rules do not meet the task. Maintain a capability-specific matrix: continue a proven read-only subset, defer eligible batch work, stop unsafe mutations and route required human review through an approved process. Smaller, cheaper and deterministic are not synonyms for safe. Apply hysteresis and recovery criteria so a transient signal does not cause constant mode changes.
+
+### FinOps is accounting plus admission discipline
+
+**FinOps** is collaborative management of technology spending and value. Token rates matter, but the product metric is often **cost per successful task**: all relevant inference, retrieval, serving and operating costs divided by verified successful outcomes. Include failures and retries in the numerator. If total cost is $120 for 800 successful tasks, cost per success is $0.15, even if 1,000 tasks were attempted. Count costs once: gateway usage events and a provider invoice may describe the same spend.
+
+Use exact decimal currency or integer minor units at the defined precision, not casual floating-point equality for financial records. Before dispatch, reserve a conservative charge against both task and tenant budget. Concurrent workers must not each observe the same remaining dollars and overspend them. Settle each attempt once using usage provenance; retain unknown charges, overrun debt and invoice reconciliation. Distinguish the task ceiling, monthly budget, provider rate quota and active-concurrency cap. An end-of-call overspend check is an alert, not a hard pre-execution bound.
+
+A monthly ledger needs a period identity, reset policy and late-charge handling. A crash can strand a reservation; do not release it merely because the worker disappeared if inference may still be billable. Budget controls must preserve cancellation, cleanup and mandatory reconciliation rather than killing the only process able to resolve an unknown effect. Fixed ten-step/sixty-second/dollar limits in the original are illustrative product choices, not universal requirements. Model input/output/cache/reasoning rates and the number of attempts determine actual costs.
+
+### Offline Foundation Example
+
+```python
+# Synthetic event counts and integer milli-dollar reservations, no providers.
+from fractions import Fraction
+
+eligible, bad = 1_000_000, 400
+allowed_bad = eligible * Fraction(1, 1000)
+assert allowed_bad == 1000
+assert Fraction(bad, allowed_bad) == Fraction(2, 5)
+assert Fraction(1, 100) / Fraction(1, 1000) == 10
+assert 50 * 6 == 300
+assert (120 - 100) * 30 == 600
+
+def observed_sli(good, total):
+    return None if total == 0 else Fraction(good, total)
+assert observed_sli(0, 0) is None
+assert observed_sli(999, 1000) == Fraction(999, 1000)
+
+class LocalBudget:
+    def __init__(self, available):
+        self.available = available
+        self.holds = {}
+    def reserve(self, attempt, amount, task_ceiling):
+        if attempt in self.holds or type(amount) is not int or amount < 0:
+            raise ValueError("invalid or duplicate reservation")
+        if amount > task_ceiling or amount > self.available:
+            return False
+        self.available -= amount
+        self.holds[attempt] = amount
+        return True
+    def settle(self, attempt, actual):
+        held = self.holds[attempt]
+        if type(actual) is not int or not 0 <= actual <= held:
+            raise ValueError("fixture overrun requires a different policy")
+        self.available += held - actual
+        del self.holds[attempt]
+
+b = LocalBudget(1000)
+assert b.reserve("attempt-a", 700, 800)
+assert not b.reserve("attempt-b", 700, 800)
+b.settle("attempt-a", 500)
+assert b.available == 500
+assert Fraction(120, 800) == Fraction(3, 20)
+```
+
+This is a sequential in-memory example, not a distributed transactional budget manager. Its task ceiling represents the single attempt in this fixture; a multi-step task requires cumulative reserved/settled totals. Real overrun and late charges need explicit accounting, not clamping. The example tests arithmetic, missing-SLI status and local admission, not streaming cleanup, provider cancellation or autoscaling.
+
+### A practical runbook and deployment-choice worksheet
+
+Before an incident, name owners for gateway, runtime, retrieval, provider integration and ledger. During one, identify whether the failure is queue saturation, slow generation, unsafe output, store failure or missing telemetry. Reduce admission where needed, preserve tenant/authority boundaries, stop new unsafe effects, and reconcile in-flight work. Verify recovery using actual task completions and restored queues, not one successful health endpoint. Preserve artifact versions and timelines for regression rollback.
+
+Compare hosted and self-managed serving using a worksheet: demand profile, model capability, resident memory, input/output length distributions, latency target, committed provider quota, accelerator utilization, redundancy, idle cost, operations staffing and security obligations. A hosted API avoids managing weights but adds provider limits; self-managed serving offers control but needs lifecycle, capacity and incident ownership. Neither is always cheaper. Run a bounded load/cost experiment with safe tools; distinguish measured utilization from theoretical throughput.
+
+### Foundation self-checks
+
+**Q1: A refusal arrived quickly. Is it bad service?** It depends on the declared task and policy. Correctly denying unauthorized work can be good behavior; record refusal counts separately and do not hide genuine quality or availability failures through ad hoc exclusions.
+
+**Q2: Why can a budget check at completion overspend?** Multiple admitted calls can consume the same remaining balance before costs arrive. Reserve before dispatch atomically, then settle once; keep unknown or late usage under a defined accounting policy.
+
+**Q3: Does more worker capacity solve slow provider responses?** It can increase in-flight waiting and worsen saturation without increasing provider capacity. Bound concurrency, queues and retries, and scale the actual bottleneck using measured service data.
+
+### Foundation Key Takeaways
+
+- Define SLI/SLO/SLA and denominators before interpreting health.
+- Separate availability, latency, quality, safety and missing evidence.
+- Use stable-average capacity math as a worksheet, then measure tails and bursts.
+- Propagate cancellation and clean up locally without promising remote billing cessation.
+- Reserve and reconcile costs across task/tenant/period boundaries; degrade only to qualified capabilities.
+
+### Foundation Sources and Boundaries
+
+- **F36-1:** Google SRE Book, [Service Level Objectives](https://sre.google/sre-book/service-level-objectives/), terminology/indicator/objective sections inspected October 16, 2026; its examples are not this application's SLOs.
+- Chapter 31 owns model-attempt accounting, Chapter 35 evaluation evidence and Chapter 40 deployment-scale capacity. The original generator and FinOps helper remain preserved with their missing cleanup, task aggregation, reservation and period controls explicitly qualified. No provider load benchmark or live incident drill was run for these additions.

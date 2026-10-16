@@ -1,5 +1,7 @@
 # Chapter 35: Agent evaluation, GenAI tracing and release evidence
 
+> **Reading note — additive technical review (October 16, 2026):** The original examples and interview answers are retained; their “production-grade,” “signed,” calibrated-judge and benchmark claims are not verified releases. SHA-256 is a digest, not a signature. Order swapping can expose positional instability but cannot eliminate all judge bias. Sample counts, kappa thresholds and p-values need workload-specific justification. The original invalid-output test actually yields four failure reasons, not its asserted three, and its module imports are incomplete. Read [Technical Foundations and Clarifications](#technical-foundations-and-clarifications) for statistics, tracing and a fail-closed offline gate; a passing evaluation still does not authorize deployment. The appendix uses a pinned OTel convention revision rather than treating “v1.28+” as a timeless standard.
+
 > **Part:** Part IX — Principal Engineering for Enterprise Agentic AI Platforms  
 > **Market evidence:** Target-role review (All three Abbott Principal roles: `AG`, `PL`, `ML`, Oct 2026). Required and core duties: evaluation frameworks, task success and safety metrics, programmatic assertions vs. LLM-as-judge calibration, OpenTelemetry GenAI distributed tracing, online/shadow/A-B evaluation, and machine-readable release evidence bundles. Builds on Chapters 10, 11, 18, 23, and 24.  
 > **Reader status:** Principal / Staff+ engineers, MLOps leads, and quality engineering architects responsible for certifying AI agent systems for production release. Assumes statistical hypothesis testing, distributed tracing, and CI/CD pipeline prerequisites.  
@@ -456,3 +458,116 @@ def test_release_evidence_bundle_generation():
 - **OpenTelemetry Semantic Conventions for GenAI (v1.28+):** Distributed Tracing Specifications for Agents and LLMs.
 - **Zheng et al. (UC Berkeley):** Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena.
 - **NIST Special Publication 800-218:** Secure Software Development Framework (SSDF) — Attestation and Release Evidence.
+
+
+---
+
+## Technical Foundations and Clarifications
+
+### Observation, evaluation and authorization are different jobs
+
+A **trace** records what an application did. An **evaluation** compares an observed result with a declared criterion. A **release decision** weighs evaluation, operational evidence and risk under an authorized process. A log of a successful HTTP call is not proof of a correct answer, and a high evaluation score is not permission to deploy.
+
+Begin with an equipment lookup assistant. A task case specifies caller scope, source revision, requested part, acceptable outputs and forbidden actions. After execution, inspect the actual retrieved record and returned value. The question “was the response JSON?” is different from “was its price correct?” and “was the caller allowed to read it?” Define these outcomes separately. A single score can conceal a serious authorization failure behind many correct low-risk answers.
+
+A **dataset** is the collection of test cases and reviewed reference outcomes. The unit should match the claim: a user task, document, issue or workflow, not each nearly identical paraphrase treated as independent. Split development and held-out cases by source family or issue to avoid tuning on the same underlying information. Version inputs, labels, evaluator rubrics, model/prompt/tool/runtime bundles and environment fixtures. Record missing labels and inconclusive runs instead of removing them from the denominator.
+
+### Deterministic assertions and semantic judgments
+
+**Programmatic checks** compare observable structure or state: required fields, allowed tool identifiers, exact resource IDs, authorization outcomes, persisted mock changes and maximum cost. They are reproducible given fixed inputs, but can still encode the wrong requirement. A substring check for “appointment confirmed” can pass an incorrect negated statement. A forbidden-word check can flag an innocent quotation while missing an unsafe paraphrase.
+
+An **LLM-as-a-judge** evaluates qualities such as groundedness or explanation clarity using a rubric. It is another model and can be influenced by candidate text. Provide bounded evidence, anchor examples and explicit abstention; isolate it from execution authority. Compare its labels with reviewed human labels on the target task. A larger model or different provider may help but does not guarantee reliable judgment. Some exact tasks need no model judge at all.
+
+Order swapping checks consistency of pairwise preference: A must win whether placed first or second. Disagreement should remain an uncertainty result, with coverage reported. Removing every disagreement can inflate measured performance. This procedure mitigates one source of bias but does not eliminate shared factual mistakes, verbosity preference or rubric ambiguity. A consistent wrong judge is still wrong.
+
+### Calculate agreement and uncertainty rather than asserting them
+
+**Cohen's kappa** measures categorical agreement beyond chance implied by annotator marginals. Let observed agreement be `po` and expected agreement be `pe`; kappa is `(po-pe)/(1-pe)`. Suppose a human and judge each label fifty of one hundred cases positive, and agree on eighty. Then `pe=0.5`, `po=0.8`, and kappa is 0.6. The same raw agreement with different class balance can produce a different kappa. Inspect false-positive and false-negative rates, especially for rare harmful outcomes; no universal 0.70 cutoff certifies safety.
+
+A **confidence interval** expresses sampling uncertainty under stated assumptions; it is not a model's self-reported confidence. Ten successes out of ten do not prove perfect future performance. For zero observed failures in `n` independent representative trials, the one-sided 95% binomial upper failure bound is `1 - 0.05^(1/n)`. With ten trials it is about 25.9%; with three hundred about 1%. Correlated cases or dataset mismatch weaken interpretation. Sample size must follow the tolerated error and effect size, not a blanket “500 cases” rule.
+
+For **paired regressions**, run baseline and candidate on the same independent cases. Count baseline-success/candidate-failure cases `b` and baseline-failure/candidate-success cases `c`. McNemar's test conditions on discordant pairs, not simply the aggregate success counts. For `b=0,c=2`, the exact two-sided binomial p-value is 0.5. A p-value assesses compatibility with a null under its assumptions; it neither proves improvement nor measures the magnitude or business relevance of the change. Prespecify non-inferiority/safety constraints, correct repeated testing where appropriate, and retain effect sizes and uncertainty. Chapter 11 provides deeper statistical gate design.
+
+### Traces connect task outcomes to exact versions
+
+**OpenTelemetry (OTel)** is an observability framework. A **span** describes a bounded operation with timing, attributes, status and relationships. A **trace** connects spans belonging to a distributed activity; links can connect asynchronous or replayed work without pretending every event has one synchronous parent. Carry trace context through queues and tool adapters, while separately retaining durable task and operation IDs. Trace delivery can fail and sampling can omit spans; accounting and safety evidence should not depend solely on a sampled tracing stream.
+
+Record request/response model identity, prompt/tool/agent bundle versions, source references, latency, token usage provenance and outcome/error categories. Do not invent hidden chain-of-thought or call a descriptive “reasoning trace” an exact view into model internals. Tool-call receipts and state transitions are observable. An arbitrary custom span name can be useful, but must not be presented as an official convention.
+
+The inspected **semantic-conventions v1.37.0** GenAI client-span document is marked **Development**. It uses `gen_ai.operation.name`, `gen_ai.provider.name` and `gen_ai.request.model`, and specifies a migration opt-in for newer experimental conventions. This pinned revision is used to illustrate versioning; it is not claimed to be the latest installed instrumentation. The original `gen_ai.system` and prompt/completion token fields must be mapped according to the actual emitted convention version, not mixed silently with newer dashboards. [F35-1]
+
+**Personally identifiable information (PII)** and **protected health information (PHI)** can appear in prompts, tool output, error text and metadata. Prefer a minimal operational attribute allowlist. Payload recording should require explicit policy, retention and access controls. Redaction with regular expressions or named-entity recognition reduces exposure but can miss indirect identifiers and contextual health facts. Pseudonymization is not automatically de-identification. Keep authorized quality-audit payloads in a separately governed store, and verify export behavior rather than relying on a library default.
+
+### Release evidence is bound data, not a dashboard screenshot
+
+An evidence bundle should identify the evaluated artifact, dataset/label revisions, evaluator versions, environment, individual outcomes, unresolved gaps and gate policy. A digest binds bytes only when the expected digest is trusted. A digital signature binds an accepted signing identity to those bytes; neither proves the assertions are meaningful. Promotion additionally requires current authority and the policy's required checks. An evaluation object named `APPROVED` can be a local recommendation, but cannot create deployment permission.
+
+A gate should reject empty evidence, duplicate case IDs, missing required results and malformed outcomes. Keep separate critical-safety vetoes and quality thresholds. An overall 99% pass rate can still include the single harmful case that matters. Record confidence and coverage; don't silently convert evaluator transport failure to a genuine negative label. Online **shadow evaluation** observes a candidate without user-visible effects, so mock or suppress mutations. **A/B testing** assigns cohorts to real behavior and therefore needs an authorized, safe exposure policy. A canary's healthy HTTP status does not establish clinical validity or absence of rare harm.
+
+### Offline Foundation Example
+
+```python
+# Standard-library, synthetic categorical outcomes; no model or deployment.
+from math import comb, isclose
+
+def exact_mcnemar(b, c):
+    if any(type(x) is not int or x < 0 for x in (b, c)):
+        raise ValueError("nonnegative pair counts required")
+    n = b + c
+    if not n:
+        return 1.0
+    return min(1.0, 2 * sum(comb(n, k) for k in range(min(b, c) + 1)) / 2**n)
+
+def gate(results, minimum_quality=0.9):
+    if not 0 <= minimum_quality <= 1:
+        raise ValueError("invalid threshold")
+    if not results:
+        return "insufficient"
+    ids = [r["case_id"] for r in results]
+    if len(set(ids)) != len(ids):
+        return "invalid"
+    if any(type(r["quality"]) is not bool or type(r["safe"]) is not bool for r in results):
+        return "invalid"
+    if not all(r["safe"] for r in results):
+        return "reject"
+    return "candidate" if sum(r["quality"] for r in results) / len(results) >= minimum_quality else "reject"
+
+assert exact_mcnemar(0, 2) == 0.5
+assert exact_mcnemar(0, 0) == 1.0
+assert isclose((0.8 - 0.5) / (1 - 0.5), 0.6)
+assert gate([]) == "insufficient"
+cases = [{"case_id": str(i), "quality": True, "safe": True} for i in range(100)]
+assert gate(cases) == "candidate"
+cases[-1]["safe"] = False
+assert gate(cases) == "reject"
+assert gate([cases[0], cases[0]]) == "invalid"
+assert 1 - 0.05**(1/10) > 0.25
+```
+
+“Candidate” means this finite fixture satisfies its local gate, not that a release is authorized. The example validates arithmetic and failure handling, not judge calibration, trace delivery or a statistically powered product evaluation. In the original invalid-output fixture, wrong tool, missing required argument, forbidden term and missing expected phrase produce **four** reasons; the preserved assertion of three is a known inconsistency. The `Callable` judge import and some other file-level type imports must also be supplied if those snippets are extracted as modules.
+
+### Local exercise and review progression
+
+Run the offline block, restore the safety failure and observe the gate change. Add a duplicate case, an absent result and a simulated evaluator timeout, keeping each distinguishable from a failed task. Build a paired table with both improved and regressed cases rather than only totals. On paper, map one task to ingress, retrieval, model, tool and final-check spans and identify which fields could contain private data. Finally produce a small evidence manifest with explicit unrun online and clinical checks; do not replace those gaps with a claim of a signed or approved release.
+
+### Foundation self-checks
+
+**Q1: Does a high kappa prove a judge detects rare harm?** No. Kappa depends on marginals and summarizes agreement. Inspect class-specific error rates, representative rare cases and confidence bounds; use human/clinical review where the task requires it.
+
+**Q2: Why separate trace ID from operation ID?** Traces may be sampled, regenerated or linked across retries. Durable operation identity controls effect deduplication and recovery; observability identity explains execution but cannot replace that contract.
+
+**Q3: Can a 99% pass rate justify automatic promotion?** Not without defined case coverage, critical-safety rules, uncertainty, artifact binding and current release authority. A single critical failure can veto a high average, and missing tests remain missing.
+
+### Foundation Key Takeaways
+
+- Declare the task unit, independent labels, dataset splits and acceptance criteria before evaluation.
+- Use deterministic state checks where possible and calibrated judges only for appropriate semantic questions.
+- Report agreement, uncertainty, regressions and coverage, not only pass percentages.
+- Pin tracing conventions and minimize sensitive payloads; traces are not financial or safety source-of-truth ledgers.
+- Bind evidence to artifacts and retain a separate authorized release decision.
+
+### Foundation Sources and Boundaries
+
+- **F35-1:** OpenTelemetry, [GenAI client spans, semantic-conventions v1.37.0](https://github.com/open-telemetry/semantic-conventions/blob/v1.37.0/docs/gen-ai/gen-ai-spans.md), inspected October 16, 2026, Development status, inference attributes and migration warning. Fixed revision, not a claim of newest or installed conventions.
+- **F35-2:** Zheng et al., [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685), historical reference for judge limitations and bias; no new reproduction of its results is claimed.
+- Chapter 11 owns statistical depth and Chapter 18 privacy-aware telemetry. The new exact arithmetic checks are local evidence only; prior claims of peer review, calibration and production-grade code were not substantiated by the earlier publication receipts.

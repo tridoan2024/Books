@@ -1,5 +1,7 @@
 # Chapter 33: Durable production agents and enterprise tool integration
 
+> **Reading note — additive technical review:** The original text below is retained unchanged. Its in-memory storage and exercises are conceptual mocks, not durable production deployments; original source-review labels, vendor dates and reliability language are not verified deployment or benchmark claims. Receipt-check-before-submit leaves a crash gap: persist pending intent first, pass the exact operation ID downstream, and query authoritative receipts after an unknown outcome. Receiver-side atomic deduplication is conditional on actual support. The original runner does not pass that identity, its compensation routine only pops/logs rather than executes or verifies reversals, module imports and nested-state reconstruction are incomplete, and its hash is not a verified integrity seal. Human approval needs current identity, revision and expiry checks; CAS differs from leases and enforced fencing. LangGraph and Temporal have different recovery boundaries, with no compulsory nesting or universal versioning API. See [Technical Foundations and Clarifications](#technical-foundations-and-clarifications).
+
 > **Part:** Part IX — Principal Engineering for Enterprise Agentic AI Platforms  
 > **Market evidence:** Target-role review (Abbott Principal AI/Agentic Engineer `AG`, Principal AI Platform Engineer `PL`, and AI/ML Engineer `ML`, Oct 2026). Required and core duties: supervisor/planner-executor and multi-agent architectures, durable execution state, checkpoints and replay, idempotency, compensating transactions, human-in-the-loop (HITL) approval lifecycles, and typed enterprise tool integration. Builds on Chapters 8, 20, 26, 28, 29, and 30.  
 > **Reader status:** Principal / Staff+ engineers delivering mission-critical agent workflows that execute real-world business side-effects. Assumes distributed transactions, event-driven architectures, and API design prerequisites.  
@@ -477,3 +479,128 @@ def test_saga_compensation_on_workflow_failure():
 - **Temporal Architecture Whitepaper:** Designing Fault-Tolerant, Distributed Applications (temporal.io).
 - **Enterprise Integration Patterns (Hohpe & Woolf):** Compensating Transactions and Idempotent Receivers.
 - **LangGraph Conceptual Guides:** Checkpointing, Thread State Persistence, and Breakpoints.
+
+
+---
+
+## Technical Foundations and Clarifications
+
+### Durability means recovering a decision, not keeping a process alive
+
+A **workflow** is a sequence of decisions and operations with state that determines what happens next. A **checkpoint** is a saved representation of that state at a defined boundary. **Durability** means acknowledged state survives the failures covered by a storage contract; it is not a property of a Python class name. A worker can disappear while a durable workflow waits for approval. Its replacement needs the recorded task, version, observations and pending operations, not the old worker's memory address.
+
+Consider a hypothetical inventory reservation. The agent chooses an item, obtains approval, reserves it and prepares a confirmation. Each step has a different recovery question: can planning be repeated, is approval still valid, did the reservation happen, and can the confirmation be rebuilt? Repeating a calculation is usually cheaper than storing every intermediate value. Repeating a mutation can create a second reservation. Persist the information that distinguishes those cases.
+
+A state record should contain workflow and tenant identity, revision, execution version, status, permitted next transitions and references to large evidence. Store secrets outside serialized state. **Serialization** converts state to bytes; **rehydration** reconstructs typed state from those bytes. Nested dataclasses do not reconstruct automatically when a top-level dictionary is passed into a constructor. Validate schema and version on recovery. A content hash identifies bytes; an authenticated integrity seal additionally requires trusted keys and verification. Backups, retention and deletion rules remain separate from checkpointing.
+
+### Understand the dangerous interval around external effects
+
+An **effect** is an observable change outside the current computation: reserve stock, send a message or update an enterprise record. A **receipt** is the destination's recorded outcome. The hardest interval is after the destination committed but before the worker durably saved the receipt. A local receipt cache is still empty, yet repeating the action can duplicate it. The original runner executes the callable before recording its receipt and does not transmit its generated key; its happy-path test never kills the process in this interval.
+
+Record a pending intent before dispatch. Give the business operation a stable ID that persists across retries and worker replacement, bind it to the tenant and payload, and send the same ID to the destination. Distinguish `planned`, `dispatching`, `confirmed`, `rejected` and `unknown`. A timeout after dispatch produces unknown, not a proven rejection. Recovery queries the destination's authoritative operation status. Only a documented terminal-not-executed result permits safe resubmission without a supported deduplication contract.
+
+**Idempotency** means repeating an operation under the specified identity has the same effect as applying it once. At a cooperating receiver, a transaction can atomically store the operation ID, apply the mutation and retain the result. Duplicate requests return the existing result; the same ID with a different payload must be refused. Scope, expiry and payload-binding rules matter. An expiring deduplication record cannot support indefinite retry. An idempotent receiver protects a particular effect; it does not make every downstream call or entire workflow universally exactly-once.
+
+**At-least-once delivery** can repeat messages. **At-most-once delivery** can drop them. Exactly-once claims must identify the transactional boundary: a broker's guarantee for its own records does not automatically include an arbitrary ERP API. The original universal impossibility wording is too broad when read as denying scoped transactional guarantees; the correct lesson is that end-to-end arbitrary external effects need cooperation or reconciliation, not a stronger marketing label.
+
+### Events, replay and framework boundaries
+
+**Event sourcing** records changes as an ordered history; replay reconstructs decisions from that history. Temporal checks commands generated during workflow replay against recorded events. Non-deterministic I/O belongs in Activities, whose results are recorded by the service; Activities can be retried and still require effect discipline. Deterministic workflow code is a replay requirement, not a claim the model always produces the same answer. [F33-1]
+
+LangGraph checkpointers retain thread-scoped graph state; stores retain application-defined cross-thread information. Its in-memory saver does not survive restart. Node timeouts, retries and recovery functions concern individual attempts, and the reviewed documentation makes version requirements explicit. Decide whether the selected graph runtime's persistence and recovery meet the application contract before combining two orchestration systems. [F33-2, F33-3]
+
+Nesting a reasoning graph inside a durable Activity can be appropriate, but creates two owners for retry, state and cancellation unless designed carefully. Name which system owns the operation ID and which decides completion. Pin a workflow/release version to in-flight runs. Introduce compatible changes or an explicit migration; do not assume `getVersion` is a universal Python/Java/TypeScript API. Replay stored histories against candidate code in a test environment, keep old compatible workers where needed and never regenerate a completed model result merely because its prompt changed.
+
+### Concurrency, compensation and human approval
+
+**Compare-and-swap (CAS)** updates a record only if its revision still equals the revision read by the writer. It prevents two writers from silently overwriting each other. A **lease** assigns ownership for a limited time; a heartbeat renews it. A **fencing token** is an increasing ownership generation checked by the receiving resource. A disconnected old worker can still run: CAS on the checkpoint protects state writes but does not prevent an already-issued external effect. Enforcement must occur where the effect is accepted, as Chapter 40 explains.
+
+A **Saga** coordinates a sequence of locally committed operations with compensations for those that are reversible. A refund is a new audited transaction, not time travel that erases the original charge. Email and clinical disclosure cannot be fully reversed. Register compensation intent, identity and receipt, and track `compensation_pending` until its outcome is known. Reverse dependency order where required; a business-specific graph may be more precise than an unconditional stack. Never mark compensation complete just because the original helper popped an object or wrote a log line. Unknown forward effects must be reconciled before deciding what to compensate.
+
+**Human-in-the-loop (HITL)** adds an authorized human decision at an explicit boundary. Approval should bind approver identity, action, object revision, payload digest, policy and expiry. A clicked URL is not enough. Recheck current permission and preconditions immediately before execution, especially after queueing. Use a durable signal rather than holding a thread asleep for days. A notification failure does not erase the pending approval; a duplicate webhook must not create a second effect. **Time-to-live (TTL)** governs expiry, while a monotonic elapsed deadline governs a local attempt; they are related but not interchangeable clocks.
+
+### Offline Foundation Example
+
+```python
+# Standard-library, synthetic single-process model; not durable storage.
+from copy import deepcopy
+
+class Receiver:
+    def __init__(self):
+        self.receipts = {}
+        self.effects = 0
+    def submit(self, operation_id, payload):
+        if operation_id in self.receipts:
+            old_payload, receipt = self.receipts[operation_id]
+            if old_payload != payload:
+                raise ValueError("same identity, changed payload")
+            return deepcopy(receipt)
+        self.effects += 1
+        receipt = {"reservation_id": "fixture-1", "status": "confirmed"}
+        self.receipts[operation_id] = (deepcopy(payload), receipt)
+        return deepcopy(receipt)
+    def query(self, operation_id):
+        saved = self.receipts.get(operation_id)
+        return deepcopy(saved[1]) if saved else None
+
+operation = "tenant-a/workflow-17/reservation-1"
+payload = {"sku": "P-17", "quantity": 1}
+intent = {"id": operation, "payload": deepcopy(payload), "state": "pending"}
+receiver = Receiver()
+receiver.submit(intent["id"], intent["payload"])
+# Simulated lost reply: local intent is still pending, destination has committed.
+assert intent["state"] == "pending"
+receipt = receiver.query(intent["id"])
+assert receipt["status"] == "confirmed"
+intent["state"] = "confirmed"
+assert receiver.submit(operation, payload) == receipt
+assert receiver.effects == 1
+try:
+    receiver.submit(operation, {"sku": "P-17", "quantity": 2})
+except ValueError:
+    pass
+else:
+    raise AssertionError("payload identity violation")
+
+def approval_valid(approval, now, principal, revision):
+    return (approval["approver"] == principal and now < approval["expires"]
+            and approval["object_revision"] == revision)
+
+approval = {"approver": "reviewer-1", "expires": 100, "object_revision": 7}
+assert approval_valid(approval, 99, "reviewer-1", 7)
+assert not approval_valid(approval, 100, "reviewer-1", 7)
+assert not approval_valid(approval, 99, "reviewer-1", 8)
+```
+
+The receiver demonstrates desired identity and payload semantics with a dictionary, not atomic distributed storage. The lost reply is simulated, not a real killed process. This example deliberately uses no real orders, messaging or enterprise APIs. To test durability, a separate authorized lab would persist intent and receipt, kill and restart actual workers, and inspect both sender and receiver records. That lab has not been run here.
+
+### A practical implementation progression
+
+First draw the inventory workflow with a failure arrow before and after each external call. Decide which actions are read-only, reversible or irreversible. Define the exact source of truth for each result. Run the offline example and explain why querying the receiver recovers more evidence than a second model plan. Change the payload while retaining the operation ID and observe the refusal. Expire the approval or alter the object revision and confirm the effect remains blocked.
+
+Next specify storage transactions and queue acknowledgement. An **outbox** stores an intent to publish alongside local state in one transaction; a relay may publish repeatedly. A receiver **inbox** can deduplicate messages under its transaction. This removes some local state/message gaps but does not guarantee arbitrary destination effects. Add lease loss, receiver timeout, duplicate signals, compensation failure and code-version migration to the test matrix. Maintain operationally useful unknown states and ownership references rather than replacing them with generic “failed” text.
+
+As a workload calculation, 100 active workflows with four durable transitions per minute require approximately 6.67 transition writes per second, before receipts, approvals and indexes. This illustrative mean is not a storage benchmark. Retaining a one-megabyte transcript at every transition can create far more storage and I/O than saving a compact state record plus immutable evidence references. Measure actual serialization size, transaction latency and recovery time instead of relying on the word “checkpoint.”
+
+### Foundation self-checks
+
+**Q1: A worker found no local receipt after a timeout. May it retry?** Not on that evidence alone. The destination may have committed. Query the authoritative operation ID or use its proven deduplication contract, and keep the outcome unknown until resolved.
+
+**Q2: Does a signed checkpoint grant permission to execute its next action?** No. Integrity protects recorded state; authority must be current at execution. Revalidate scope, approval expiry, object revision and ownership before a mutation.
+
+**Q3: Is every failed workflow solved by compensation?** No. Some actions are irreversible, compensation can itself fail, and uncertain actions need reconciliation first. Report pending/manual resolution honestly instead of fabricating a completed rollback.
+
+### Foundation Key Takeaways
+
+- Persist the information that distinguishes computation, approval and external effects.
+- Record intent before dispatch; retain stable operation identity and authoritative receipts.
+- Separate scoped transactional deduplication from universal exactly-once claims.
+- Treat replay, CAS, leases, fencing and compensation as different mechanisms.
+- Revalidate human approval and compatible workflow versions on recovery.
+
+### Foundation Sources and Boundaries
+
+- **F33-1:** Temporal, [Workflow Execution overview](https://docs.temporal.io/workflow-execution), “Replays” and “Commands and awaitables,” inspected October 16, 2026. Provider-described durability is not a receipt for the book's mock runner.
+- **F33-2:** LangGraph, [Persistence](https://docs.langchain.com/oss/python/langgraph/persistence), checkpointer/store distinction and in-memory restart limitations, inspected October 16, 2026.
+- **F33-3:** LangGraph, [Fault tolerance](https://docs.langchain.com/oss/python/langgraph/fault-tolerance), inspected through its Markdown representation October 16, 2026; node-level timeout/error-handler version constraints apply. These are not universal SDK versioning APIs.
+- The preserved code still has incomplete imports, nested-state reconstruction and compensation execution. This appendix adds an independently checkable teaching contract; it does not repair or certify the legacy implementation.

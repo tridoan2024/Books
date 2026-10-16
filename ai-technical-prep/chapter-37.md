@@ -1,5 +1,7 @@
 # Chapter 37: Clinical and personalized health AI engineering
 
+> **Reading note — additive technical review (October 16, 2026):** This is engineering education, not medical advice. The preserved emergency-treatment text, glucose thresholds, compression-low rules and lifestyle recommendations are not validated or approved product protocols and must not be deployed as care guidance. A wellness function is not automatically Class I, and one generated sentence does not categorically make an application Class III. HIPAA applicability depends on entities and relationships; encryption, on-device processing or a BAA alone does not prove compliance or zero retention. FDA QMSR became effective February 2, 2026; the old 820.30 discussion needs current mapping. The appendix clarifies the final PCCP guidance, timestamp bugs and limitations of keyword guards. Start with [Technical Foundations and Clarifications](#technical-foundations-and-clarifications); its new examples use synthetic data and no treatment decisions.
+
 > **Part:** Part IX — Principal Engineering for Enterprise Agentic AI Platforms  
 > **Market evidence:** Target-role review (Abbott Principal AI/ML Engineer `ML` for Lingo, plus `AG` and `PL` preferred qualifications, Oct 2026). Required and core duties: continuous glucose monitoring (CGM) time-series data pipelines, personalization models, approved claims boundary enforcement, prohibition of unapproved medical dosing or treatment advice, clinical evaluation partnerships, FDA Software as a Medical Device (SaMD) / design controls, HIPAA/GxP compliance, and on-device vs. cloud inference. Builds on Chapters 20, 21, 22, 23, and 24.  
 > **Reader status:** Principal / Staff+ engineers, ML systems architects, and technical leaders building consumer health, digital therapeutics, or medical device AI applications. Assumes time-series modeling, HIPAA security, and regulated software engineering prerequisites.  
@@ -430,3 +432,122 @@ The optimal architecture is often **hybrid**: on-device deterministic algorithms
 - **FDA Guidance:** Software as a Medical Device (SaMD): Clinical Evaluation & Good Machine Learning Practice (GMLP).
 - **ISO 13485:2016:** Medical Devices — Quality Management Systems — Requirements for Regulatory Purposes.
 - **American Diabetes Association (ADA):** Standards of Medical Care in Diabetes — Continuous Glucose Monitoring Metrics.
+
+
+---
+
+## Technical Foundations and Clarifications
+
+### Health-data engineering begins with intended use and uncertainty
+
+A health AI system is not defined only by its model. It combines sensors, data processing, a user interface, claims, decision rules and operational controls. Begin by specifying who uses it, what information it supplies, what decisions it supports and what it explicitly does not do. A consumer wellness summary and a diagnostic or dosing function have different evidence and regulatory implications. Product examples in the original are not approved claims for a particular device or jurisdiction.
+
+A **continuous glucose monitor (CGM)** measures a sensor-derived glucose signal, generally from interstitial fluid. That is not automatically a contemporaneous laboratory or capillary measurement. **Time-series data** is a sequence indexed by observation time. **Personalization** adapts behavior to a person's relevant information; it does not make a prediction clinically valid merely because a name or meal history was added. **Software as a Medical Device (SaMD)** is a regulatory concept requiring attention to intended medical purpose and the applicable framework, not a synonym for any app holding health data.
+
+Avoid turning sensor uncertainty into clinical certainty. Sensor lag, dropouts, wear conditions, calibration and population differences affect interpretation. A pattern resembling a compression artifact is a hypothesis to validate under device-specific clinical controls, not permission for an engineer to suppress an alert or recommend delaying treatment. The new exercises below perform only synthetic timestamp/data-quality calculations. Actual safety messages and escalation behavior must come from reviewed product-specific clinical and regulatory requirements, not generated textbook instructions.
+
+### Design a time-aware data contract before a model
+
+An ingestion record should carry source/device identity, subject linkage, measurement time, received time, value, unit, quality status, sequence/version and provenance. **Event time** is when the measurement occurred; **ingestion time** is when the backend received it. A late meal log can refer to an earlier event but was unavailable to a prediction made before receipt. Preserve both times to prevent lookahead in training and retrospective evaluation.
+
+Use an explicit time zone or UTC conversion and a defined epoch unit. Mixing milliseconds and seconds can move an event by orders of magnitude. **mg/dL** and **mmol/L** are different unit conventions; convert only under an explicit validated conversion and do not silently compare unlike values. Reject non-finite numbers and malformed timestamps. Deduplicate repeated event IDs, reconcile contradictory revisions and record out-of-order arrival instead of blindly sorting and discarding history.
+
+**Resampling** aligns observations to a chosen grid. **Interpolation** estimates unobserved points; it must remain marked as estimated. Filling a long gap with a smooth line can hide a significant uncertainty. Define maximum gaps, completeness and freshness separately. A latest available value may already be stale. Missing telemetry is unknown, not normal. Explain to the interface and downstream models which fields are observed, estimated, missing or invalid.
+
+For a thirty-minute delta, select by timestamps. At five-minute cadence, six readings span twenty-five minutes between first and last; seven span thirty. The original `[-6]` expression therefore measures twenty-five minutes under regular sampling and an unpredictable interval with missing readings. Define whether a true thirty-minute delta requires an exact pair, a bounded-nearest match or an approved interpolation method. Delta is a change in value; slope additionally divides by elapsed time. These are different quantities.
+
+For a meal-associated excursion, baseline should be an admissible observation at or before the meal, with a maximum gap and provenance. The oldest reading in the entire history can be hours earlier and is not a valid premeal baseline by default. Restrict post-event windows to measurements actually available at the assessment time. Do not interpret association with a meal, sleep or activity as a causal effect without appropriate study design.
+
+### Prediction serving and personalization from first principles
+
+**Batch inference** processes a set of observations periodically; **online inference** responds within an interactive deadline. Both need consistent feature definitions and source revisions. A model trained using future-complete daily data may fail when serving only the incomplete present-day stream. **Training/serving skew** occurs when transformations, units or availability differ. Test the same preprocessing code and timestamp semantics across both environments.
+
+A time-series model may estimate a future value or detect an unusual pattern. Specify horizon, label availability, calibration, missingness policy and population coverage. Personalization can use a global model with subject-specific features, a hierarchical model or validated adaptation. Small personal datasets can overfit. Use chronological subject-separated evaluation where appropriate; near-duplicate windows from one person must not leak across train and test.
+
+Report errors by relevant subgroup and condition, including device/sensor quality, observed/estimated data, activity and missingness. Clinical reviewers determine which differences are meaningful and which thresholds reflect acceptable user risk. Engineering metrics such as mean absolute error or precision/recall are necessary information, but do not establish medical utility or safety independently. Prospective evaluation and user-understanding studies may be needed to show that outputs do not lead to harmful decisions.
+
+### Claims enforcement is a safety architecture, not a word list
+
+An **approved-claims boundary** is an application's explicitly reviewed set of permitted representations and behaviors. Maintain versioned content, allowed insight types, source evidence, prohibited actions and escalation rules. The model can produce a structured candidate insight; an enforcement layer checks its category, evidence and permitted presentation before the UI receives it. Where the product requires a fixed response, route to a reviewed template rather than improvising new medical instructions.
+
+Keyword filtering can be one testable component but cannot guarantee “never violates.” “I cannot diagnose” contains a prohibited term yet is a refusal; an unsafe paraphrase might contain none. Multilingual input, quotation, misspellings, negation and multi-turn context need evaluation. The original guard checks a small list and the original compression scenario names medications not actually included in that list. Passing its assertions proves only those finite string cases, not a clinical boundary.
+
+Separate user-query intent, physiological data quality and generated-claim assessment. A confidence score or a single numeric sensor threshold should not silently override the device's validated safety path. Design fail-safe behavior with clinical, usability and regulatory owners; include source-quality uncertainty and escalation availability. Keep the text's unvalidated treatment messages preserved as historical examples, but do not use them as operational requirements.
+
+### Regulation and privacy: avoid categorical shortcuts
+
+The **FDA**, US Food and Drug Administration, regulates applicable device functions based on statutory and regulatory criteria. Device classification, intended use, risk and pathway matter. A consumer product is not automatically Class I; unapproved diagnostic output does not automatically assign Class III. The 510(k), De Novo and PMA pathways differ. This book is not legal advice or a determination of a specific product's classification.
+
+The FDA **Quality Management System Regulation (QMSR)** became effective February 2, 2026, amending 21 CFR Part 820 and incorporating ISO 13485:2016 by reference. The inspected FDA page identifies design/development and risk-management obligations within the new framework and discusses applicability and exemptions. Preserve the original 820.30 discussion as historical context, but map current work to applicable QMSR provisions and incorporated standards rather than assuming the older section remains the current standalone rule. [F37-1]
+
+A **Predetermined Change Control Plan (PCCP)** is not blanket permission to modify an AI product. The FDA's inspected guidance is **Final, August 2025**, not the original generic draft label. It describes planned modifications, methodology to develop/validate/implement them and impact assessment, reviewed in a device marketing submission. Its discussion includes 510(k), De Novo and PMA pathways. Changes outside an authorized plan require separate regulatory analysis. A traceability matrix alone is not a PCCP or evidence of clinical validation. [F37-2]
+
+**HIPAA**, the Health Insurance Portability and Accountability Act, applies according to covered-entity/business-associate roles and relevant data activities; not every consumer wellness application is automatically governed by the same rule. A **business associate agreement (BAA)** specifies applicable contractual obligations; it does not inherently promise zero retention or forbid every training use without reviewing actual terms. On-device processing can reduce egress but still exposes local logs, backups, shared-device access and model updates. Encryption protects certain threats, not the entire compliance program. Other privacy laws and consumer-health requirements can apply even when HIPAA does not. HHS pages and eCFR retrieval were blocked during this pass; these applicability distinctions are general guidance with original references retained, not a fresh legal clearance. [F37-3]
+
+### Traceability and verification versus validation
+
+A response evidence chain should link subject/source references, available observations, transformation/model/prompt/claims-policy versions, generated candidate, accepted template or output, rejected alternatives and relevant checks. Protect sensitive payloads through access, minimization, retention and audit controls. A hash can bind a snapshot, but does not prove the snapshot is accurate or the user's identity linkage is correct.
+
+**Verification** asks whether implementation meets specified requirements. **Validation** asks whether the product fulfills its intended use in the relevant context. Unit tests, synthetic data and prompt boundary cases support verification; they do not substitute for clinically grounded validation, usability evaluation or safety review. Define an auditable change package: requirement, risk, implementation, test evidence, reviewer decision, deployment version and post-release monitoring. Track remaining gaps rather than giving a passing engineering suite the label “clinically validated.”
+
+### Offline Foundation Example
+
+```python
+# Python standard library; fabricated values; no diagnoses or treatment rules.
+from math import isfinite
+
+def delta_at_interval(readings, interval_s=1800):
+    if type(interval_s) is not int or interval_s <= 0:
+        raise ValueError("invalid interval")
+    times = [t for t, _ in readings]
+    if len(set(times)) != len(times):
+        raise ValueError("duplicate timestamps need explicit reconciliation")
+    if any(type(t) is not int or not isfinite(v) for t, v in readings):
+        raise ValueError("invalid observation")
+    if not readings:
+        return None
+    ordered = sorted(readings)
+    latest_t, latest_v = ordered[-1]
+    lookup = dict(ordered)
+    prior = lookup.get(latest_t - interval_s)
+    return None if prior is None else latest_v - prior
+
+readings = [(i * 300, 100 + i) for i in range(7)]
+assert delta_at_interval(readings) == 6
+assert delta_at_interval(readings[1:]) is None  # No exact thirty-minute pair.
+assert readings[-1][0] - readings[-6][0] == 1500
+meal_time = 650
+prior = [(t, v) for t, v in readings if t <= meal_time]
+baseline = max(prior)[1] if prior else None
+assert baseline == 102
+try:
+    delta_at_interval(readings + [readings[0]])
+except ValueError:
+    pass
+else:
+    raise AssertionError("duplicate was silently accepted")
+```
+
+This example deliberately returns unknown when an exact interval is absent. That is a teaching contract, not a medically validated sampling policy. It checks fabricated timestamps and values only. It does not implement subject identity, secure ingestion, interpolation, clinical alerts or regulated personalization. The original safety module's missing `Optional` import and time-window bugs remain unmodified; the new code clarifies a safer data-semantics approach.
+
+### Foundation self-checks
+
+**Q1: Does a smooth interpolated series prove a healthy underlying signal?** No. Smoothing may conceal gaps and sensor artifacts. Retain observed-versus-estimated flags, gap length and freshness; clinical interpretation requires the applicable validated product contract.
+
+**Q2: Why isn't a keyword guard proof of no medical advice?** Words do not capture all semantics. Negated safe statements can be blocked and harmful paraphrases can pass. Evaluate claims, data quality and escalation with reviewed cases and preserve uncertainty.
+
+**Q3: Can synthetic tests replace clinical validation?** No. They establish finite engineering behavior under artificial inputs. Intended-use benefit, safety and user understanding need appropriately designed clinical and usability evidence with the responsible reviewers.
+
+### Foundation Key Takeaways
+
+- Define intended use and reviewed claims before selecting health-model behavior.
+- Preserve units, observation/receipt times, provenance, missingness and uncertainty.
+- Measure intervals by time, not list positions; do not use the oldest value as an automatic baseline.
+- Treat keyword filters, encryption and on-device inference as limited controls, not guarantees.
+- Keep current regulatory mapping, engineering verification and clinical validation distinct.
+
+### Foundation Sources and Boundaries
+
+- **F37-1:** FDA, [Quality Management System Regulation](https://www.fda.gov/medical-devices/postmarket-requirements-devices/quality-management-system-regulation-qmsr), February 2, 2026 update, inspected October 16, 2026, effective date, applicability and incorporation-by-reference sections.
+- **F37-2:** FDA, [Marketing Submission Recommendations for a PCCP for AI-Enabled Device Software Functions](https://www.fda.gov/regulatory-information/search-fda-guidance-documents/marketing-submission-recommendations-predetermined-change-control-plan-artificial-intelligence), Final August 2025, content current August 18, 2025; inspected October 16, 2026. Summary reviewed, not every provision of the full guidance.
+- **F37-3:** HHS, [Covered Entities and Business Associates](https://www.hhs.gov/hipaa/for-professionals/covered-entities/index.html), and 45 CFR 160.103, relevant primary references; current retrieval blocked in this pass. No legal applicability opinion, BAA approval or device clearance is claimed.

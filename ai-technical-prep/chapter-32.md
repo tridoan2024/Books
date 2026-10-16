@@ -1,5 +1,7 @@
 # Chapter 32: GenAI runtimes, registries and the developer paved road
 
+> **Reading note — additive technical review:** The original text below is retained unchanged. Its registry and executor are conceptual mocks, not enterprise-grade deployments or actual sandboxes; original source-review labels, vendor dates and performance language are not verified deployment or benchmark claims. A digest is not a signature, a provider deployment ID may expose no weight hash, and mutable Pydantic objects do not establish immutability. Promotion needs stored, signed metadata; compatibility covers accepted old inputs and consumer-usable outputs, not just required-field differences. The executor lacks output validation and several module imports, and schemas cannot authorize or guarantee tool behavior. MCP uses dated protocol versions, not a universal “v1.0”; the cited 2025-06-18 revision specifies stdio and Streamable HTTP, with SSE optional inside HTTP rather than the universal transport. Rollback pins complete bundles. See [Technical Foundations and Clarifications](#technical-foundations-and-clarifications).
+
 > **Part:** Part IX — Principal Engineering for Enterprise Agentic AI Platforms  
 > **Market evidence:** Target-role review (Abbott Principal AI Platform Engineer `PL` and Principal AI/Agentic Engineer `AG`, Oct 2026). Required and core duties: GenAI serving runtimes, RAG and memory integration, sandboxed tool execution, Model Context Protocol (MCP) interoperability, versioned registries (models, prompts, agents, tools), developer paved-road SDKs (Python, TypeScript/Go/Java), and promotion/deprecation governance. Builds on Chapters 6, 8, 17, 21, 23, and 27.  
 > **Reader status:** Principal / Staff+ platform engineers, software architects, and platform team leads establishing enterprise AI foundation platforms. Assumes software engineering, API design, and container orchestration prerequisites.  
@@ -510,3 +512,172 @@ def test_sandboxed_tool_authorization_enforcement():
 - **Model Context Protocol (MCP) Specification:** Anthropic Architecture Standards (modelcontextprotocol.io).
 - **in-toto & SLSA Level 3:** Software Supply Chain Integrity and Attestation Frameworks.
 - **Envoy & WebAssembly (Wasm) Proxy Extensions:** High-performance sandboxed execution at the network edge.
+
+
+## Technical Foundations and Clarifications
+
+### What a runtime and paved road actually provide
+
+A **runtime** is the software that carries a request from application input through context selection, model execution, tool dispatch and result delivery. A **registry** stores identified artifacts and their lifecycle records. A **paved road** is a supported way for teams to use these capabilities: templates, contracts, tests, documentation and operating guidance. It is not merely a library import or a mandatory choice of one framework.
+
+Imagine a support team building an account-summary assistant. It needs a reviewed prompt, an approved model deployment, a tenant-filtered retrieval tool and an output contract its web application understands. The platform should supply a working reference consumer and make each dependency inspectable. A team should be able to explain what is pinned, who approved it, what permissions are enforced, and how to restore the prior release.
+
+Expand the vocabulary before the design. **GenAI** means generative artificial intelligence; **RAG** is retrieval-augmented generation, supplying selected evidence to a model. **SDK** means software development kit, and **API** is application programming interface. **OCI**, Open Container Initiative, defines artifact-related formats. **SHA-256**, Secure Hash Algorithm with a 256-bit result, identifies bytes through a cryptographic digest. **CI/CD** means continuous integration and delivery/deployment. These terms describe separate jobs; an SDK does not automatically supply a secure runtime or verified release.
+
+### Follow one consumer request through its boundaries
+
+The application submits an account-summary request under authenticated identity. The runtime resolves a pinned bundle containing the prompt, model configuration, tool schemas, runtime image and consumer schema versions. It verifies bytes and release authorization before using the bundle. Retrieval then selects only documents allowed for that principal and tenant, attaching source identities. Chapter 34 owns the retrieval internals; this chapter ensures the runtime invokes that contract instead of bypassing it.
+
+Next, the gateway from Chapter 31 admits the model call. The model may propose `account_lookup`; the orchestrator checks the tool is allowed for this agent, validates arguments and authorizes the exact account resource. An execution adapter runs the tool within the defined isolation boundary. The runtime validates its output before passing data to the model or consumer, then returns a bounded response with artifact and source references.
+
+A tool schema saying `account_id: string` is only a shape constraint. It cannot prove the account belongs to the caller. A schema-valid output can still be false, outdated or unsafe to display. Separate structural validation, resource authorization and domain correctness. The original executor checks an input schema and scopes, but never validates its returned value against `output_schema`; its calculator always returning 42 proves neither arithmetic nor isolation.
+
+### Digests, signatures and immutable storage
+
+A digest answers “are these the expected bytes?” A signature answers “did an accepted signing identity approve this payload?” The expected digest must itself come from a trusted reference. An attacker who replaces both content and an unsigned digest can preserve their agreement. OCI descriptors bind content digest, size and media type; Cosign verification separately checks signatures and, for identity-based signing, expected identity and issuer. Neither certifies that an artifact behaves correctly. [F32-1, F32-2]
+
+Model identity needs special care. For self-managed weights, a manifest can bind weight files, tokenizer, configuration and serving image by digest. A hosted provider deployment ID often identifies a managed endpoint without exposing an independently verifiable weight hash. Record provider, region, deployment/model version, configuration and update policy. Do not manufacture a `gpt-4o@sha256` weight identity when the provider supplied none.
+
+Hash an agreed byte representation and preserve those bytes. Sorting Python dictionary keys is deterministic for a restricted fixture, not a complete cross-language canonicalization specification. RFC 8785 defines a JSON canonicalization scheme with additional string and number rules. Decide whether identity covers uploaded bytes or canonical semantic content, and publish that decision. [F32-3]
+
+The original Pydantic objects remain mutable after registration, including nested dictionaries. A stored object reference may change while its old digest remains attached. Pydantic's own “faux immutability” guidance shows that even `frozen=True` does not freeze nested dictionaries. Persist snapshots, restrict overwrites, validate reads and separate content from lifecycle changes. A fresh copy helps caller isolation; it is not a database permission policy. [F32-4]
+
+Promotion should create stored, signed metadata binding content digest, target environment, policy revision, test evidence, approver identity and time. A mutable `lifecycle="promoted"` field is not that record. Deprecation should express consumer migration deadlines; retirement should block new use according to policy while preserving audit evidence. Selective rollback should reference a previously accepted complete bundle, not just an old prompt coupled to today's incompatible tool.
+
+### Compatibility flows in two directions
+
+For inputs, a backward-compatible new service must accept valid calls old consumers actually send. Adding a required `region` breaks callers that omit it. Narrowing an allowed enum, lowering a length limit, rejecting previously allowed extra properties or changing an integer to a string can also break them. The original required-field set comparison catches only one category.
+
+For outputs, the new service must produce values old consumers can use. Removing `account_name`, making a non-null field nullable, changing units or adding an unknown enum value can break a consumer even when every request still validates. An “optional additive field” is compatible only if consumer parsing tolerates it. Error shapes and stream-event ordering belong to the contract too.
+
+Use both schema analysis and realistic consumer contract tests. Validate old inputs against the new input contract, and new representative outputs against old consumers. This is evidence for the tested cases, not a proof of all semantic compatibility. **SemVer**, semantic versioning, communicates intended change categories; a version number does not enforce behavior. Bind prompts and tool contracts together because a prompt that emits an obsolete argument is a compatibility problem even when the endpoint is unchanged.
+
+### MCP and sandboxing are distinct layers
+
+**MCP**, Model Context Protocol, standardizes discovery and invocation using **JSON-RPC**, JSON Remote Procedure Call. Protocol revisions are dated, such as `2025-06-18`, not a universal “v1.0.” The cited revision defines stdio and Streamable HTTP. **SSE**, Server-Sent Events, is optional within Streamable HTTP, replacing the older universal HTTP-plus-SSE transport pattern. A disconnected MCP stream is not itself a cancellation request. Pin the negotiated protocol and test the transport your client actually supports. [F32-5]
+
+The tools specification supports input schemas and optional output schemas for structured results; it also warns that annotations are untrusted unless supplied by trusted servers. `readOnlyHint` is not an authorization grant or a guarantee that implementation has no effects. `tools/list` describes available tools, not necessarily tools permitted for this user. Filter discovery for usability, then enforce permissions again at dispatch. [F32-6]
+
+**Wasm**, WebAssembly, can isolate code under restricted host capabilities; **gVisor** intercepts system interfaces; microVMs provide another execution boundary. Each needs tested network, filesystem, resource and credential restrictions. A method named `_dispatch_to_sandbox` running in the same Python process is a mock, not isolation. Even a real sandbox can leak data through an allowed network destination or overbroad host function. Broker narrowly scoped credentials outside model-visible context and audit actual egress.
+
+### A minimal cross-language contract
+
+The following TypeScript contract is illustrative only, not a compiled or deployed SDK. Python, TypeScript, Go and Java are language alternatives selected for consumers; an enterprise does not need all four. Share a versioned wire schema and behavioral tests rather than assuming similar type names provide parity.
+
+```typescript
+export type LookupRequest = Readonly<{
+  contractVersion: "1";
+  requestId: string;
+  accountId: string;
+}>;
+export type LookupResponse = Readonly<{
+  contractVersion: "1";
+  requestId: string;
+  accountName: string;
+}>;
+export interface AccountClient {
+  lookup(input: LookupRequest, signal?: AbortSignal): Promise<LookupResponse>;
+}
+```
+
+The service derives tenant ownership from verified authentication, not from this payload. `Readonly` is a TypeScript compile-time constraint, not runtime validation of network JSON. A real SDK validates decoded responses, propagates deadline/cancellation, distinguishes retryable reads from mutations, and maps typed errors. Generated code reduces duplication but does not establish wire behavior, authorization or safe retries.
+
+### Offline Foundation Example
+```python
+import hashlib
+import hmac
+import json
+from dataclasses import dataclass
+
+# Public exercise material, deliberately not a credential or production key.
+DEMO_KEY = b"public-exercise-key-not-a-secret"
+
+def encode(value):
+    # Restricted fixture values: ASCII strings, integers, lists and objects.
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=True, allow_nan=False).encode("ascii")
+
+def digest(blob):
+    return hashlib.sha256(blob).hexdigest()
+
+@dataclass(frozen=True)
+class Promotion:
+    artifact_digest: str
+    environment: str
+    policy_revision: int
+    tag: bytes
+
+source = {"name": "lookup", "required": ["account_id"], "version": 1}
+blob = encode(source)
+identity = digest(blob)
+store = {identity: blob}
+source["required"].append("region")
+assert json.loads(store[identity])["required"] == ["account_id"]
+assert digest(encode(source)) != identity
+metadata = encode({"digest": identity, "env": "test", "policy": 7})
+promotion = Promotion(identity, "test", 7,
+                      hmac.digest(DEMO_KEY, metadata, "sha256"))
+assert hmac.compare_digest(promotion.tag,
+                           hmac.digest(DEMO_KEY, metadata, "sha256"))
+tampered = encode({"digest": identity, "env": "production", "policy": 7})
+assert not hmac.compare_digest(promotion.tag,
+                               hmac.digest(DEMO_KEY, tampered, "sha256"))
+
+def accepts(payload, required):
+    return all(k in payload and type(payload[k]) is str for k in required)
+
+old_call = {"account_id": "A1"}
+assert accepts(old_call, ("account_id",))
+assert not accepts(old_call, ("account_id", "region"))
+new_bad_output = {"account_name": None}
+assert not accepts(new_bad_output, ("account_name",))
+old_bundle = (identity, "prompt-v1", "runtime-v1", "consumer-v1")
+new_bundle = (digest(encode(source)), "prompt-v2", "runtime-v2", "consumer-v2")
+active_bundle = new_bundle
+active_bundle = old_bundle
+assert active_bundle == old_bundle
+assert digest(store[identity]) == identity
+```
+
+This single-process fixture performs no network calls or external mutations. It tests byte snapshotting, digest change, metadata tampering and two finite compatibility cases. Its public HMAC key illustrates message authentication, not Sigstore signing or a secure key-management design. **HMAC** means hash-based message authentication code; all holders of its key can create valid tags. The bundle labels are teaching identities, not verified artifacts. The example is not a full canonicalizer, JSON Schema validator or sandbox.
+
+### Local exercise and worked trade-off
+
+1. Run only the foundation Python block locally with `python3 filename.py`; success is silent.
+2. Inspect the stored snapshot after the caller mutates `source`. Explain why immutable bytes survive but a shared dictionary reference would not.
+3. Compare the original and tampered promotion metadata. Then propose the exact approver and evidence fields a real signed promotion would require.
+4. Replace `new_bad_output` with a string name and predict which assertion changes. Add an old consumer that rejects unknown fields to explore compatibility beyond required-field checks.
+
+For a hypothetical discovery payload, 350 schemas averaging 200 tokens use `350 × 200 = 70,000` tokens. Selecting eight uses 1,600, freeing 68,400 before framing overhead. This is arithmetic, not measured latency or a recommendation that eight is always correct. Aggressive filtering can omit the needed tool. Keep a bounded discovery/retrieval path and measure task success, not just prompt size. Neither filtering nor registry approval substitutes for dispatch authorization.
+
+### Foundation self-checks
+
+**Q1: A retrieved artifact matches its digest. Has its publisher been authenticated?**
+
+**Answer:** Not by that fact alone. The digest establishes agreement with expected bytes only when the expected reference is trusted. Verify the accepted signing identity and signed promotion record separately. A valid signature still needs policy and behavioral evidence; it is not a safety certificate.
+
+**Q2: A new tool accepts every old input. Is it backward compatible?**
+
+**Answer:** Only the input direction is covered. Check that its outputs, errors, units and stream events remain usable by old consumers. Test pinned prompt/tool combinations too. Compatibility is relative to an actual consumer contract, not a single schema-field comparison.
+
+**Q3: Why roll back the complete bundle instead of the prompt?**
+
+**Answer:** The old prompt may depend on old tool arguments, model behavior or output parsing. A bundle preserves those matched dependencies and release evidence. Recheck current permissions, retired dependencies and external-service compatibility before use; restoring bytes does not restore expired authority.
+
+### Foundation Key Takeaways
+
+- Make runtime, registry and consumer contracts independently inspectable.
+- Preserve bytes; verify identity and promotion separately from digests.
+- Check compatibility from old requests through new responses.
+- Treat MCP, authorization and sandbox enforcement as separate boundaries.
+- Pin complete bundles and offer a tested consumer onboarding path.
+
+### Foundation Sources and Boundaries
+
+- **F32-1:** [OCI Image Specification v1.1.0, descriptors](https://github.com/opencontainers/image-spec/blob/v1.1.0/descriptor.md), fixed revision, digest and size verification.
+- **F32-2:** [Sigstore Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/), fetched for this review; identity/issuer checks are separate from behavior.
+- **F32-3:** [RFC 8785, JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785), June 2020; the restricted fixture does not implement its full rules.
+- **F32-4:** [Pydantic models, faux immutability](https://docs.pydantic.dev/latest/concepts/models/#faux-immutability), fetched for this review.
+- **F32-5/F32-6:** MCP specification **2025-06-18**, [transports](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) and [tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools), fetched dated revision, not a claim of the latest version.
+
+No registry deployment, sandbox escape test, SDK compilation, SLSA certification or onboarding benchmark is asserted. The original mutable objects, partial compatibility check, missing imports and mock execution remain preserved; the additions clarify rather than repair that code.
